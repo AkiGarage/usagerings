@@ -1,0 +1,137 @@
+{
+  "entries": [
+    {
+      "assets": [
+        {
+          "digest": "sha256:614f5827c2b037fd9d50b6ef120718379df833cfc44e84408f5136560db5a3ac",
+          "id": 474082921,
+          "name": "CodexBar-macos-universal-0.42.1.dSYM.zip",
+          "size": 36376551
+        },
+        {
+          "digest": "sha256:3d7cee461950530a9ce9fb42f142a99cd63a10af2bf4328f7956c8b621a72fae",
+          "id": 474082919,
+          "name": "CodexBar-macos-universal-0.42.1.zip",
+          "size": 47468752
+        },
+        {
+          "digest": "sha256:45b24406884a92f76c07435bb596317be3607e169f5ad5e59b3358d4d416c162",
+          "id": 474087161,
+          "name": "CodexBarCLI-v0.42.1-linux-aarch64.tar.gz",
+          "size": 41127183
+        },
+        {
+          "digest": "sha256:d297daf168e7fcd8ff4a1b4fcb157b5bf9da67d5a0645f53516d945fc4261f6c",
+          "id": 474087162,
+          "name": "CodexBarCLI-v0.42.1-linux-aarch64.tar.gz.sha256",
+          "size": 127
+        },
+        {
+          "digest": "sha256:1fdda874a9084dfd9d724654045d8ef5d17a439ce1c21e458df19aeeaa92af2e",
+          "id": 474088540,
+          "name": "CodexBarCLI-v0.42.1-linux-musl-aarch64.tar.gz",
+          "size": 76055852
+        },
+        {
+          "digest": "sha256:e5efcac606c115ff33e139ce92a37ad95818f4c80120d7509e30b97df13ff6db",
+          "id": 474088541,
+          "name": "CodexBarCLI-v0.42.1-linux-musl-aarch64.tar.gz.sha256",
+          "size": 132
+        },
+        {
+          "digest": "sha256:11bf5a4509ab883c5ce352540dfcb642bd331ad1406ba866c49c8dcc63d867f5",
+          "id": 474089296,
+          "name": "CodexBarCLI-v0.42.1-linux-musl-x86_64.tar.gz",
+          "size": 77761866
+        },
+        {
+          "digest": "sha256:4cad6f5bdbd1f3716917a8620c714b002d79138b5f88dcbb7bc497218f384148",
+          "id": 474089298,
+          "name": "CodexBarCLI-v0.42.1-linux-musl-x86_64.tar.gz.sha256",
+          "size": 131
+        },
+        {
+          "digest": "sha256:31590f25c343351abb19f66142a6f772ebb658984b17ad90c99a9eed1c877f6f",
+          "id": 474087011,
+          "name": "CodexBarCLI-v0.42.1-linux-x86_64.tar.gz",
+          "size": 41763209
+        },
+        {
+          "digest": "sha256:f656533e896069bc99deebe186d31645ed2455f5a363de870040bf1a23c6728d",
+          "id": 474087010,
+          "name": "CodexBarCLI-v0.42.1-linux-x86_64.tar.gz.sha256",
+          "size": 126
+        },
+        {
+          "digest": "sha256:2d7dcd5725125dc5d318a4670fee91e6fd70c682bd58b5831e9e493ec22875e6",
+          "id": 474086557,
+          "name": "CodexBarCLI-v0.42.1-macos-arm64.tar.gz",
+          "size": 7772672
+        },
+        {
+          "digest": "sha256:ef9d50bec137a774341ec4b6376fd82da1ca0fd17bec7df9021fc289eca556dc",
+          "id": 474086559,
+          "name": "CodexBarCLI-v0.42.1-macos-arm64.tar.gz.sha256",
+          "size": 169
+        },
+        {
+          "digest": "sha256:7f9ab4b465b8c892b4735c427a4d0036e4e281f23aa1ec8642f7c7b76ada3f0f",
+          "id": 474089437,
+          "name": "CodexBarCLI-v0.42.1-macos-x86_64.tar.gz",
+          "size": 8089468
+        },
+        {
+          "digest": "sha256:0e4c07c53150aacfbcba883a1cf303551f69ed9ff27ddc765b904437feef76de",
+          "id": 474089436,
+          "name": "CodexBarCLI-v0.42.1-macos-x86_64.tar.gz.sha256",
+          "size": 170
+        }
+      ],
+      "contractBlobs": [
+        {
+          "blobSHA": "b52027c420ca0b412eb41484a3fe47f513b35b20",
+          "path": "Sources/CodexBarCLI/CLIErrorReporting.swift",
+          "sha256": "2268f983dfc9ae0579cffd3448b39b17afbfb0c2a25e1b293e215ac3703b6f5c"
+        },
+        {
+          "blobSHA": "d658552d4f022d85b8e0b5a3c04ecb4e8a51d313",
+          "path": "Sources/CodexBarCLI/CLIExitCode.swift",
+          "sha256": "88846febea65630efd49c8a5bb2adb0cb485e6e81b7eb3336a971b4ea0b7116f"
+        },
+        {
+          "blobSHA": "5d530edbc6558c3a6406c67b16f1dac0807f2db6",
+          "path": "Sources/CodexBarCLI/CLIPayloads.swift",
+          "sha256": "716557f1a0a7bf728c6de0a121c7de45d8e69ddfd1b25d2df55fe03b5a797079"
+        },
+        {
+          "blobSHA": "da530a8a6abef54e8a8e8d7a140fec1d0eeaccfd",
+          "path": "Sources/CodexBarCore/UsageFetcher.swift",
+          "sha256": "9d0532f11c58f0530116fe9ea5cef443ba487de8731b20e255ac12812868ee37"
+        },
+        {
+          "blobSHA": "cf940b9a27adfdb2a22d9b8e47ffcf1a762f562c",
+          "path": "Tests/CodexBarTests/CLIOutputTests.swift",
+          "sha256": "af9e46ecd7a74150f7672abbe72c91b81f548f7a5fb6156ed1ab0dcbbf619fde"
+        },
+        {
+          "blobSHA": "9e7f4a04d164534bff82f4fbe853c361bc86e6e3",
+          "path": "docs/cli.md",
+          "sha256": "32b0d5619c6272b6e187d0599dbaa66738c36c87be102dd18d5f5774aacff5eb"
+        }
+      ],
+      "peeledCommitSHA": "3e05988f5c5fc1dff70c7a58bd659208cf34c840",
+      "publishedAt": "2026-07-12T04:25:07Z",
+      "releaseID": 352670413,
+      "signature": {
+        "reason": "valid",
+        "verified": true
+      },
+      "tag": "v0.42.1",
+      "tagObjectSHA": "71e9b33fe9d551e09fbd2b9ec610346d91b96649"
+    }
+  ],
+  "minimumTag": "v0.32.4",
+  "repository": "steipete/CodexBar",
+  "schemaVersion": 1,
+  "verifiedThroughTag": "v0.42.1"
+}

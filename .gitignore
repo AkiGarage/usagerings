@@ -1,0 +1,29 @@
+# Swift Package Manager and build products
+.build/
+.swiftpm/
+build/
+dist/
+DerivedData/
+*.xcarchive
+*.dSYM/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Local configuration, diagnostics, and credentials
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.key
+*.mobileprovision
+logs/
+artifacts/
+*.log
+.DS_Store
+__pycache__/
+*.py[cod]

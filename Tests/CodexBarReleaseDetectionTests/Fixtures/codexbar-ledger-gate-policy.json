@@ -1,0 +1,19 @@
+{
+  "baseBranch": "main",
+  "enabled": false,
+  "gateApp": {
+    "id": 0,
+    "login": "UNPROVISIONED-codexbar-ledger-gate"
+  },
+  "ledgerPath": "release/codexbar-verified-releases.json",
+  "mutationApp": {
+    "actorID": -1,
+    "actorLogin": "UNPROVISIONED-codexbar-ledger-mutation[bot]",
+    "appID": -2,
+    "appLogin": "UNPROVISIONED-codexbar-ledger-mutation"
+  },
+  "recoveryReviewerIDs": [],
+  "repository": "AkiGarage/codex-usage-widget",
+  "requiredChecks": [],
+  "suspended": false
+}
