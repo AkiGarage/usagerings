@@ -116,15 +116,21 @@ enum ClaudeAccountPolicy {
                             reason: why, fiveLimited: fiveMemory, order: order(pick.key))
         }
         // Everything limited: wait for the soonest clear.
-        // A limit with no known future clear time makes the whole account "unknown" (distantFuture).
-        func clearsAt(_ a: Account) -> Date {
-            func limitClear(_ candidates: [Date?]) -> Date {
-                candidates.compactMap { $0 }.filter { $0 > now }.max() ?? .distantFuture
+        // Clear time per active cause only; a cause with no known future clear time is "unknown".
+        func causeClear(blockUntil: Date?, left: Double?, resetAt: Date?) -> Date? {
+            var dates: [Date] = []
+            var unknown = false
+            if let b = blockUntil, b > now { dates.append(b) }
+            if let l = left, l <= 0 {
+                if let r = resetAt, r > now { dates.append(r) } else if resetAt == nil { unknown = true }
             }
-            var result = Date.distantPast
-            if isFiveLimited(a, now: now) { result = max(result, limitClear([a.sessionBlockUntil, a.fiveResetAt])) }
-            if isWeeklyLimited(a, now: now) { result = max(result, limitClear([a.weeklyBlockUntil, a.weeklyResetAt])) }
-            return result
+            if unknown { return .distantFuture }
+            return dates.max()
+        }
+        func clearsAt(_ a: Account) -> Date {
+            let five = causeClear(blockUntil: a.sessionBlockUntil, left: a.fiveLeft, resetAt: a.fiveResetAt)
+            let week = causeClear(blockUntil: a.weeklyBlockUntil, left: a.weeklyLeft, resetAt: a.weeklyResetAt)
+            return [five, week].compactMap { $0 }.max() ?? .distantFuture
         }
         let soonest = accounts.min { clearsAt($0) < clearsAt($1) }!
         let at = clearsAt(soonest)

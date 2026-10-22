@@ -238,3 +238,34 @@ final class ProviderProbeTests: XCTestCase {
         XCTAssertTrue(prefs.claudeAutoSwitch)
     }
 }
+
+final class ClaudeAccountRound2Tests: XCTestCase {
+    typealias P = ClaudeAccountPolicy
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    func h(_ x: Double) -> Date { now.addingTimeInterval(x * 3600) }
+
+    func testAllLimitedUsesOnlyActiveCauseTimes() {
+        let a = P.Account(key: "a", fiveLeft: 50, fiveResetAt: h(5), weeklyLeft: 50, weeklyResetAt: h(20), sessionBlockUntil: h(1))
+        let b = P.Account(key: "b", fiveLeft: 0, fiveResetAt: h(2), weeklyLeft: 50, weeklyResetAt: h(100))
+        XCTAssertEqual(P.decide([a, b], previous: nil, now: now).selected, "a")
+    }
+
+    func testRetractMakesHintInertWithoutDeleting() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("c.json")
+        let d = P.Decision(selected: "b", preferred: "b", state: .preferred, reason: "r", fiveLimited: [], order: ["b", "a"])
+        XCTAssertTrue(ClaudeAccountChoice.publish(d, now: now, url: url))
+        ClaudeAccountChoice.retract(now: now, url: url)
+        let obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        XCTAssertEqual(obj["expiresAt"] as? Int, 0)
+        XCTAssertEqual(obj["order"] as? [String], ["a", "b"])
+    }
+
+    func testLogBlocksDoNotAffectChoice() {
+        var w = UsageLimit(title: "x · 5h", leftPercent: 80, resetText: ""); w.accountIndex = 0
+        var w2 = UsageLimit(title: "y · 5h", leftPercent: 80, resetText: ""); w2.accountIndex = 1
+        var section = ProviderSection(provider: .claude, windows: [w, w2], stats: [])
+        section.claudeProfileBlocks = [0: ClaudeBlock(kind: .session, resetAt: h(1), timeZoneKnown: true)]
+        let accounts = ClaudeAccountChoice.accounts(section: section, map: [0: "a", 1: "b"], now: now)
+        XCTAssertNil(accounts[0].sessionBlockUntil)
+    }
+}

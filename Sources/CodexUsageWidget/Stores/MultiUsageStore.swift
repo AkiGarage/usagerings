@@ -156,6 +156,7 @@ final class MultiUsageStore: ObservableObject {
         guard let section = snapshot.sections.first(where: { $0.provider == .claude }),
               section.accountIndices.count >= 2, preferences?.isProviderVisible(.claude) ?? true else {
             claudeChoice = nil
+            if let url = claudeChoiceURL { ClaudeAccountChoice.retract(now: now, url: url) }
             return
         }
         let map = ClaudeAccountChoice.profileMap(section: section, masks: claudeProfileMasks())
@@ -165,7 +166,15 @@ final class MultiUsageStore: ObservableObject {
                                                   name: { mapped ? "claude-\($0)" : "Claude \($0)" })
         lastClaudeDecision = decision
         claudeChoice = decision
-        if mapped, preferences?.claudeAutoSwitch ?? false, let url = claudeChoiceURL { ClaudeAccountChoice.publish(decision, now: now, url: url) }
+        guard let url = claudeChoiceURL else { return }
+        if mapped, preferences?.claudeAutoSwitch ?? false, ClaudeAccountChoice.publish(decision, now: now, url: url) { return }
+        ClaudeAccountChoice.retract(now: now, url: url)
+    }
+
+    /// Called when the auto-switch setting changes; turning it off retracts the hint immediately.
+    func claudeAutoSwitchChanged(enabled: Bool) {
+        guard let url = claudeChoiceURL else { return }
+        if enabled { refresh() } else { ClaudeAccountChoice.retract(now: Date(), url: url) }
     }
 
     private func publish(_ snapshot: UsageSnapshot) {

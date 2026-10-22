@@ -19,8 +19,10 @@ No choice yet → probed at most every 30 min and turned on automatically (and r
 the first time it reports configured usage; never turned off automatically.
 
 ## Inputs (per account, each refresh = 60 s)
-five-hour left % + reset time, weekly left % + reset time (CLIProxy), and active
-log blocks (session / weekly) from ~/.claude-a, ~/.claude-b.
+five-hour left % + reset time, weekly left % + reset time (CLIProxy, per account).
+Log blocks are not used for the choice (log slot A mixes ~/.claude and ~/.claude-a, identity unverified).
+When the hint must not apply (setting off, unmapped, Claude hidden, no data) the file is
+overwritten with an expired hint (expiresAt 0), never deleted.
 
 ## Definitions
 - weekly-limited: weekly left ≤ 0, or an active weekly log block.
@@ -38,7 +40,7 @@ log blocks (session / weekly) from ~/.claude-a, ~/.claude-b.
 4. Else a recovering or unknown account (never a limited one while such exists).
 5. Else (all limited): the account whose limits clear soonest; state = all limited.
 6. When preferred becomes free again (5h ≥ 5 % or its 5h reset time has passed) → back to preferred.
-7. All-limited ranking: a limit with no known future clear time counts as "unknown" and ranks last.
+7. All-limited ranking: per active cause only (5h / weekly); a cause with no known future clear time counts as "unknown" and ranks last.
 8. Accounts are evaluated in profile order (a, b) regardless of CLIProxy listing order.
 
 Property: if any account is not limited, the selected account is never limited.

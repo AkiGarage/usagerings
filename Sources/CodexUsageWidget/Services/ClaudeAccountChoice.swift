@@ -49,12 +49,7 @@ enum ClaudeAccountChoice {
                 if last == "5h" { a.fiveLeft = w.leftPercent; a.fiveResetAt = w.resetAt }
                 if last == "Weekly" { a.weeklyLeft = w.leftPercent; a.weeklyResetAt = w.resetAt }
             }
-            if complete, let slot = profileKeys.firstIndex(of: key), let block = section.claudeProfileBlocks[slot], block.isActive(at: now) {
-                switch block.kind {
-                case .session: a.sessionBlockUntil = block.resetAt
-                case .weekly: a.weeklyBlockUntil = block.resetAt
-                }
-            }
+            // Log blocks are not used: slot 0 mixes ~/.claude and ~/.claude-a, so its identity is unverified.
             return a
         }
     }
@@ -72,6 +67,14 @@ enum ClaudeAccountChoice {
                                      "reason": d.reason, "decidedAt": Int(now.timeIntervalSince1970),
                                      "expiresAt": Int(now.timeIntervalSince1970 + validity)]
         return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    /// Make any previously published hint inert (claude-ab then uses a → b). Never deletes.
+    static func retract(now: Date, url: URL = fileURL()) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let object: [String: Any] = ["order": ["a", "b"], "state": "off", "decidedAt": Int(now.timeIntervalSince1970), "expiresAt": 0]
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+        try? data.write(to: url, options: [.atomic])
     }
 
     /// Atomic, owner-only write. Returns false when there is nothing valid to publish.

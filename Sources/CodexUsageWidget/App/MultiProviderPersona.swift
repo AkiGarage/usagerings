@@ -20,6 +20,9 @@ final class MultiProviderPersona: AppPersona {
             preferences.onProviderVisibilityChange = { [weak live] turnedOn in
                 live?.providerVisibilityChanged(turnedOn: turnedOn)
             }
+            preferences.onClaudeAutoSwitchChange = { [weak live] enabled in
+                live?.claudeAutoSwitchChanged(enabled: enabled)
+            }
         }
     }
 

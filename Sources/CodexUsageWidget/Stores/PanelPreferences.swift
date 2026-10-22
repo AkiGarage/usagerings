@@ -84,8 +84,12 @@ final class PanelPreferences: ObservableObject {
     static let claudeAutoSwitchKey = "multiClaudeAutoSwitchV1"
     /// Let UsageRings decide which Claude profile claude-ab tries first. Default on.
     @Published var claudeAutoSwitch: Bool {
-        didSet { defaults.set(claudeAutoSwitch, forKey: Self.claudeAutoSwitchKey) }
+        didSet {
+            defaults.set(claudeAutoSwitch, forKey: Self.claudeAutoSwitchKey)
+            onClaudeAutoSwitchChange?(claudeAutoSwitch)
+        }
     }
+    var onClaudeAutoSwitchChange: ((Bool) -> Void)?
     /// Providers with no explicit choice and no data yet are re-probed at most this often.
     static let autoProbeInterval: TimeInterval = 30 * 60
     private var lastAutoProbe: [ProviderID: Date] = [:]
