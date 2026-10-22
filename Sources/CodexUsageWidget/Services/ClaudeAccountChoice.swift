@@ -40,7 +40,8 @@ enum ClaudeAccountChoice {
     static func accounts(section: ProviderSection, map: [Int: String], now: Date) -> [ClaudeAccountPolicy.Account] {
         let indices = section.accountIndices
         let complete = indices.count >= 2 && indices.allSatisfy { map[$0] != nil }
-        return indices.map { index in
+        let ordered = complete ? indices.sorted { map[$0]! < map[$1]! } : indices
+        return ordered.map { index in
             let key = complete ? map[index]! : ProviderSection.accountSuffix(index)
             var a = ClaudeAccountPolicy.Account(key: key)
             for w in section.windows where (w.accountIndex ?? 0) == index {

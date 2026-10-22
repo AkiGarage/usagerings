@@ -81,6 +81,14 @@ final class PanelPreferences: ObservableObject {
     /// Explicit per-provider choice. Missing = automatic (shown once the provider reports data).
     @Published private(set) var providerVisibility: [String: Bool]
     var onProviderVisibilityChange: ((_ turnedOn: Bool) -> Void)?
+    static let claudeAutoSwitchKey = "multiClaudeAutoSwitchV1"
+    /// Let UsageRings decide which Claude profile claude-ab tries first. Default on.
+    @Published var claudeAutoSwitch: Bool {
+        didSet { defaults.set(claudeAutoSwitch, forKey: Self.claudeAutoSwitchKey) }
+    }
+    /// Providers with no explicit choice and no data yet are re-probed at most this often.
+    static let autoProbeInterval: TimeInterval = 30 * 60
+    private var lastAutoProbe: [ProviderID: Date] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -93,6 +101,7 @@ final class PanelPreferences: ObservableObject {
         appearance = PanelAppearance(rawValue: defaults.string(forKey: Self.appearanceKey) ?? "") ?? .system
         showAccountNames = defaults.bool(forKey: Self.showAccountNamesKey)
         splitAntigravityAccounts = defaults.bool(forKey: Self.splitAntigravityAccountsKey)
+        claudeAutoSwitch = defaults.object(forKey: Self.claudeAutoSwitchKey) as? Bool ?? true
         providerVisibility = (defaults.dictionary(forKey: Self.providerVisibilityKey) as? [String: Bool] ?? [:])
             .filter { ProviderID(rawValue: $0.key) != nil }
         if let data = defaults.data(forKey: Self.accountPreferencesKey) {
@@ -132,6 +141,20 @@ final class PanelPreferences: ObservableObject {
     /// Hidden providers are not fetched at all.
     var disabledProviders: Set<ProviderID> {
         Set(ProviderID.allCases.filter { providerVisibility[$0.rawValue] == false })
+    }
+
+    /// Providers to skip on this refresh: explicit off, plus undecided providers probed recently.
+    /// Calling this marks the undecided providers that will be probed now.
+    func providersToSkip(now: Date = Date()) -> Set<ProviderID> {
+        var skip = disabledProviders
+        for provider in ProviderID.allCases where providerVisibility[provider.rawValue] == nil {
+            if let last = lastAutoProbe[provider], now.timeIntervalSince(last) < Self.autoProbeInterval {
+                skip.insert(provider)
+            } else {
+                lastAutoProbe[provider] = now
+            }
+        }
+        return skip
     }
 
     func setProviderVisible(_ visible: Bool, for provider: ProviderID) {

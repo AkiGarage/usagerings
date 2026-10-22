@@ -49,7 +49,7 @@ enum ClaudeAccountPolicy {
     /// Inside the hysteresis band right after a 5h limit (not limited, but not yet trusted).
     static func isRecovering(_ a: Account, previous: Decision?, now: Date) -> Bool {
         guard previous?.fiveLimited.contains(a.key) == true, !isLimited(a, now: now) else { return false }
-        if let reset = a.fiveResetAt, reset <= now, a.fiveLeft.map({ $0 >= 99 }) ?? true { return false }
+        if let reset = a.fiveResetAt, reset <= now { return false }
         guard let left = a.fiveLeft else { return false }
         return left < recoveryBandPercent
     }
@@ -116,11 +116,15 @@ enum ClaudeAccountPolicy {
                             reason: why, fiveLimited: fiveMemory, order: order(pick.key))
         }
         // Everything limited: wait for the soonest clear.
+        // A limit with no known future clear time makes the whole account "unknown" (distantFuture).
         func clearsAt(_ a: Account) -> Date {
-            var dates: [Date] = []
-            if isFiveLimited(a, now: now) { dates += [a.sessionBlockUntil, a.fiveResetAt].compactMap { $0 }.filter { $0 > now } }
-            if isWeeklyLimited(a, now: now) { dates += [a.weeklyBlockUntil, a.weeklyResetAt].compactMap { $0 }.filter { $0 > now } }
-            return dates.max() ?? .distantFuture
+            func limitClear(_ candidates: [Date?]) -> Date {
+                candidates.compactMap { $0 }.filter { $0 > now }.max() ?? .distantFuture
+            }
+            var result = Date.distantPast
+            if isFiveLimited(a, now: now) { result = max(result, limitClear([a.sessionBlockUntil, a.fiveResetAt])) }
+            if isWeeklyLimited(a, now: now) { result = max(result, limitClear([a.weeklyBlockUntil, a.weeklyResetAt])) }
+            return result
         }
         let soonest = accounts.min { clearsAt($0) < clearsAt($1) }!
         let at = clearsAt(soonest)

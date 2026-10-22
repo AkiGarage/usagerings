@@ -85,7 +85,7 @@ final class MultiUsageStore: ObservableObject {
         case let .live(service, _):
             isRefreshing = true
             Task {
-                let snapshot = await service.fetchAll(disabled: preferences?.disabledProviders ?? [])
+                let snapshot = await service.fetchAll(disabled: preferences?.providersToSkip() ?? [])
                 apply(snapshot)
             }
         }
@@ -139,7 +139,10 @@ final class MultiUsageStore: ObservableObject {
 
     /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.
     func providerVisibilityChanged(turnedOn: Bool) {
-        if let rawSnapshot { snapshot = visible(rawSnapshot) }
+        if let rawSnapshot {
+            snapshot = visible(rawSnapshot)
+            if preferences?.isProviderVisible(.claude) == false { claudeChoice = nil }
+        }
         if turnedOn { refresh() }
     }
 
@@ -162,7 +165,7 @@ final class MultiUsageStore: ObservableObject {
                                                   name: { mapped ? "claude-\($0)" : "Claude \($0)" })
         lastClaudeDecision = decision
         claudeChoice = decision
-        if mapped, let url = claudeChoiceURL { ClaudeAccountChoice.publish(decision, now: now, url: url) }
+        if mapped, preferences?.claudeAutoSwitch ?? false, let url = claudeChoiceURL { ClaudeAccountChoice.publish(decision, now: now, url: url) }
     }
 
     private func publish(_ snapshot: UsageSnapshot) {

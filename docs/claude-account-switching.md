@@ -7,8 +7,16 @@ writes `~/.local/state/usagerings/claude-account-choice.json`
 `~/.local/bin/claude-ab` reads that file (if fresh and well-formed) to choose which
 profile (claude-a / claude-b) to try first; otherwise it keeps its old order a → b.
 claude-ab still falls through to the other profile on a real limit error.
-The file is written only when the user has mapped both CLIProxy Claude accounts to
-profiles A and B in Settings.
+The file is written only when (1) Settings「Claudeの使う順番を自動で決める」is on
+(default on) and (2) both CLIProxy Claude accounts are mapped to profiles a/b. Mapping is
+automatic: the masked e-mail in ~/.claude-a/.claude.json and ~/.claude-b/.claude.json
+(oauthAccount.emailAddress only) must each match exactly one CLIProxy account; any
+ambiguity → no mapping → no file (claude-ab keeps a → b).
+
+## Provider visibility
+Each provider has an on/off toggle (persisted). Explicit off → never fetched.
+No choice yet → probed at most every 30 min and turned on automatically (and remembered)
+the first time it reports configured usage; never turned off automatically.
 
 ## Inputs (per account, each refresh = 60 s)
 five-hour left % + reset time, weekly left % + reset time (CLIProxy), and active
@@ -29,7 +37,9 @@ log blocks (session / weekly) from ~/.claude-a, ~/.claude-b.
 3. Else the other account if free (reason: preferred is at 5h / weekly limit).
 4. Else a recovering or unknown account (never a limited one while such exists).
 5. Else (all limited): the account whose limits clear soonest; state = all limited.
-6. When preferred becomes free again (5h ≥ 5 % or its reset time has passed) → back to preferred.
+6. When preferred becomes free again (5h ≥ 5 % or its 5h reset time has passed) → back to preferred.
+7. All-limited ranking: a limit with no known future clear time counts as "unknown" and ranks last.
+8. Accounts are evaluated in profile order (a, b) regardless of CLIProxy listing order.
 
 Property: if any account is not limited, the selected account is never limited.
 

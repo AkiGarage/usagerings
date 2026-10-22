@@ -170,7 +170,7 @@ final class ClaudeAccountPolicyTests: XCTestCase {
         let map = ClaudeAccountChoice.profileMap(section: section, masks: ["a": "a.k***@g***", "b": "aki***@g***"])
         XCTAssertEqual(map, [0: "b", 1: "a"])
         let accounts = ClaudeAccountChoice.accounts(section: section, map: map, now: now)
-        XCTAssertEqual(accounts.map(\.key), ["b", "a"])
+        XCTAssertEqual(accounts.map(\.key), ["a", "b"])
         let d = P.decide(accounts, previous: nil, now: now)
         XCTAssertEqual(d.selected, "a"); XCTAssertEqual(d.preferred, "b")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("c.json")
@@ -183,5 +183,58 @@ final class ClaudeAccountPolicyTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
         let unmapped = P.decide(ClaudeAccountChoice.accounts(section: section, map: none, now: now), previous: nil, now: now)
         XCTAssertNil(ClaudeAccountChoice.payload(unmapped, now: now))
+    }
+}
+
+final class ClaudeAccountPolicyReviewTests: XCTestCase {
+    typealias P = ClaudeAccountPolicy
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    func h(_ x: Double) -> Date { now.addingTimeInterval(x * 3600) }
+
+    // R3: reset time passed with stale 0% → back to preferred (not stuck in "recovering")
+    func testReturnsAfterResetTimeEvenWithStaleZero() {
+        let prev = P.Decision(selected: "b", preferred: "a", state: .fallback, reason: "", fiveLimited: ["a"], order: ["b", "a"])
+        let a = P.Account(key: "a", fiveLeft: 0, fiveResetAt: h(-0.1), weeklyLeft: 50, weeklyResetAt: h(20))
+        let b = P.Account(key: "b", fiveLeft: 50, fiveResetAt: h(2), weeklyLeft: 50, weeklyResetAt: h(100))
+        XCTAssertEqual(P.decide([a, b], previous: prev, now: now).selected, "a")
+    }
+
+    // R4: unknown clear time ranks after a known one when all are limited
+    func testAllLimitedUnknownClearRanksLast() {
+        let a = P.Account(key: "a", fiveLeft: 0, fiveResetAt: h(1), weeklyLeft: 50, weeklyResetAt: h(20), weeklyBlockUntil: nil)
+        var aw = a; aw.weeklyLeft = 0; aw.weeklyResetAt = nil
+        let b = P.Account(key: "b", fiveLeft: 0, fiveResetAt: h(2), weeklyLeft: 50, weeklyResetAt: h(100))
+        let d = P.decide([aw, b], previous: nil, now: now)
+        XCTAssertEqual(d.state, .allLimited); XCTAssertEqual(d.selected, "b")
+    }
+
+    // R5: profile order a,b regardless of CLIProxy index order
+    func testMappedAccountsAreInProfileOrder() {
+        var w0 = UsageLimit(title: "x · Weekly", leftPercent: 50, resetText: ""); w0.accountIndex = 0; w0.resetAt = h(20)
+        var w1 = UsageLimit(title: "y · Weekly", leftPercent: 50, resetText: ""); w1.accountIndex = 1; w1.resetAt = h(20)
+        let section = ProviderSection(provider: .claude, windows: [w0, w1], stats: [])
+        let accounts = ClaudeAccountChoice.accounts(section: section, map: [0: "b", 1: "a"], now: now)
+        XCTAssertEqual(accounts.map(\.key), ["a", "b"])
+        XCTAssertEqual(P.decide(accounts, previous: nil, now: now).selected, "a")
+    }
+}
+
+final class ProviderProbeTests: XCTestCase {
+    @MainActor
+    func testUndecidedProvidersProbedAtMostEvery30Minutes() throws {
+        let name = "ProviderProbeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let prefs = PanelPreferences(defaults: defaults)
+        prefs.setProviderVisible(true, for: .codex)
+        prefs.setProviderVisible(false, for: .kimi)
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = prefs.providersToSkip(now: t0)
+        XCTAssertEqual(first, [.kimi])
+        let second = prefs.providersToSkip(now: t0.addingTimeInterval(60))
+        XCTAssertTrue(second.contains(.minimax)); XCTAssertFalse(second.contains(.codex)); XCTAssertTrue(second.contains(.kimi))
+        let third = prefs.providersToSkip(now: t0.addingTimeInterval(31 * 60))
+        XCTAssertEqual(third, [.kimi])
+        XCTAssertTrue(prefs.claudeAutoSwitch)
     }
 }
