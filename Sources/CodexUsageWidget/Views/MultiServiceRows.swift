@@ -29,6 +29,7 @@ struct ServiceRowModel: Identifiable {
     var notes: [String] = []
     var failureText: String?
     var hasUsageDetails = false
+    var accountID: AccountID? = nil
 
     /// Outer arc: 5h, else the weekly window, else the first other window.
     var primary: UsageLimit? { five ?? week ?? extras.first }
@@ -81,9 +82,11 @@ struct ServiceRowModel: Identifiable {
     }
 
     static func rows(for snapshot: MultiUsageSnapshot, showAccounts: Bool = false,
-                     splitAntigravityAccounts: Bool = false) -> [Self] {
+                     splitAntigravityAccounts: Bool = false,
+                     accountPreferences: AccountPreferences = AccountPreferences()) -> [Self] {
         snapshot.sections.flatMap {
-            rows(for: $0, showAccounts: showAccounts, splitAntigravityAccounts: splitAntigravityAccounts)
+            rows(for: $0, showAccounts: showAccounts, splitAntigravityAccounts: splitAntigravityAccounts,
+                 accountPreferences: accountPreferences)
         }
     }
 
@@ -95,27 +98,41 @@ struct ServiceRowModel: Identifiable {
     }
 
     static func rows(for section: ProviderSection, showAccounts: Bool = false,
-                     splitAntigravityAccounts: Bool = false) -> [Self] {
+                     splitAntigravityAccounts: Bool = false,
+                     accountPreferences: AccountPreferences = AccountPreferences()) -> [Self] {
         let provider = section.provider
-        let splitAccounts = provider == .codex || provider == .grok
-            || (provider == .antigravity && splitAntigravityAccounts)
+        let profileRows = section.claudeProfileNotices.map { notice in
+            Self(id: notice.id, name: notice.name, color: CollapsedUsageBar.claudeBColor,
+                 notes: notice.block.map { [ClaudeRateLimitParser.cardLine(block: $0, now: Date())] } ?? [],
+                 failureText: notice.failureText, hasUsageDetails: true)
+        }
+        let splitAccounts = provider != .antigravity || splitAntigravityAccounts
         if splitAccounts, section.accountIndices.count > 1 {
             return section.accountIndices.flatMap { index in
-                rows(for: section.forAccount(index), showAccounts: showAccounts).map { row in
+                rows(for: section.forAccount(index), showAccounts: showAccounts,
+                     accountPreferences: accountPreferences).map { row in
                     var row = row
                     if provider == .antigravity {
                         let group = String(row.id.dropFirst("antigravity-".count))
                         row.id = "antigravity-\(index)-\(group)"
-                        let name = group == "main" ? provider.displayName : row.name
+                        let name = group == "main" ? provider.displayName : antigravityName(group)
                         row.name = "\(name) \(ProviderSection.accountSuffix(index))"
+                        if let label = accountPreferences.label(for: row.accountID) {
+                            row.name += " · \(label)"
+                        }
                     } else {
                         row.id = "\(provider.rawValue)-\(index)"
-                        row.name = "\(provider.displayName) \(ProviderSection.accountSuffix(index))"
+                        let name = provider == .claude ? "Claude" : provider.displayName
+                        row.name = "\(name) \(ProviderSection.accountSuffix(index))"
+                        if let label = accountPreferences.label(for: row.accountID) {
+                            row.name += " · \(label)"
+                        }
                     }
                     return row
                 }
-            }
+            } + profileRows
         }
+        guard let section = accountPreferences.visibleSection(section) else { return profileRows }
         // Group key: Claude per account, Antigravity per quota group, others one row.
         func key(_ limit: UsageLimit) -> String {
             switch provider {
@@ -143,6 +160,9 @@ struct ServiceRowModel: Identifiable {
             default: name = provider.displayName
             }
             var row = Self(id: "\(provider.rawValue)-\(k)", name: name, color: color(for: provider, account: account))
+            row.accountID = section.displayAccounts.count == 1 ? section.displayAccounts.first?.id : nil
+            let labels = section.displayAccounts.compactMap { accountPreferences.label(for: $0.id) }
+            if !labels.isEmpty { row.name += " · " + labels.joined(separator: " / ") }
             row.account = (groups[k] ?? []).lazy.compactMap { accountPrefix($0.title) }.first
             for limit in groups[k] ?? [] {
                 switch kind(limit.title) {
@@ -185,7 +205,7 @@ struct ServiceRowModel: Identifiable {
         rows[0].failureText = section.failureText
         rows[0].hasUsageDetails = provider == .deepseek && !section.stats.isEmpty
         if !showAccounts { for i in rows.indices { rows[i].account = nil } }
-        return rows
+        return rows + profileRows
     }
 
     /// "2 available · next expires Nov 3" -> "リセットチケット ×2 · 期限 Nov 3"

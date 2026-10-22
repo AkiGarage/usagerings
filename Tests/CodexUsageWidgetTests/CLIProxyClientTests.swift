@@ -48,6 +48,47 @@ final class CLIProxyClientTests: XCTestCase {
         XCTAssertEqual(count, 0)
     }
 
+    func testStableAccountIDsKeepPreferencesAndUsageAcrossReorderingAndRenumbering() async throws {
+        let initial = #"{"files":[{"provider":"claude","auth_index":"1","account_id":"stable-account","user_id":"old-user"},{"provider":"claude","auth_index":"2","user_id":"stable-user"}]}"#
+        let reordered = #"{"files":[{"provider":"claude","auth_index":"1","user_id":"stable-user"},{"provider":"claude","auth_index":"2","account_id":"stable-account","user_id":"new-user"}]}"#
+        let transport = ScriptedTransport([
+            (Data(initial.utf8), 200), usage(),
+            (CLIProxyFixtures.envelope(#"{"five_hour":{"utilization":63}}"#), 200),
+            (Data(reordered.utf8), 200)
+        ])
+        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), clock: { self.now })
+        let firstSections = await client.fetchSections(now: now)
+        let first = try XCTUnwrap(firstSections.first { $0.provider == .claude })
+        let accountID = try XCTUnwrap(first.accountID(at: 0))
+        let userID = try XCTUnwrap(first.accountID(at: 1))
+        XCTAssertNotEqual(accountID, userID)
+        var preferences = AccountPreferences()
+        preferences.setLabel("Work", for: accountID)
+        preferences.setVisible(false, for: userID)
+        preferences.setPrimary(accountID, for: .claude)
+
+        let nextSections = await client.fetchSections(now: now)
+        let next = try XCTUnwrap(nextSections.first { $0.provider == .claude })
+        XCTAssertEqual(next.accounts.compactMap(\.id), [userID, accountID])
+        XCTAssertEqual(next.forAccount(0).windows.first?.leftPercent, 37)
+        XCTAssertEqual(next.forAccount(1).windows.first?.leftPercent, 79)
+        XCTAssertEqual(preferences.primaryIndex(in: next), 1)
+        XCTAssertEqual(preferences.visibleSection(next)?.accounts.compactMap(\.id), [accountID])
+        let rows = ServiceRowModel.rows(for: next, accountPreferences: preferences)
+        XCTAssertEqual(rows.map(\.name), ["Claude B · Work"])
+        XCTAssertEqual(rows.first?.five?.leftPercent, 79)
+    }
+
+    func testAccountIdentityFallsBackToAuthIndexWhenStableIDsAreEmpty() async throws {
+        let credentials = #"{"files":[{"provider":"claude","auth_index":"legacy","account_id":"  ","user_id":""},{"provider":"claude","auth_index":"other"}]}"#
+        let transport = ScriptedTransport([(Data(credentials.utf8), 200), usage(), usage()])
+        let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey()).fetchSections(now: now)
+        let section = try XCTUnwrap(sections.first { $0.provider == .claude })
+        XCTAssertEqual(section.accountID(at: 0), AccountID(provider: .claude, source: "proxy-auth-index", value: "legacy"))
+        XCTAssertEqual(section.accountID(at: 1), AccountID(provider: .claude, source: "proxy-auth-index", value: "other"))
+        XCTAssertNotEqual(section.accountID(at: 0), section.accountID(at: 1))
+    }
+
     func test401StopsRefreshAndBacksOffUntilThirtyMinutes() async {
         let clock = TestClock(now)
         let transport = ScriptedTransport([credentials(), (Data(), 401), credentials(), usage(), usage(), antigravity()])

@@ -47,6 +47,16 @@ struct ProviderAccount: Equatable, Sendable {
     let index: Int
     var failureText: String? = nil
     var codexExtras: CodexExtrasParser.Extras? = nil
+    var id: AccountID? = nil
+}
+
+struct ClaudeProfileNotice: Equatable, Sendable, Identifiable {
+    let profile: Int
+    let block: ClaudeBlock?
+    let failureText: String?
+
+    var id: String { "claude-profile-\(profile)" }
+    var name: String { "Claude logs \(ProviderSection.accountSuffix(profile))" }
 }
 
 struct ProviderSection: Equatable, Sendable, Identifiable {
@@ -54,12 +64,22 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
     var windows: [UsageLimit]
     var stats: [ProviderStat]
     var failureText: String?
-    /// Parsed Codex credits and reset tickets for the ring hover card.
-    /// Other providers and Codex responses without extras leave this nil.
+    /// Codex extras for legacy snapshots or a section projected by forAccount.
+    /// Account-aware snapshots store extras on each ProviderAccount.
     var codexExtras: CodexExtrasParser.Extras? = nil
     var zaiResetTickets: ZaiResetTickets? = nil
-    var claudeBlocks: [Int: ClaudeBlock] = [:]
+    /// Log profile slots (A/B), with no verified link to a quota account.
+    var claudeProfileBlocks: [Int: ClaudeBlock] = [:]
     var accounts: [ProviderAccount] = []
+    var claudeRemoteFailureText: String? = nil
+
+    var claudeProfileNotices: [ClaudeProfileNotice] {
+        let profiles = Set(claudeProfileBlocks.keys).union(claudeRemoteFailureText == nil ? [] : [1])
+        return profiles.sorted().map {
+            ClaudeProfileNotice(profile: $0, block: claudeProfileBlocks[$0],
+                                failureText: $0 == 1 ? claudeRemoteFailureText : nil)
+        }
+    }
 
     var id: String { provider.id }
 
@@ -68,14 +88,30 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
             + stats.compactMap(\.accountIndex)).sorted()
     }
 
+    var displayAccounts: [ProviderAccount] {
+        let indices = accountIndices.isEmpty ? [0] : accountIndices
+        return indices.map { index in
+            accounts.first { $0.index == index }
+                ?? ProviderAccount(index: index, id: indices.count == 1 && (!windows.isEmpty || !stats.isEmpty)
+                    ? .singleton(provider) : nil)
+        }
+    }
+
+    func accountID(at index: Int) -> AccountID? {
+        displayAccounts.first { $0.index == index }?.id
+    }
+
     func forAccount(_ index: Int) -> Self {
         var section = self
         section.windows = windows.filter { ($0.accountIndex ?? 0) == index }
         section.stats = stats.filter { ($0.accountIndex ?? 0) == index }
         let account = accounts.first { $0.index == index }
         section.failureText = account?.failureText
-        section.codexExtras = account?.codexExtras ?? (index == 0 ? codexExtras : nil)
-        section.accounts = []
+        section.codexExtras = accounts.isEmpty ? (index == 0 ? codexExtras : nil) : account?.codexExtras
+        if index != 0 { section.zaiResetTickets = nil }
+        section.accounts = account.map { [$0] } ?? []
+        section.claudeProfileBlocks = [:]
+        section.claudeRemoteFailureText = nil
         return section
     }
 

@@ -98,7 +98,7 @@ final class MultiUsageStore: ObservableObject {
         expiryTask?.cancel()
         expiryTask = nil
         let now = Date()
-        if let resetAt = snapshot.sections.flatMap({ $0.claudeBlocks.values })
+        if let resetAt = snapshot.sections.flatMap({ $0.claudeProfileBlocks.values })
             .filter({ $0.isActive(at: now) }).map(\.resetAt).min() {
             expiryTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(max(0, resetAt.timeIntervalSinceNow + 1)))
@@ -108,7 +108,7 @@ final class MultiUsageStore: ObservableObject {
                 let now = Date()
                 let sections = self.snapshot.sections.map { section in
                     var section = section
-                    section.claudeBlocks = section.claudeBlocks.filter { $0.value.isActive(at: now) }
+                    section.claudeProfileBlocks = section.claudeProfileBlocks.filter { $0.value.isActive(at: now) }
                     return section
                 }
                 self.snapshot = MultiUsageSnapshot(sections: sections, codexSnapshot: self.snapshot.codexSnapshot,

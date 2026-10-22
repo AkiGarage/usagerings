@@ -215,10 +215,12 @@ final class ClaudeRateLimitParserTests: XCTestCase {
             CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data())
         }, cliProxyClient: CLIProxyFixtures.client(), claudeRateLimitMonitor: ClaudeRateLimitMonitor(accounts: [1: [root]]))
         let snapshot = await service.fetchAll(now: event)
-        XCTAssertNotNil(snapshot.sections.first { $0.provider == .claude }?.claudeBlocks[1])
-        XCTAssertTrue(snapshot.sections.filter { $0.provider != .claude }.allSatisfy { $0.claudeBlocks.isEmpty })
+        XCTAssertNotNil(snapshot.sections.first { $0.provider == .claude }?.claudeProfileBlocks[1])
+        XCTAssertTrue(snapshot.sections.filter { $0.provider != .claude }.allSatisfy { $0.claudeProfileBlocks.isEmpty })
         let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
-        XCTAssertNotNil(bars.first { $0.id == "claude-1" }?.block)
+        XCTAssertNotNil(bars.first { $0.id == "claude-profile-1" }?.block)
+        XCTAssertNil(bars.first { $0.id == "claude-profile-1" }?.accountID)
+        XCTAssertNil(bars.first { $0.id == "claude-1" }?.block)
         XCTAssertNil(bars.first { $0.id == "claude-0" }?.block)
     }
 

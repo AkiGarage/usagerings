@@ -40,17 +40,18 @@ final class DemoModeTests: XCTestCase {
                        0, accuracy: 61)
 
         let codex = try XCTUnwrap(snapshot.sections.first { $0.provider == .codex })
-        XCTAssertEqual(codex.codexExtras?.creditsText, "1,284 credits")
-        XCTAssertEqual(codex.codexExtras?.availableCount, 2)
-        XCTAssertEqual(codex.codexExtras?.tickets.count, 3)
-        XCTAssertEqual(codex.codexExtras?.tickets.compactMap(\.title),
+        XCTAssertNil(codex.codexExtras)
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.creditsText, "1,284 credits")
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.availableCount, 2)
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.tickets.count, 3)
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.tickets.compactMap(\.title),
                        ["5時間リセット", "週リセット", "前回リセット"])
 
         let claude = try XCTUnwrap(snapshot.sections.first { $0.provider == .claude })
         XCTAssertEqual(Set(claude.windows.compactMap(\.accountIndex)), [0, 1])
         XCTAssertEqual(claude.windows.map { RingCardLabel.label(for: $0.title) },
                        ["5時間枠", "週の枠", "5時間枠", "週の枠"])
-        XCTAssertEqual(claude.claudeBlocks[1]?.kind, .session)
+        XCTAssertEqual(claude.claudeProfileBlocks[1]?.kind, .session)
 
         let zai = try XCTUnwrap(snapshot.sections.first { $0.provider == .zai })
         guard case let .loaded(tickets) = try XCTUnwrap(zai.zaiResetTickets) else {
@@ -60,12 +61,16 @@ final class DemoModeTests: XCTestCase {
         XCTAssertEqual(tickets.filter { !$0.available }.count, 1)
 
         let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
-        XCTAssertEqual(bars.count, 13)
+        XCTAssertEqual(bars.count, 14)
         let accountA = try XCTUnwrap(bars.first { $0.id == "claude-0" })
         XCTAssertTrue(accountA.isWarning)
         let accountB = try XCTUnwrap(bars.first { $0.id == "claude-1" })
-        XCTAssertEqual(accountB.block?.kind, .session)
-        XCTAssertTrue(accountB.isBlocked)
+        XCTAssertNil(accountB.block)
+        XCTAssertFalse(accountB.isBlocked)
+        let profileB = try XCTUnwrap(bars.first { $0.id == "claude-profile-1" })
+        XCTAssertEqual(profileB.block?.kind, .session)
+        XCTAssertTrue(profileB.isBlocked)
+        XCTAssertNotNil(RingDetailCardModel.make(bar: profileB, now: now)?.blockText)
         let accountBDetail = try XCTUnwrap(RingDetailCardModel.make(
             bar: accountB, now: now, sourceTimeZone: RingResetFormat.tokyo))
         XCTAssertEqual(accountBDetail.rows.map(\.label), ["5時間枠", "週の枠"])

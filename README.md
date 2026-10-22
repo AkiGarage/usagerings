@@ -35,6 +35,10 @@ Optional GLM reset-ticket details use the default CodexBar configuration's globa
 
 Antigravity keeps accounts together within each model group by default. To split them, enable **Antigravityをアカウント別に表示** in the panel's **gear (Settings)** or the tab's **表示** menu. The panel, rings, and hover details update immediately; a single account keeps its existing display.
 
+In **Settings → アカウント**, give each account a custom label, clear it, or hide/show the account. Custom labels appear in panel rows, ring tooltips, and detail cards independently of the masked account-name toggle. **Primary** limits that provider's collapsed rings to one account; the other visible accounts remain in the panel. The default is **すべて表示** (show all). A hidden or temporarily missing primary falls back to the first visible account, and hidden accounts remain editable in Settings. Preferences use provider-scoped SHA256 identifiers in local UserDefaults, never raw account IDs, emails, or credentials. If a source supplies multiple accounts without stable identifiers, their settings are unavailable until the source reports an identifier.
+
+Claude log profiles do not report a quota-account ID. Their **Claude logs A/B** limit notices remain separate from account rings, labels, visibility, and Primary selection, so response ordering cannot attach a log warning to the wrong account.
+
 ## Build and install
 
 From the downloaded or cloned source directory:
@@ -70,7 +74,7 @@ UsageRings stores its settings and display snapshots **locally only**. It has no
 
 Fetching current usage still requires network access: CodexBarCLI communicates with its providers, the local authenticated proxy brokers provider requests, and GLM reset-ticket details contact Z.ai directly. Enabling remote Claude monitoring adds SSH traffic to the host you configure. “Local-only” describes storage and processing, not offline operation.
 
-Local Claude monitoring reads bounded recent log tails from `~/.claude/projects`, `~/.claude-a/projects`, and `~/.claude-b/projects`. Remote monitoring returns filtered quota-event text, timestamps, and model identifiers. Local Codex display snapshots are written to `~/Library/Application Support/CodexUsageWidget-Multi/` and a per-user `UsageRings` folder inside the macOS per-user temporary directory (`$TMPDIR`, mode 0700; files 0600), which also holds a provider/window diagnostic JSON file. This version writes nothing to the shared `/private/tmp`; files left there by older builds are not removed automatically. If remote Claude monitoring over SSH fails, the Claude section shows a short "Remote Claude logs" reason without host details. Treat these files as personal usage information and sanitize logs or screenshots before sharing them.
+Local Claude monitoring reads bounded recent log tails from `~/.claude/projects`, `~/.claude-a/projects`, and `~/.claude-b/projects`. Remote monitoring returns filtered quota-event text, timestamps, and model identifiers. Local Codex display snapshots are written to `~/Library/Application Support/CodexUsageWidget-Multi/` and a per-user `UsageRings` folder inside the macOS per-user temporary directory (`$TMPDIR`, mode 0700; files 0600), which also holds a provider/window diagnostic JSON file. This version writes nothing to the shared `/private/tmp`; files left there by older builds are not removed automatically. If remote Claude monitoring over SSH fails, the separate "Claude logs B" notice shows a short reason without host details. Treat these files as personal usage information and sanitize logs or screenshots before sharing them.
 
 ## A lighter app bundle
 

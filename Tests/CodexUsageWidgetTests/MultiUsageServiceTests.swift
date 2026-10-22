@@ -18,9 +18,10 @@ final class MultiUsageServiceTests: XCTestCase {
         let codex = snapshot.sections[0]
         XCTAssertEqual(codex.windows.map(\.title), ["Weekly"])
         XCTAssertEqual(codex.windows.map(\.leftPercent), [81])
-        XCTAssertEqual(codex.codexExtras?.creditsText, "61,003 credits")
-        XCTAssertEqual(codex.codexExtras?.availableCount, 2)
-        XCTAssertEqual(codex.codexExtras?.tickets.compactMap(\.status),
+        XCTAssertNil(codex.codexExtras)
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.creditsText, "61,003 credits")
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.availableCount, 2)
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.tickets.compactMap(\.status),
                        Optional(["available", "used", "available"]))
         XCTAssertTrue(snapshot.sections.filter { $0.provider != .codex }.allSatisfy { $0.codexExtras == nil })
         XCTAssertEqual(

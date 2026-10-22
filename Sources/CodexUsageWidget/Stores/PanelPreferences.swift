@@ -72,6 +72,10 @@ final class PanelPreferences: ObservableObject {
     @Published var splitAntigravityAccounts: Bool {
         didSet { defaults.set(splitAntigravityAccounts, forKey: Self.splitAntigravityAccountsKey) }
     }
+    static let accountPreferencesKey = "multiAccountPreferencesV1"
+    static let accountPreferencesBackupKey = "multiAccountPreferencesV1Backup"
+    @Published private(set) var accountPreferences: AccountPreferences
+    private let canSaveAccountPreferences: Bool
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -83,6 +87,41 @@ final class PanelPreferences: ObservableObject {
         appearance = PanelAppearance(rawValue: defaults.string(forKey: Self.appearanceKey) ?? "") ?? .system
         showAccountNames = defaults.bool(forKey: Self.showAccountNamesKey)
         splitAntigravityAccounts = defaults.bool(forKey: Self.splitAntigravityAccountsKey)
+        if let data = defaults.data(forKey: Self.accountPreferencesKey) {
+            do {
+                accountPreferences = try JSONDecoder().decode(AccountPreferences.self, from: data)
+                canSaveAccountPreferences = true
+            } catch {
+                if defaults.object(forKey: Self.accountPreferencesBackupKey) == nil {
+                    defaults.set(data, forKey: Self.accountPreferencesBackupKey)
+                }
+                accountPreferences = AccountPreferences()
+                canSaveAccountPreferences = false
+            }
+        } else {
+            accountPreferences = AccountPreferences()
+            canSaveAccountPreferences = true
+        }
+    }
+
+    func setAccountLabel(_ label: String, for id: AccountID) {
+        accountPreferences.setLabel(label, for: id)
+        saveAccounts()
+    }
+
+    func setAccountVisible(_ visible: Bool, for id: AccountID) {
+        accountPreferences.setVisible(visible, for: id)
+        saveAccounts()
+    }
+
+    func setPrimaryAccount(_ id: AccountID?, for provider: ProviderID) {
+        accountPreferences.setPrimary(id, for: provider)
+        saveAccounts()
+    }
+
+    private func saveAccounts() {
+        guard canSaveAccountPreferences, let data = try? JSONEncoder().encode(accountPreferences) else { return }
+        defaults.set(data, forKey: Self.accountPreferencesKey)
     }
 
     var percent: Int { Int((zoom * 100).rounded()) }

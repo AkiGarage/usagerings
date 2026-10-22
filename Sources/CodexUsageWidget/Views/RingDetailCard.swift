@@ -178,7 +178,7 @@ struct RingDetailCardModel: Equatable {
                      tickets: tickets)
             : nil
         var ticketFailureText: String?
-        if bar.id == "zai", let inventory = bar.zaiResetTickets {
+        if bar.provider == .zai || bar.id == "zai", let inventory = bar.zaiResetTickets {
             switch inventory {
             case .unavailable:
                 ticketFailureText = "リセット券を取得できません"
@@ -529,6 +529,12 @@ final class RingDetailCardController {
                 MainActor.assumeIsolated { self?.hide(immediately: true) }
             }
             .store(in: &cancellables)
+        preferences.$accountPreferences
+            .dropFirst()
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.hide(immediately: true) }
+            }
+            .store(in: &cancellables)
     }
 
     /// The card must not outlive the tab panel leaving the screen.
@@ -637,7 +643,8 @@ final class RingDetailCardController {
               store.opacityHUDPercent == nil,
               hostingView.bounds.width > 0 else { return nil }
         let bars = CollapsedUsageBar.bars(for: snapshot ?? store.snapshot,
-                                         splitAntigravityAccounts: preferences.splitAntigravityAccounts)
+                                         splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                         accountPreferences: preferences.accountPreferences)
         guard !bars.isEmpty else { return nil }
         return Context(bars: bars,
                        layout: MultiCollapsedUsageView.layout(barZoom: preferences.barZoom,

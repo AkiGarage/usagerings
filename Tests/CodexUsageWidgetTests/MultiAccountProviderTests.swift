@@ -8,7 +8,7 @@ final class MultiAccountProviderTests: XCTestCase {
                 XCTAssertTrue(arguments.contains("--all-accounts"))
                 return .init(terminationStatus: status, stdout: Data(json.utf8), stderr: Data())
             }
-            XCTAssertFalse(arguments.contains("--all-accounts"))
+            XCTAssertTrue(arguments.contains("--all-accounts"))
             return .init(terminationStatus: 0, stdout: Data("[]".utf8), stderr: Data())
         }, cliProxyClient: CLIProxyFixtures.client())
         return await service.fetchAll()
@@ -21,6 +21,7 @@ final class MultiAccountProviderTests: XCTestCase {
         let snapshot = await fetchCodex("[\(Self.first),\(Self.second)]")
         let section = try XCTUnwrap(snapshot.sections.first { $0.provider == .codex })
         XCTAssertEqual(section.accountIndices, [0, 1])
+        XCTAssertNil(section.codexExtras)
         XCTAssertEqual(snapshot.codexSnapshot?.session?.leftPercent, 80)
         let rows = ServiceRowModel.rows(for: section, showAccounts: true)
         XCTAssertEqual(rows.map(\.id), ["codex-0", "codex-1"])
@@ -73,6 +74,64 @@ final class MultiAccountProviderTests: XCTestCase {
         XCTAssertEqual(bars.map(\.label), ["C", "X"])
         XCTAssertEqual(bars.map(\.title), ["Codex", "Grok"])
         XCTAssertEqual(bars[0].codexExtras?.creditsText, "123 credits")
+    }
+
+    func testFailedCodexAccountNeverShowsHiddenHealthyAccountExtras() async throws {
+        let failure = #"{"provider":"codex","account":"failed","error":{"message":"Unavailable"}}"#
+        let snapshot = await fetchCodex("[\(failure),\(Self.second)]", status: 1)
+        let section = try XCTUnwrap(snapshot.sections.first { $0.provider == .codex })
+        let firstID = try XCTUnwrap(section.accountID(at: 0))
+        let secondID = try XCTUnwrap(section.accountID(at: 1))
+        XCTAssertNil(section.codexExtras)
+        XCTAssertNil(section.forAccount(0).codexExtras)
+        XCTAssertEqual(section.forAccount(1).codexExtras?.creditsText, "456 credits")
+        let bars = CollapsedUsageBar.bars(for: snapshot).filter { $0.provider == .codex }
+        XCTAssertNil(bars[0].codexExtras)
+        XCTAssertNil(RingDetailCardModel.make(bar: bars[0], now: Date())?.extras)
+        XCTAssertEqual(RingDetailCardModel.make(bar: bars[1], now: Date())?.extras?.creditsText, "456 credits")
+
+        var preferences = AccountPreferences()
+        preferences.setVisible(false, for: secondID)
+        let visible = try XCTUnwrap(preferences.visibleSection(section))
+        XCTAssertEqual(visible.accounts.compactMap(\.id), [firstID])
+        XCTAssertNil(visible.codexExtras)
+        XCTAssertNil(visible.forAccount(0).codexExtras)
+        XCTAssertTrue(visible.stats.isEmpty)
+        for current in [snapshot, MultiUsageSnapshot(sections: [visible], codexSnapshot: nil, updatedAt: Date())] {
+            let visibleBars = CollapsedUsageBar.bars(for: current, accountPreferences: preferences).filter { $0.provider == .codex }
+            XCTAssertEqual(visibleBars.count, 1)
+            XCTAssertEqual(visibleBars[0].accountID, firstID)
+            XCTAssertNil(visibleBars[0].codexExtras)
+            XCTAssertNil(RingDetailCardModel.make(bar: visibleBars[0], now: Date())?.extras)
+        }
+        preferences.setVisible(true, for: secondID)
+        preferences.setVisible(false, for: firstID)
+        let healthy = try XCTUnwrap(preferences.visibleSection(section))
+        let healthySnapshot = MultiUsageSnapshot(sections: [healthy], codexSnapshot: nil, updatedAt: Date())
+        let healthyBar = try XCTUnwrap(CollapsedUsageBar.bars(for: healthySnapshot).first { $0.provider == .codex })
+        XCTAssertEqual(healthyBar.codexExtras?.creditsText, "456 credits")
+    }
+
+    func testSectionExtrasAreOnlyAFallbackWithoutPopulatedAccounts() throws {
+        let extras = CodexExtrasParser.Extras(creditsText: "456 credits", availableCount: nil, ticketExpiries: [])
+        let firstID = AccountID(provider: .codex, source: "id", value: "first")
+        let secondID = AccountID(provider: .codex, source: "id", value: "second")
+        let section = ProviderSection(provider: .codex, windows: [], stats: [], failureText: nil,
+            codexExtras: extras, accounts: [ProviderAccount(index: 0, id: firstID),
+                                          ProviderAccount(index: 1, codexExtras: extras, id: secondID)])
+        XCTAssertNil(section.forAccount(0).codexExtras)
+        XCTAssertNil(section.forAccount(2).codexExtras)
+        var preferences = AccountPreferences()
+        preferences.setVisible(false, for: secondID)
+        let visible = try XCTUnwrap(preferences.visibleSection(section))
+        XCTAssertNil(visible.codexExtras)
+        XCTAssertNil(visible.forAccount(0).codexExtras)
+
+        let legacy = ProviderSection(provider: .codex, windows: [], stats: [], failureText: nil, codexExtras: extras)
+        XCTAssertEqual(legacy.forAccount(0).codexExtras, extras)
+        XCTAssertNil(legacy.forAccount(1).codexExtras)
+        let legacyVisible = try XCTUnwrap(AccountPreferences().visibleSection(legacy))
+        XCTAssertEqual(legacyVisible.forAccount(0).codexExtras, extras)
     }
 
     func testGrokMissingQuotaAndNoticesStayWithTheirAccount() {

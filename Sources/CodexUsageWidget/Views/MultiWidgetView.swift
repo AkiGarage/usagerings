@@ -70,7 +70,8 @@ struct MultiPanelContent: View {
                 }
                 .padding(.bottom, 2)
                 ForEach(ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames,
-                                             splitAntigravityAccounts: preferences.splitAntigravityAccounts)) { row in
+                                             splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                             accountPreferences: preferences.accountPreferences)) { row in
                     ServiceRowView(row: row)
                 }
                 if let errorMessage {
@@ -119,7 +120,7 @@ struct MultiPanelContent: View {
             .popover(isPresented: $showsSettings) {
                 // Bind to the same suite as the panel: demo mode never reads or
                 // writes the production SSH host.
-                PanelSettingsView(preferences: preferences)
+                PanelSettingsView(preferences: preferences, snapshot: snapshot)
                     .defaultAppStorage(preferences.defaults)
             }
         }
@@ -139,13 +140,18 @@ struct MultiPanelContent: View {
 
 struct PanelSettingsView: View {
     @ObservedObject var preferences: PanelPreferences
+    var snapshot: MultiUsageSnapshot = .placeholder
     @AppStorage(ClaudeSSHSettings.enabledKey) private var enabled = false
     @AppStorage(ClaudeSSHSettings.hostKey) private var host = ""
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings").font(.headline)
+            Toggle("アカウント名を一部伏せて表示", isOn: $preferences.showAccountNames)
             Toggle("Antigravityをアカウント別に表示", isOn: $preferences.splitAntigravityAccounts)
+            Divider()
+            AccountSettingsView(snapshot: snapshot, preferences: preferences)
             Divider()
             Toggle("Read remote Claude B limits over SSH", isOn: $enabled)
             TextField("SSH host or user@host", text: $host)
@@ -161,7 +167,96 @@ struct PanelSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
-        .frame(width: 340)
+        }
+        .frame(width: 390, height: 520)
+    }
+}
+
+struct AccountSettingsView: View {
+    let snapshot: MultiUsageSnapshot
+    @ObservedObject var preferences: PanelPreferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("アカウント").font(.headline)
+            Text("表示をオフにするとパネルとリングから隠れます。Primaryを選ぶと縮小表示はそのアカウントのリングだけになります。非表示・未取得時は表示中の先頭を使います。")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Claude logsの警告はアカウントを特定できないため、表示・Primary設定と独立して表示します。")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(snapshot.sections) { section in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(section.provider.displayName).font(.subheadline.bold())
+                    Picker("Primary", selection: Binding(
+                        get: { preferences.accountPreferences.primaryAccounts[section.provider.rawValue] ?? "" },
+                        set: { preferences.setPrimaryAccount(AccountID(digest: $0), for: section.provider) }
+                    )) {
+                        Text("すべて表示").tag("")
+                        ForEach(section.displayAccounts, id: \.index) { account in
+                            if let id = account.id {
+                                Text(accountName(account, in: section)).tag(id.rawValue)
+                            }
+                        }
+                        if let saved = preferences.accountPreferences.primaryAccounts[section.provider.rawValue],
+                           !section.displayAccounts.contains(where: { $0.id?.rawValue == saved }) {
+                            Text("選択中のアカウント（未取得）").tag(saved)
+                        }
+                    }
+                    ForEach(section.displayAccounts, id: \.index) { account in
+                        if let id = account.id {
+                            AccountSettingsRow(id: id, name: accountName(account, in: section), preferences: preferences)
+                                .id(id)
+                        } else {
+                            Text("\(accountName(account, in: section))：識別情報がないため設定を保存できません")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func accountName(_ account: ProviderAccount, in section: ProviderSection) -> String {
+        let base = "\(section.provider.displayName) \(ProviderSection.accountSuffix(account.index))"
+        if let label = preferences.accountPreferences.label(for: account.id) { return "\(base) · \(label)" }
+        if preferences.showAccountNames,
+           let masked = ServiceRowModel.rows(for: section.forAccount(account.index), showAccounts: true).first?.account {
+            return "\(base) · \(masked)"
+        }
+        return base
+    }
+}
+
+private struct AccountSettingsRow: View {
+    let id: AccountID
+    let name: String
+    @ObservedObject var preferences: PanelPreferences
+    @State private var label: String
+
+    init(id: AccountID, name: String, preferences: PanelPreferences) {
+        self.id = id
+        self.name = name
+        self.preferences = preferences
+        _label = State(initialValue: preferences.accountPreferences.label(for: id) ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(name, isOn: Binding(
+                get: { preferences.accountPreferences.isVisible(id) },
+                set: { preferences.setAccountVisible($0, for: id) }
+            ))
+            HStack {
+                TextField("カスタムラベル", text: $label)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("\(name)のラベル")
+                    .onChange(of: label) { _, value in preferences.setAccountLabel(value, for: id) }
+                Button("クリア") {
+                    label = ""
+                    preferences.setAccountLabel("", for: id)
+                }
+                .disabled(label.isEmpty)
+            }
+        }
     }
 }
 

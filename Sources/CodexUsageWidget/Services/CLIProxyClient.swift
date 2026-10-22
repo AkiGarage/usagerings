@@ -85,13 +85,13 @@ actor CLIProxyClient {
         }
     }
     // Stable proxy account identity, never the (potentially identical) masked label.
-    private var claudeUsage: [String: CachedUsage] = [:]
+    private var claudeUsage: [AccountID: CachedUsage] = [:]
     private struct GrokUsage {
         var periods = [CachedUsage(providerName: "Grok Weekly"), CachedUsage(providerName: "Grok Monthly")]
         var nextAttempt = Date.distantPast
         var backoff: TimeInterval = 0
     }
-    private var grokUsage: [String: GrokUsage] = [:]
+    private var grokUsage: [AccountID: GrokUsage] = [:]
     private static let claudeMinimumInterval: TimeInterval = 5 * 60
 
     init(
@@ -155,7 +155,8 @@ actor CLIProxyClient {
                 if accounts.isEmpty { section.failureText = Failure.noCredentials.text }
                 for (accountIndex, account) in accounts.enumerated() {
                     let statsStart = section.stats.count
-                    var accountState = ProviderAccount(index: accountIndex)
+                    var accountState = ProviderAccount(index: accountIndex,
+                        id: AccountID.cliProxy(account, provider: provider))
                     do {
                         let windows: [UsageLimit]
                         if provider == .claude {
@@ -164,6 +165,7 @@ actor CLIProxyClient {
                             if let notice = usage.notice {
                                 section.stats.append(ProviderStat(title: account.maskedEmail, valueText: notice))
                                 section.failureText = usage.rateLimited ? "Some accounts rate limited" : "Some accounts unavailable"
+                                accountState.failureText = notice
                             }
                         } else if provider == .grok {
                             let usage = try await cachedGrokUsage(account, key: key, now: now)
@@ -199,11 +201,9 @@ actor CLIProxyClient {
                         section.failureText = "Some accounts unavailable"
                         accountState.failureText = reason
                     }
-                    if provider == .grok || provider == .antigravity {
-                        section.accounts.append(accountState)
-                        for index in statsStart..<section.stats.count {
-                            section.stats[index].accountIndex = accountIndex
-                        }
+                    section.accounts.append(accountState)
+                    for index in statsStart..<section.stats.count {
+                        section.stats[index].accountIndex = accountIndex
                     }
                 }
                 sections.append(section)
@@ -271,7 +271,8 @@ actor CLIProxyClient {
     }
 
     private func cachedClaudeUsage(_ account: CLIProxyCredential, key: String, now: Date) async throws -> CachedUsage {
-        var cached = claudeUsage[account.authIndex] ?? CachedUsage()
+        let id = AccountID.cliProxy(account, provider: .claude)
+        var cached = claudeUsage[id] ?? CachedUsage()
         let startedAt = clock()
         guard startedAt >= cached.nextAttempt else { return cached }
         cached.nextAttempt = startedAt.addingTimeInterval(Self.claudeMinimumInterval)
@@ -295,12 +296,13 @@ actor CLIProxyClient {
             cached.failure = (error as? Failure)?.text ?? Failure.payload.text
             cached.rateLimited = false
         }
-        claudeUsage[account.authIndex] = cached
+        claudeUsage[id] = cached
         return cached
     }
 
     private func cachedGrokUsage(_ account: CLIProxyCredential, key: String, now: Date) async throws -> GrokUsage {
-        var cached = grokUsage[account.authIndex] ?? GrokUsage()
+        let id = AccountID.cliProxy(account, provider: .grok)
+        var cached = grokUsage[id] ?? GrokUsage()
         guard clock() >= cached.nextAttempt else { return cached }
         cached.nextAttempt = clock().addingTimeInterval(Self.claudeMinimumInterval)
         var headers = ["Authorization": "Bearer $TOKEN$", "x-xai-token-auth": "xai-grok-cli",
@@ -345,7 +347,7 @@ actor CLIProxyClient {
         }
         cached.backoff = rateLimited ? backoff : 0
         for index in cached.periods.indices { cached.periods[index].nextAttempt = cached.nextAttempt }
-        grokUsage[account.authIndex] = cached
+        grokUsage[id] = cached
         return cached
     }
 

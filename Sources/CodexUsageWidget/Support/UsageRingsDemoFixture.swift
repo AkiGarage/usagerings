@@ -69,7 +69,6 @@ enum UsageRingsDemoFixture {
                                                  valueText: ISO8601DateFormatter().string(from: $0))
                                 },
                             failureText: nil,
-                            codexExtras: codexExtras,
                             accounts: [ProviderAccount(index: 0, codexExtras: codexExtras),
                                        ProviderAccount(index: 1)]),
             ProviderSection(provider: .claude,
@@ -78,7 +77,7 @@ enum UsageRingsDemoFixture {
                                       accountLimit("5h", 14, resetIn: 2, account: 1),
                                       accountLimit("Weekly", 34, resetIn: 69, account: 1)],
                             stats: [], failureText: nil,
-                            claudeBlocks: [1: ClaudeBlock(kind: .session,
+                            claudeProfileBlocks: [1: ClaudeBlock(kind: .session,
                                                           resetAt: now.addingTimeInterval(2 * 3_600),
                                                           timeZoneKnown: true)]),
             ProviderSection(provider: .grok,

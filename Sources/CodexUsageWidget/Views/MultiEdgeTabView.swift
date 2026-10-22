@@ -58,6 +58,9 @@ struct MultiEdgeTabView: View {
         .onChange(of: preferences.splitAntigravityAccounts) {
             updateCollapsedSize()
         }
+        .onChange(of: preferences.accountPreferences) {
+            updateCollapsedSize()
+        }
         .onChange(of: presentation.menuBarHeight, initial: true) {
             updateCollapsedSize()
         }
@@ -82,6 +85,7 @@ struct MultiEdgeTabView: View {
                                 menuBarHeight: presentation.menuBarHeight,
                                 orientation: preferences.orientation,
                                 splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                accountPreferences: preferences.accountPreferences,
                                 highlightedBarID: ringHighlight.barID)
     }
 
@@ -99,7 +103,7 @@ struct MultiEdgeTabView: View {
 
     private var displayPercent: Int {
         store.opacityHUDPercent
-            ?? Int((store.snapshot.globalLowestWindow?.clampedLeftPercent ?? 0).rounded())
+            ?? Int((visibleSnapshot.globalLowestWindow?.clampedLeftPercent ?? 0).rounded())
     }
 
     private var expandedTextColor: Color {
@@ -113,20 +117,28 @@ struct MultiEdgeTabView: View {
         if isShowingOpacity {
             return opacityColor
         }
-        return color(for: store.snapshot.globalLowestWindow?.tone ?? .critical)
+        return color(for: visibleSnapshot.globalLowestWindow?.tone ?? .critical)
     }
 
     private var accessibilityText: String {
-        let providers = store.snapshot.sections.map { section in
-            if let failureText = section.failureText {
-                return "\(section.provider.displayName) \(failureText)"
+        let rows = ServiceRowModel.rows(for: store.snapshot,
+                                       splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                       accountPreferences: preferences.accountPreferences)
+        let providers = rows.map { row in
+            if let failureText = row.failureText {
+                return "\(row.name) \(failureText)"
             }
-            let windows = section.windows.map {
+            let windows = ([row.five, row.week].compactMap { $0 } + row.extras).map {
                 "\($0.title.lowercased()) \(Int($0.clampedLeftPercent.rounded()))% left"
             }
-            return "\(section.provider.displayName) \(windows.joined(separator: ", "))"
+            return "\(row.name) \(windows.joined(separator: ", "))"
         }
         return "Multi usage tab, \(providers.joined(separator: ", "))"
+    }
+
+    private var visibleSnapshot: MultiUsageSnapshot {
+        MultiUsageSnapshot(sections: store.snapshot.sections.compactMap { preferences.accountPreferences.visibleSection($0) },
+                           codexSnapshot: nil, updatedAt: store.snapshot.updatedAt)
     }
 
     private func color(for tone: UsageTone) -> Color {
@@ -145,7 +157,8 @@ struct MultiEdgeTabView: View {
                                                                   barZoom: preferences.barZoom,
                                                                   menuBarHeight: presentation.menuBarHeight,
                                                                   orientation: preferences.orientation,
-                                                                  splitAntigravityAccounts: preferences.splitAntigravityAccounts)
+                                                                  splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                                                  accountPreferences: preferences.accountPreferences)
     }
 }
 

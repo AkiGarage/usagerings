@@ -17,7 +17,7 @@ struct ClaudeRemoteFetch: Sendable, Equatable {
 }
 
 struct ClaudeRateLimitMonitor: Sendable {
-    // Assumes CLIProxy accountIndex 0 = Claude A, 1 = Claude B, like the rings.
+    // Profile slots identify log roots, never the order of CLIProxy quota accounts.
     static let defaultAccounts: [Int: [URL]] = [
         0: [".claude-a/projects", ".claude/projects"],
         1: [".claude-b/projects"]

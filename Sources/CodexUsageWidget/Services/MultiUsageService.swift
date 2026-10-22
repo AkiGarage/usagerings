@@ -21,8 +21,6 @@ struct MultiUsageService: Sendable {
         self.claudeRateLimitMonitor = claudeRateLimitMonitor ?? (commandRunner == nil ? .live() : nil)
     }
 
-    static let remoteClaudeStatTitle = "Remote Claude logs"
-
     /// Never throws: a provider that fails anywhere in the chain resolves
     /// to its own section carrying a failure reason, and the other sections
     /// are unaffected.
@@ -44,15 +42,15 @@ struct MultiUsageService: Sendable {
         let proxyWithBlocks = proxy.map { section in
             var section = section
             if section.provider == .claude {
-                section.claudeBlocks = blockResult ?? [:]
-                if let sshFailure {
-                    section.stats.append(ProviderStat(title: Self.remoteClaudeStatTitle, valueText: sshFailure))
-                }
+                section.claudeProfileBlocks = blockResult ?? [:]
+                section.claudeRemoteFailureText = sshFailure
             }
             return section
         }
         var zaiSection = zaiResult.section
-        zaiSection.zaiResetTickets = ticketResult
+        // The optional ticket reader has no account identity; never attach its
+        // default-config inventory to an arbitrary member of a multi-account response.
+        zaiSection.zaiResetTickets = zaiSection.accounts.count > 1 ? nil : ticketResult
         let additional = await [minimax.section, kimi.section, deepseek.section]
         let sections = MultiUsageSnapshot.ordered([codexResult.section, zaiSection] + additional + proxyWithBlocks)
         Self.writeWindowDump(sections)
@@ -63,17 +61,27 @@ struct MultiUsageService: Sendable {
         )
     }
 
-    /// Writes provider/title/percent (titles are already account-masked) so field mapping can be checked.
+    /// Diagnostics contain structural quota data only, never remote text or account identity.
     private static func writeWindowDump(_ sections: [ProviderSection]) {
         guard Bundle.main.bundleIdentifier != nil, NSClassFromString("XCTestCase") == nil else { return }
-        let rows: [[String: Any]] = sections.flatMap { section in
-            section.windows.map { ["provider": section.provider.rawValue, "title": $0.title,
-                                   "left": $0.leftPercent, "reset": $0.resetText] }
-            + section.stats.map { ["provider": section.provider.rawValue, "stat": $0.title] }
-        }
         guard let url = PrivateTempPaths.file("codex-usage-widget-panel-windows.json"),
-              let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted]) else { return }
+              let data = windowDumpData(sections) else { return }
         PrivateTempPaths.writePrivately(data, to: url)
+    }
+
+    static func windowDumpData(_ sections: [ProviderSection]) -> Data? {
+        let rows: [[String: Any]] = sections.flatMap { section in
+            section.windows.map { window in
+                let kind: String
+                switch ServiceRowModel.kind(window.title) {
+                case .five: kind = "5h"
+                case .week: kind = "weekly"
+                case .other: kind = "other"
+                }
+                return ["provider": section.provider.rawValue, "window": kind, "left": window.leftPercent]
+            } + [["provider": section.provider.rawValue, "statCount": section.stats.count]]
+        }
+        return try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted])
     }
 
     private struct ProviderResult: Sendable {
@@ -110,6 +118,12 @@ struct MultiUsageService: Sendable {
                partial.section.accounts.contains(where: { $0.failureText != nil }) {
                 return partial
             }
+            if provider != .codex, result.terminationStatus != 0,
+               let partial = try? MultiProviderParser.parse(result.stdout, provider: provider, now: now, timeZone: timeZone),
+               partial.accounts.count > 1, partial.accounts.contains(where: { $0.failureText != nil }),
+               !partial.windows.isEmpty || !partial.stats.isEmpty {
+                return ProviderResult(provider: provider, section: partial, codexSnapshot: nil)
+            }
             guard result.terminationStatus == 0 else {
                 throw CodexUsageError.commandFailure(
                     exitCode: result.terminationStatus,
@@ -144,8 +158,7 @@ struct MultiUsageService: Sendable {
     }
 
     private func run(_ provider: ProviderID) async throws -> CodexUsageService.CommandResult {
-        var arguments = ["usage", "--provider", provider.rawValue, "--format", "json"]
-        if provider == .codex { arguments.append("--all-accounts") }
+        let arguments = ["usage", "--provider", provider.rawValue, "--format", "json", "--all-accounts"]
         if let commandRunner {
             return try commandRunner(arguments)
         }
@@ -188,19 +201,24 @@ struct MultiUsageService: Sendable {
         }
         let accounts = entries.filter { $0["provider"] as? String == "codex" }
         guard accounts.count > 1 else {
-            return try codexAccountResult(from: data, now: now, timeZone: timeZone, calendar: calendar)
+            let result = try codexAccountResult(from: data, now: now, timeZone: timeZone, calendar: calendar)
+            var section = result.section
+            section.accounts = [ProviderAccount(index: 0, codexExtras: section.codexExtras,
+                id: accounts.first.flatMap { AccountID.codexBar($0, provider: .codex) } ?? .singleton(.codex))]
+            section.codexExtras = nil
+            return ProviderResult(provider: .codex, section: section, codexSnapshot: result.codexSnapshot)
         }
         var section = ProviderSection(provider: .codex, windows: [], stats: [], failureText: nil)
         var primarySnapshot: UsageSnapshot?
         for (index, entry) in accounts.enumerated() {
+            let id = AccountID.codexBar(entry, provider: .codex)
             do {
                 let data = try JSONSerialization.data(withJSONObject: [entry])
                 let result = try codexAccountResult(from: data, now: now, timeZone: timeZone, calendar: calendar)
                 if index == 0 {
                     primarySnapshot = result.codexSnapshot
-                    section.codexExtras = result.section.codexExtras
                 }
-                section.accounts.append(ProviderAccount(index: index, codexExtras: result.section.codexExtras))
+                section.accounts.append(ProviderAccount(index: index, codexExtras: result.section.codexExtras, id: id))
                 section.windows += result.section.windows.map { window in
                     var window = window
                     window.accountIndex = index
@@ -212,7 +230,7 @@ struct MultiUsageService: Sendable {
                     return stat
                 }
             } catch {
-                section.accounts.append(ProviderAccount(index: index, failureText: Self.failureText(for: error)))
+                section.accounts.append(ProviderAccount(index: index, failureText: Self.failureText(for: error), id: id))
                 section.failureText = "Some accounts unavailable"
             }
         }
