@@ -229,10 +229,9 @@ struct MultiCollapsedUsageView: View {
                             .shadow(color: bar.isBlocked ? .clear : bar.providerColor.opacity(0.5), radius: 1.5)
                     }
                 }
-                .help("\(bar.title): \(CollapsedUsageBar.detailText(for: bar)) · \(bar.resetShort)"
-                      + (Self.g1(for: bar, rows: rows).inner.map { " · 週 \($0.percentInt)%" } ?? ""))
+                .help(Self.accessibilitySummary(for: bar, rows: rows))
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(bar.title): \(CollapsedUsageBar.detailText(for: bar))")
+                .accessibilityLabel(Self.accessibilitySummary(for: bar, rows: rows))
             }
         }
         .frame(width: size.width, height: size.height)
@@ -255,6 +254,23 @@ struct MultiCollapsedUsageView: View {
     static func g1(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> (outer: UsageLimit?, inner: UsageLimit?) {
         guard let row = weekly(for: bar, rows: rows), let five = row.five else { return (bar.limit, nil) }
         return (five, row.week)
+    }
+
+    static func accessibilitySummary(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> String {
+        if bar.isBlocked { return "\(bar.ringName): \(CollapsedUsageBar.detailText(for: bar))" }
+        let arcs = g1(for: bar, rows: rows)
+        let windows = [arcs.outer, arcs.inner].compactMap { $0 }
+        guard !windows.isEmpty else { return "\(bar.ringName): No data" }
+        let values = windows.map { limit in
+            let label: String
+            switch ServiceRowModel.kind(limit.title) {
+            case .five: label = "5h"
+            case .week: label = "Weekly"
+            case .other: label = ServiceRowModel.shortLabel(limit.title)
+            }
+            return "\(label): \(limit.leftText), \(limit.resetText)"
+        }
+        return "\(bar.ringName): " + values.joined(separator: "; ")
     }
 
     private static func scale(for value: Double) -> CGFloat {
