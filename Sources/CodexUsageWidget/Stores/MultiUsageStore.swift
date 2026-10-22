@@ -129,7 +129,8 @@ final class MultiUsageStore: ObservableObject {
                     return section
                 }
                 self.snapshot = MultiUsageSnapshot(sections: sections, codexSnapshot: self.snapshot.codexSnapshot,
-                                                   updatedAt: self.snapshot.updatedAt)
+                                                   updatedAt: self.snapshot.updatedAt,
+                                                   hiddenProviders: self.snapshot.hiddenProviders)
                 self.refresh()
             }
         }
@@ -142,7 +143,10 @@ final class MultiUsageStore: ObservableObject {
     func providerVisibilityChanged(turnedOn: Bool) {
         snapshot = visible(rawSnapshot ?? .placeholder)
         if rawSnapshot != nil {
-            if preferences?.isProviderVisible(.claude) == false { claudeChoice = nil }
+            if preferences?.isProviderVisible(.claude) == false {
+                claudeChoice = nil
+                if let url = claudeChoiceURL { ClaudeAccountChoice.retract(now: Date(), url: url) }
+            }
         }
         if turnedOn { refresh() }
     }
