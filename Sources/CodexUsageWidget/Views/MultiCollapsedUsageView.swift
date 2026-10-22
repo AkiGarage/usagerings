@@ -16,6 +16,7 @@ struct CollapsedUsageBar: Identifiable {
     var block: ClaudeBlock? = nil
     var blockedSymbolName: String = Self.blockedSymbol
     var stats: [ProviderStat] = []
+    var failureText: String? = nil
     var isBlocked: Bool { block?.isActive(at: Date()) == true }
     static let blockedSymbol = "lock.fill"
     static let blockedPauseSymbol = "pause.circle.fill"
@@ -35,7 +36,7 @@ struct CollapsedUsageBar: Identifiable {
 
     static func detailText(for bar: Self) -> String {
         if let block = bar.block, bar.isBlocked { return ClaudeRateLimitParser.cardLine(block: block, now: Date()) }
-        return bar.limit?.leftText ?? "No data"
+        return bar.limit?.leftText ?? bar.failureText ?? "No data"
     }
 
     /// Claude icon orange (#D97757) and a slightly deeper shade (#C4623F).
@@ -67,7 +68,8 @@ struct CollapsedUsageBar: Identifiable {
     })
 
     static func bars(for snapshot: MultiUsageSnapshot,
-                     blockedPreview: String? = ProcessInfo.processInfo.environment["MULTIUSAGE_PREVIEW_BLOCKED"]) -> [Self] {
+                     blockedPreview: String? = ProcessInfo.processInfo.environment["MULTIUSAGE_PREVIEW_BLOCKED"],
+                     splitAntigravityAccounts: Bool = false) -> [Self] {
         func windows(_ provider: ProviderID) -> [UsageLimit] {
             snapshot.sections.filter { $0.provider == provider }.flatMap(\.windows)
         }
@@ -125,28 +127,35 @@ struct CollapsedUsageBar: Identifiable {
                              title: provider.displayName, providerColor: ServiceRowModel.color(for: provider, account: 0),
                              limit: lowest(section.windows), windows: section.windows, stats: section.stats))
         }
-        let required = ["Gemini 4 Argon", "Gemini Models", "Claude and GPT models"]
-        let antigravity = Dictionary(grouping: windows(.antigravity)) { window in
-            let name = window.title.components(separatedBy: " · ")[0]
-            if let exact = required.first(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { return exact }
-            // CLI-style titles ("Gemini weekly", "Claude/GPT 5-hour"): fold into the same group.
-            let short = ServiceRowModel.antigravityName(ServiceRowModel.groupName(window.title))
-            return required.first { ServiceRowModel.antigravityName($0) == short } ?? short
-        }
-        // Keep every returned group, including new groups, with Argon ahead of the main pools.
-        let names = Set(antigravity.keys).union(required).sorted { lhs, rhs in
-            func rank(_ name: String) -> Int {
-                if name.localizedCaseInsensitiveContains("argon") { return 0 }
-                if name == "Gemini Models" { return 1 }
-                if name == "Claude and GPT models" { return 2 }
-                return 3
+        func antigravityBars(_ windows: [UsageLimit], account: Int? = nil, failureText: String? = nil) -> [Self] {
+            let groups = Dictionary(grouping: windows) { ServiceRowModel.antigravityGroupName($0.title) }
+            // Keep every returned group, including new groups, with Argon ahead of the main pools.
+            let names = Set(groups.keys).union(ServiceRowModel.antigravityGroupNames).sorted { lhs, rhs in
+                func rank(_ name: String) -> Int {
+                    if name.localizedCaseInsensitiveContains("argon") { return 0 }
+                    if name == "Gemini Models" { return 1 }
+                    if name == "Claude and GPT models" { return 2 }
+                    return 3
+                }
+                return rank(lhs) == rank(rhs) ? lhs < rhs : rank(lhs) < rank(rhs)
             }
-            return rank(lhs) == rank(rhs) ? lhs < rhs : rank(lhs) < rank(rhs)
+            return names.map { name in
+                let groupWindows = groups[name] ?? []
+                let prefix = account.map { "antigravity-\($0)-" } ?? "antigravity-"
+                let suffix = account.map { " \(ProviderSection.accountSuffix($0))" } ?? ""
+                return Self(id: prefix + name, label: account.map(ProviderSection.accountSuffix) ?? "G",
+                            title: name + suffix, providerColor: antigravityColor,
+                            limit: lowest(groupWindows), windows: groupWindows, failureText: failureText)
+            }
         }
-        bars += names.map { name in
-            let groupWindows = antigravity[name] ?? []
-            return Self(id: "antigravity-\(name)", label: "G", title: name, providerColor: antigravityColor,
-                        limit: lowest(groupWindows), windows: groupWindows)
+        if splitAntigravityAccounts, let section = snapshot.sections.first(where: { $0.provider == .antigravity }),
+           section.accountIndices.count > 1 {
+            bars += section.accountIndices.flatMap { index in
+                let account = section.forAccount(index)
+                return antigravityBars(account.windows, account: index, failureText: account.failureText)
+            }
+        } else {
+            bars += antigravityBars(windows(.antigravity))
         }
         return bars
     }
@@ -157,6 +166,7 @@ struct MultiCollapsedUsageView: View {
     var barZoom: Double = 1
     var menuBarHeight: CGFloat = NSStatusBar.system.thickness
     var orientation: PanelOrientation = .horizontal
+    var splitAntigravityAccounts = false
     /// Ring under the cursor (hover card); nil = none.
     var highlightedBarID: String? = nil
     static let spacing: CGFloat = 5
@@ -185,8 +195,9 @@ struct MultiCollapsedUsageView: View {
 
     static func size(for snapshot: MultiUsageSnapshot, barZoom: Double = 1,
                      menuBarHeight: CGFloat = NSStatusBar.system.thickness,
-                     orientation: PanelOrientation = .horizontal) -> CGSize {
-        let count = CGFloat(CollapsedUsageBar.bars(for: snapshot).count)
+                     orientation: PanelOrientation = .horizontal,
+                     splitAntigravityAccounts: Bool = false) -> CGSize {
+        let count = CGFloat(CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts).count)
         let layout = layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
         let width = count * (layout.ringDiameter + spacing) - spacing + layout.horizontalPadding * 2
         return orientation == .horizontal
@@ -227,13 +238,13 @@ struct MultiCollapsedUsageView: View {
     var body: some View {
         let layout = Self.layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
         let size = Self.size(for: snapshot, barZoom: barZoom, menuBarHeight: menuBarHeight,
-                             orientation: orientation)
+                             orientation: orientation, splitAntigravityAccounts: splitAntigravityAccounts)
         let stack = orientation == .horizontal
             ? AnyLayout(HStackLayout(spacing: Self.spacing))
             : AnyLayout(VStackLayout(spacing: Self.spacing))
         stack {
-            let rows = ServiceRowModel.rows(for: snapshot)
-            ForEach(CollapsedUsageBar.bars(for: snapshot)) { bar in
+            let rows = ServiceRowModel.rows(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts)
+            ForEach(CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts)) { bar in
                 let arcs = Self.g1(for: bar, rows: rows)
                 // Small sizes drop only the inner arc; the weekly % stays in the gap (see TabG1Gauge).
                 TabG1Gauge(bar: bar, outer: arcs.outer, weekly: arcs.inner,
@@ -258,6 +269,7 @@ struct MultiCollapsedUsageView: View {
 
     /// Inner arc source: the weekly window of the same service, only when the outer arc is 5h.
     static func weekly(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> ServiceRowModel? {
+        if let exact = rows.first(where: { $0.id.caseInsensitiveCompare(bar.id) == .orderedSame }) { return exact }
         let key: String
         if bar.id.hasPrefix("claude-") || bar.id.hasPrefix("codex-") || bar.id.hasPrefix("grok-") { key = bar.id }
         else if bar.id.hasPrefix("antigravity-") { key = "antigravity-" + String(bar.id.dropFirst(12)) }
@@ -280,6 +292,7 @@ struct MultiCollapsedUsageView: View {
         let arcs = g1(for: bar, rows: rows)
         let windows = [arcs.outer, arcs.inner].compactMap { $0 }
         guard !windows.isEmpty else {
+            if let failure = bar.failureText { return "\(bar.ringName): \(failure)" }
             let details = bar.stats.map { "\($0.title): \($0.valueText)" }.joined(separator: "; ")
             return "\(bar.ringName): \(details.isEmpty ? "No data" : details)"
         }

@@ -156,9 +156,20 @@ struct RingDetailCardModel: Equatable {
     var ticketFailureText: String? = nil
     var blockText: String? = nil
     var stats: [ProviderStat] = []
+    var failureText: String? = nil
 
     static func make(bar: CollapsedUsageBar, now: Date, sourceTimeZone: TimeZone = .current) -> RingDetailCardModel? {
-        let rows = bar.windows.map { Row(label: RingCardLabel.label(for: $0.title), leftPercent: $0.clampedLeftPercent) }
+        func windowLabel(_ window: UsageLimit) -> String {
+            if let account = window.accountIndex, bar.id.hasPrefix("antigravity-\(account)-") {
+                switch ServiceRowModel.kind(window.title) {
+                case .five: return "5時間枠"
+                case .week: return "週の枠"
+                case .other: break
+                }
+            }
+            return RingCardLabel.label(for: window.title)
+        }
+        let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent) }
         let codexExtras = bar.id == "codex" || bar.id.hasPrefix("codex-") ? bar.codexExtras : nil
         let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now)
         let hasExtras = codexExtras?.creditsText != nil || codexExtras?.availableCount != nil || !tickets.isEmpty
@@ -190,15 +201,17 @@ struct RingDetailCardModel: Equatable {
         let blockText = bar.block.flatMap {
             $0.isActive(at: now) ? ClaudeRateLimitParser.cardLine(block: $0, now: now) : nil
         }
-        guard !rows.isEmpty || extras != nil || ticketFailureText != nil || blockText != nil || !bar.stats.isEmpty else { return nil }
+        guard !rows.isEmpty || extras != nil || ticketFailureText != nil || blockText != nil
+            || !bar.stats.isEmpty || bar.failureText != nil else { return nil }
         let reset = bar.limit.flatMap { limit -> (label: String, text: String)? in
             guard let date = RingResetFormat.date(fromResetText: limit.resetText, now: now,
                                                   sourceTimeZone: sourceTimeZone) else { return nil }
-            return (RingCardLabel.label(for: limit.title), RingResetFormat.text(reset: date, now: now))
+            return (windowLabel(limit), RingResetFormat.text(reset: date, now: now))
         }
         return RingDetailCardModel(title: "\(bar.ringName) の詳細",
                                    resetText: reset?.text, resetLabel: reset?.label, rows: rows, extras: extras,
-                                   ticketFailureText: ticketFailureText, blockText: blockText, stats: bar.stats)
+                                   ticketFailureText: ticketFailureText, blockText: blockText, stats: bar.stats,
+                                   failureText: bar.failureText)
     }
 
     private static func sortedTicketRows(_ tickets: [CodexExtrasParser.Ticket], now: Date) -> [TicketRow] {
@@ -367,6 +380,9 @@ struct RingDetailCardView: View {
             if let failure = model.ticketFailureText {
                 Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            if let failure = model.failureText {
+                Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
             ForEach(Array(model.stats.enumerated()), id: \.offset) { _, stat in
                 Text("\(stat.title): \(stat.valueText)")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -507,6 +523,12 @@ final class RingDetailCardController {
                 MainActor.assumeIsolated { self?.hide(immediately: true) }
             }
             .store(in: &cancellables)
+        preferences.$splitAntigravityAccounts
+            .dropFirst()
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.hide(immediately: true) }
+            }
+            .store(in: &cancellables)
     }
 
     /// The card must not outlive the tab panel leaving the screen.
@@ -614,7 +636,8 @@ final class RingDetailCardController {
               presentation.mode == .collapsed,
               store.opacityHUDPercent == nil,
               hostingView.bounds.width > 0 else { return nil }
-        let bars = CollapsedUsageBar.bars(for: snapshot ?? store.snapshot)
+        let bars = CollapsedUsageBar.bars(for: snapshot ?? store.snapshot,
+                                         splitAntigravityAccounts: preferences.splitAntigravityAccounts)
         guard !bars.isEmpty else { return nil }
         return Context(bars: bars,
                        layout: MultiCollapsedUsageView.layout(barZoom: preferences.barZoom,

@@ -416,6 +416,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             accounts.target = self
             accounts.state = preferences.showAccountNames ? .on : .off
             sub.addItem(accounts)
+            let splitAntigravity = NSMenuItem(title: "Antigravityをアカウント別に表示",
+                                              action: #selector(toggleAntigravityAccounts), keyEquivalent: "")
+            splitAntigravity.target = self
+            splitAntigravity.state = preferences.splitAntigravityAccounts ? .on : .off
+            sub.addItem(splitAntigravity)
             view.submenu = sub
             menu.addItem(view)
         }
@@ -439,6 +444,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func toggleAccountNames() {
         guard let preferences = persona.panelPreferences else { return }
         preferences.showAccountNames.toggle()
+    }
+    @objc private func toggleAntigravityAccounts() {
+        persona.panelPreferences?.splitAntigravityAccounts.toggle()
     }
     @objc private func selectAppearance(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,

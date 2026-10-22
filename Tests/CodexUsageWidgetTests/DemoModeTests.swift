@@ -77,7 +77,7 @@ final class DemoModeTests: XCTestCase {
             let cardBar = UsageRingsDemoFixture.detailCardBar(for: bar)
             XCTAssertEqual(cardBar.title, bar.title)
             XCTAssertEqual(cardBar.windows.map { RingCardLabel.label(for: $0.title) },
-                           ["5時間枠", "週の枠"])
+                           ["5時間枠", "週の枠", "5時間枠", "週の枠"])
             let model = try XCTUnwrap(RingDetailCardModel.make(
                 bar: cardBar, now: now, sourceTimeZone: RingResetFormat.tokyo))
             XCTAssertTrue(model.title.hasPrefix(bar.title))
@@ -106,6 +106,7 @@ final class DemoModeTests: XCTestCase {
         settings.orientation = .vertical
         settings.appearance = .dark
         settings.showAccountNames = true
+        settings.splitAntigravityAccounts = true
         PanelOffsetStore(defaults: mode.defaults).save(NSSize(width: 36, height: -22))
         TabOriginStore(defaults: mode.defaults).save(NSPoint(x: 1430, y: 420))
         let opacity = SurfaceOpacityPreferences(defaults: mode.defaults)
@@ -124,6 +125,8 @@ final class DemoModeTests: XCTestCase {
         XCTAssertNil(production.object(forKey: PanelPreferences.orientationKey))
         XCTAssertNil(production.object(forKey: PanelPreferences.appearanceKey))
         XCTAssertNil(production.object(forKey: PanelPreferences.showAccountNamesKey))
+        XCTAssertNil(production.object(forKey: PanelPreferences.splitAntigravityAccountsKey))
+        XCTAssertTrue(PanelPreferences(defaults: mode.defaults).splitAntigravityAccounts)
     }
 
     @MainActor

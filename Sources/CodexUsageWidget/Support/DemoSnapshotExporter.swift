@@ -125,6 +125,34 @@ enum DemoSnapshotExporter {
             outputs.append((filename, try renderImagePNG(card, appearance: .dark)))
         }
 
+        preferences.splitAntigravityAccounts = true
+        let splitPanel = MultiPanelContent(snapshot: snapshot, preferences: preferences)
+            .background(Color(white: 0.10))
+            .clipShape(panelBackground)
+            .environment(\.colorScheme, .dark)
+        outputs.append(("panel-antigravity-split.png", try renderHostedPNG(splitPanel, appearance: .dark)))
+        let settings = PanelSettingsView(preferences: preferences)
+            .defaultAppStorage(exportDefaults)
+            .background(Color(white: 0.10))
+        outputs.append(("settings-antigravity-split.png", try renderHostedPNG(settings, appearance: .dark)))
+        for orientation in PanelOrientation.allCases {
+            let size = MultiCollapsedUsageView.size(for: snapshot, barZoom: 2.5, menuBarHeight: 45,
+                                                     orientation: orientation, splitAntigravityAccounts: true)
+            let rings = MultiCollapsedUsageView(snapshot: snapshot, barZoom: 2.5, menuBarHeight: 45,
+                                                orientation: orientation, splitAntigravityAccounts: true).padding(16)
+            outputs.append(("rings-\(orientation.rawValue)-antigravity-split.png",
+                            try renderImagePNG(rings, size: CGSize(width: size.width + 32, height: size.height + 32),
+                                               appearance: .dark)))
+        }
+        for bar in CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil, splitAntigravityAccounts: true)
+            where bar.id == "antigravity-0-Gemini 4 Argon" || bar.id == "antigravity-1-Gemini 4 Argon" {
+            guard let model = RingDetailCardModel.make(bar: bar, now: now) else {
+                throw DemoLaunchError.unableToRender(bar.id)
+            }
+            let card = RingDetailCardView(model: model).padding(14).background(Color(white: 0.12))
+            outputs.append(("hover-\(bar.id).png", try renderImagePNG(card, appearance: .dark)))
+        }
+
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for (filename, _) in outputs {
             let url = directory.appendingPathComponent(filename)

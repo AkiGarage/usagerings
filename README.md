@@ -33,6 +33,8 @@ For Claude, Antigravity, and Grok, UsageRings expects an existing CLIProxyAPI se
 
 Optional GLM reset-ticket details use the default CodexBar configuration's global-region Z.ai API key. Custom config/API-host overrides and multiple token accounts are not supported by that detail reader.
 
+Antigravity keeps accounts together within each model group by default. To split them, enable **Antigravityをアカウント別に表示** in the panel's **gear (Settings)** or the tab's **表示** menu. The panel, rings, and hover details update immediately; a single account keeps its existing display.
+
 ## Build and install
 
 From the downloaded or cloned source directory:

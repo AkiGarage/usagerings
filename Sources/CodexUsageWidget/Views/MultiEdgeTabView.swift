@@ -55,6 +55,9 @@ struct MultiEdgeTabView: View {
         .onChange(of: preferences.orientation, initial: true) {
             updateCollapsedSize()
         }
+        .onChange(of: preferences.splitAntigravityAccounts) {
+            updateCollapsedSize()
+        }
         .onChange(of: presentation.menuBarHeight, initial: true) {
             updateCollapsedSize()
         }
@@ -78,6 +81,7 @@ struct MultiEdgeTabView: View {
                                 barZoom: preferences.barZoom,
                                 menuBarHeight: presentation.menuBarHeight,
                                 orientation: preferences.orientation,
+                                splitAntigravityAccounts: preferences.splitAntigravityAccounts,
                                 highlightedBarID: ringHighlight.barID)
     }
 
@@ -140,7 +144,8 @@ struct MultiEdgeTabView: View {
         presentation.collapsedSize = MultiCollapsedUsageView.size(for: store.snapshot,
                                                                   barZoom: preferences.barZoom,
                                                                   menuBarHeight: presentation.menuBarHeight,
-                                                                  orientation: preferences.orientation)
+                                                                  orientation: preferences.orientation,
+                                                                  splitAntigravityAccounts: preferences.splitAntigravityAccounts)
     }
 }
 

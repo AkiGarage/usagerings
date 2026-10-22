@@ -199,7 +199,7 @@ actor CLIProxyClient {
                         section.failureText = "Some accounts unavailable"
                         accountState.failureText = reason
                     }
-                    if provider == .grok {
+                    if provider == .grok || provider == .antigravity {
                         section.accounts.append(accountState)
                         for index in statsStart..<section.stats.count {
                             section.stats[index].accountIndex = accountIndex

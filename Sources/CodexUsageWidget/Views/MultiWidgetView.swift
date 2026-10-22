@@ -69,7 +69,8 @@ struct MultiPanelContent: View {
                     controls
                 }
                 .padding(.bottom, 2)
-                ForEach(ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames)) { row in
+                ForEach(ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames,
+                                             splitAntigravityAccounts: preferences.splitAntigravityAccounts)) { row in
                     ServiceRowView(row: row)
                 }
                 if let errorMessage {
@@ -118,7 +119,7 @@ struct MultiPanelContent: View {
             .popover(isPresented: $showsSettings) {
                 // Bind to the same suite as the panel: demo mode never reads or
                 // writes the production SSH host.
-                ClaudeSSHSettingsView()
+                PanelSettingsView(preferences: preferences)
                     .defaultAppStorage(preferences.defaults)
             }
         }
@@ -136,13 +137,16 @@ struct MultiPanelContent: View {
     }
 }
 
-struct ClaudeSSHSettingsView: View {
+struct PanelSettingsView: View {
+    @ObservedObject var preferences: PanelPreferences
     @AppStorage(ClaudeSSHSettings.enabledKey) private var enabled = false
     @AppStorage(ClaudeSSHSettings.hostKey) private var host = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings").font(.headline)
+            Toggle("Antigravityをアカウント別に表示", isOn: $preferences.splitAntigravityAccounts)
+            Divider()
             Toggle("Read remote Claude B limits over SSH", isOn: $enabled)
             TextField("SSH host or user@host", text: $host)
                 .textFieldStyle(.roundedBorder)
@@ -153,7 +157,7 @@ struct ClaudeSSHSettingsView: View {
                 Text("Enter a hostname or user@hostname without spaces, ports, or SSH options.")
                     .font(.caption).foregroundStyle(.orange)
             }
-            Text("Changes apply on the next refresh.")
+            Text("SSH changes apply on the next refresh.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)

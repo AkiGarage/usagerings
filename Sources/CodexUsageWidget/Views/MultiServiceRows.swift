@@ -80,8 +80,11 @@ struct ServiceRowModel: Identifiable {
         }
     }
 
-    static func rows(for snapshot: MultiUsageSnapshot, showAccounts: Bool = false) -> [Self] {
-        snapshot.sections.flatMap { rows(for: $0, showAccounts: showAccounts) }
+    static func rows(for snapshot: MultiUsageSnapshot, showAccounts: Bool = false,
+                     splitAntigravityAccounts: Bool = false) -> [Self] {
+        snapshot.sections.flatMap {
+            rows(for: $0, showAccounts: showAccounts, splitAntigravityAccounts: splitAntigravityAccounts)
+        }
     }
 
     /// "ali***@e*** · 5h" -> "ali***@e***" (masked labels only carry "***").
@@ -91,14 +94,24 @@ struct ServiceRowModel: Identifiable {
         return parts[0]
     }
 
-    static func rows(for section: ProviderSection, showAccounts: Bool = false) -> [Self] {
+    static func rows(for section: ProviderSection, showAccounts: Bool = false,
+                     splitAntigravityAccounts: Bool = false) -> [Self] {
         let provider = section.provider
-        if (provider == .codex || provider == .grok), section.accountIndices.count > 1 {
+        let splitAccounts = provider == .codex || provider == .grok
+            || (provider == .antigravity && splitAntigravityAccounts)
+        if splitAccounts, section.accountIndices.count > 1 {
             return section.accountIndices.flatMap { index in
                 rows(for: section.forAccount(index), showAccounts: showAccounts).map { row in
                     var row = row
-                    row.id = "\(provider.rawValue)-\(index)"
-                    row.name = "\(provider.displayName) \(ProviderSection.accountSuffix(index))"
+                    if provider == .antigravity {
+                        let group = String(row.id.dropFirst("antigravity-".count))
+                        row.id = "antigravity-\(index)-\(group)"
+                        let name = group == "main" ? provider.displayName : row.name
+                        row.name = "\(name) \(ProviderSection.accountSuffix(index))"
+                    } else {
+                        row.id = "\(provider.rawValue)-\(index)"
+                        row.name = "\(provider.displayName) \(ProviderSection.accountSuffix(index))"
+                    }
                     return row
                 }
             }
@@ -108,7 +121,7 @@ struct ServiceRowModel: Identifiable {
             switch provider {
             case .claude: return "\(limit.accountIndex ?? 0)"
             case .antigravity:
-                return groupName(limit.title)
+                return antigravityGroupName(limit.title)
             default: return "main"
             }
         }
@@ -190,6 +203,18 @@ struct ServiceRowModel: Identifiable {
         if name.caseInsensitiveCompare("Claude and GPT models") == .orderedSame { return "Claude/GPT" }
         if name.localizedCaseInsensitiveContains("claude") && name.localizedCaseInsensitiveContains("gpt") { return "Claude/GPT" }
         return name
+    }
+
+    static let antigravityGroupNames = ["Gemini 4 Argon", "Gemini Models", "Claude and GPT models"]
+
+    /// Shared by panel rows and rings so aliases resolve to the same account/group.
+    static func antigravityGroupName(_ title: String) -> String {
+        let name = title.components(separatedBy: " · ")[0]
+        if let exact = antigravityGroupNames.first(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+            return exact
+        }
+        let short = antigravityName(groupName(title))
+        return antigravityGroupNames.first { antigravityName($0) == short } ?? short
     }
 }
 

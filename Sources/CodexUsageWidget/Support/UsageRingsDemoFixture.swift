@@ -100,12 +100,18 @@ enum UsageRingsDemoFixture {
                                     ProviderStat(title: "Today", valueText: "$0.12 · 12,000 tokens")],
                             failureText: nil),
             ProviderSection(provider: .antigravity,
-                            windows: [limit("Gemini 4 Argon · 5h", 87, resetIn: 4),
-                                      limit("Gemini 4 Argon · Weekly", 73, resetIn: 102),
-                                      limit("Gemini Models · 5h", 18, resetIn: 3),
-                                      limit("Gemini Models · Weekly", 52, resetIn: 98),
-                                      limit("Claude and GPT models · 5h", 38, resetIn: 2),
-                                      limit("Claude and GPT models · Weekly", 27, resetIn: 73)],
+                            windows: [accountLimit("Gemini 4 Argon · 5h", 87, resetIn: 4, account: 0),
+                                      accountLimit("Gemini 4 Argon · Weekly", 73, resetIn: 102, account: 0),
+                                      accountLimit("Gemini Models · 5h", 18, resetIn: 3, account: 0),
+                                      accountLimit("Gemini Models · Weekly", 52, resetIn: 98, account: 0),
+                                      accountLimit("Claude and GPT models · 5h", 38, resetIn: 2, account: 0),
+                                      accountLimit("Claude and GPT models · Weekly", 27, resetIn: 73, account: 0),
+                                      accountLimit("Gemini 4 Argon · 5h", 64, resetIn: 3.5, account: 1),
+                                      accountLimit("Gemini 4 Argon · Weekly", 44, resetIn: 118, account: 1),
+                                      accountLimit("Gemini Models · 5h", 69, resetIn: 1.5, account: 1),
+                                      accountLimit("Gemini Models · Weekly", 81, resetIn: 110, account: 1),
+                                      accountLimit("Claude and GPT models · 5h", 57, resetIn: 2.5, account: 1),
+                                      accountLimit("Claude and GPT models · Weekly", 62, resetIn: 132, account: 1)],
                             stats: [], failureText: nil)
         ]
 
@@ -138,6 +144,7 @@ enum UsageRingsDemoFixture {
                                  codexExtras: bar.codexExtras,
                                  zaiResetTickets: bar.zaiResetTickets,
                                  block: bar.block,
-                                 blockedSymbolName: bar.blockedSymbolName)
+                                 blockedSymbolName: bar.blockedSymbolName,
+                                 stats: bar.stats, failureText: bar.failureText)
     }
 }

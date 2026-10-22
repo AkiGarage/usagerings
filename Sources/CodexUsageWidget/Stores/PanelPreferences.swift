@@ -68,6 +68,10 @@ final class PanelPreferences: ObservableObject {
     @Published var showAccountNames: Bool {
         didSet { defaults.set(showAccountNames, forKey: Self.showAccountNamesKey) }
     }
+    static let splitAntigravityAccountsKey = "multiSplitAntigravityAccounts"
+    @Published var splitAntigravityAccounts: Bool {
+        didSet { defaults.set(splitAntigravityAccounts, forKey: Self.splitAntigravityAccountsKey) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -78,6 +82,7 @@ final class PanelPreferences: ObservableObject {
         orientation = PanelOrientation(rawValue: defaults.string(forKey: Self.orientationKey) ?? "") ?? .horizontal
         appearance = PanelAppearance(rawValue: defaults.string(forKey: Self.appearanceKey) ?? "") ?? .system
         showAccountNames = defaults.bool(forKey: Self.showAccountNamesKey)
+        splitAntigravityAccounts = defaults.bool(forKey: Self.splitAntigravityAccountsKey)
     }
 
     var percent: Int { Int((zoom * 100).rounded()) }
