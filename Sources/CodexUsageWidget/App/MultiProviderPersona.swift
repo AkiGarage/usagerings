@@ -15,7 +15,11 @@ final class MultiProviderPersona: AppPersona {
         if demoMode.isEnabled {
             store = MultiUsageStore(demoSnapshot: UsageRingsDemoFixture.snapshot())
         } else {
-            store = MultiUsageStore(preferences: preferences)
+            let live = MultiUsageStore(preferences: preferences)
+            store = live
+            preferences.onProviderVisibilityChange = { [weak live] turnedOn in
+                live?.providerVisibilityChanged(turnedOn: turnedOn)
+            }
         }
     }
 

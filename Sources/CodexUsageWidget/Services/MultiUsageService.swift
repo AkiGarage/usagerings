@@ -26,19 +26,20 @@ struct MultiUsageService: Sendable {
     /// are unaffected.
     func fetchAll(
         now: Date = Date(),
+        disabled: Set<ProviderID> = [],
         timeZone: TimeZone = .current,
         calendar: Calendar = .current
     ) async -> MultiUsageSnapshot {
-        async let proxySections = cliProxyClient.fetchSections(now: now)
-        async let codex = fetchProvider(.codex, now: now, timeZone: timeZone, calendar: calendar)
-        async let zai = fetchProvider(.zai, now: now, timeZone: timeZone, calendar: calendar)
-        async let minimax = fetchProvider(.minimax, now: now, timeZone: timeZone, calendar: calendar)
-        async let kimi = fetchProvider(.kimi, now: now, timeZone: timeZone, calendar: calendar)
-        async let deepseek = fetchProvider(.deepseek, now: now, timeZone: timeZone, calendar: calendar)
-        async let tickets = zaiTicketClient?.fetch()
-        async let blocks = claudeRateLimitMonitor?.blocks(now: now)
+        async let proxySections = cliProxyClient.fetchSections(now: now, skipping: disabled)
+        async let codex = fetchProviderUnlessDisabled(.codex, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
+        async let zai = fetchProviderUnlessDisabled(.zai, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
+        async let minimax = fetchProviderUnlessDisabled(.minimax, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
+        async let kimi = fetchProviderUnlessDisabled(.kimi, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
+        async let deepseek = fetchProviderUnlessDisabled(.deepseek, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
+        async let tickets = disabled.contains(.zai) ? nil : zaiTicketClient?.fetch()
+        async let blocks = disabled.contains(.claude) ? nil : claudeRateLimitMonitor?.blocks(now: now)
         let (codexResult, zaiResult, proxy, ticketResult, blockResult) = await (codex, zai, proxySections, tickets, blocks)
-        let sshFailure = await claudeRateLimitMonitor?.remoteFailureText()
+        let sshFailure = disabled.contains(.claude) ? nil : await claudeRateLimitMonitor?.remoteFailureText()
         let proxyWithBlocks = proxy.map { section in
             var section = section
             if section.provider == .claude {
@@ -99,6 +100,18 @@ struct MultiUsageService: Sendable {
                 "CodexBarCLI timed out"
             }
         }
+    }
+
+    static let hiddenText = "非表示（取得していません）"
+
+    private func fetchProviderUnlessDisabled(_ provider: ProviderID, disabled: Set<ProviderID>, now: Date,
+                                             timeZone: TimeZone, calendar: Calendar) async -> ProviderResult {
+        guard !disabled.contains(provider) else {
+            return ProviderResult(provider: provider,
+                                  section: ProviderSection(provider: provider, windows: [], stats: [], failureText: Self.hiddenText),
+                                  codexSnapshot: nil)
+        }
+        return await fetchProvider(provider, now: now, timeZone: timeZone, calendar: calendar)
     }
 
     private func fetchProvider(

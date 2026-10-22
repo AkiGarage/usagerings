@@ -104,10 +104,10 @@ actor CLIProxyClient {
         self.clock = clock
     }
 
-    func fetchSections(now: Date = Date()) async -> [ProviderSection] {
+    func fetchSections(now: Date = Date(), skipping: Set<ProviderID> = []) async -> [ProviderSection] {
         // Actor reentrancy must not allow overlapping refreshes to race the 401 latch.
         if let refresh { return await refresh.value }
-        let task = Task { await self.fetchSerially(now: now) }
+        let task = Task { await self.fetchSerially(now: now, skipping: skipping) }
         refresh = task
         let sections = await task.value
         refresh = nil
@@ -130,8 +130,9 @@ actor CLIProxyClient {
         }
     }
 
-    private func fetchSerially(now: Date) async -> [ProviderSection] {
-        let providers: [ProviderID] = [.claude, .antigravity, .grok]
+    private func fetchSerially(now: Date, skipping: Set<ProviderID> = []) async -> [ProviderSection] {
+        let providers: [ProviderID] = [.claude, .antigravity, .grok].filter { !skipping.contains($0) }
+        guard !providers.isEmpty else { return [] }
         func failed(_ text: String) -> [ProviderSection] {
             providers.map { ProviderSection(provider: $0, windows: [], stats: [], failureText: text) }
         }
@@ -221,6 +222,7 @@ actor CLIProxyClient {
                     var window = UsageLimit(title: $0.title.replacingOccurrences(of: key, with: "[redacted]"),
                                             leftPercent: $0.leftPercent, resetText: $0.resetText)
                     window.accountIndex = $0.accountIndex
+                    window.resetAt = $0.resetAt
                     return window
                 }
                 safe.stats = section.stats.map {

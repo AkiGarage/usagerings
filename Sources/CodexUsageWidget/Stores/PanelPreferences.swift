@@ -77,6 +77,10 @@ final class PanelPreferences: ObservableObject {
     static let accountPreferencesArchiveKey = "multiAccountPreferencesArchiveV1"
     @Published private(set) var accountPreferences: AccountPreferences
     private let canSaveAccountPreferences: Bool
+    static let providerVisibilityKey = "multiProviderVisibilityV1"
+    /// Explicit per-provider choice. Missing = automatic (shown once the provider reports data).
+    @Published private(set) var providerVisibility: [String: Bool]
+    var onProviderVisibilityChange: ((_ turnedOn: Bool) -> Void)?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -89,6 +93,8 @@ final class PanelPreferences: ObservableObject {
         appearance = PanelAppearance(rawValue: defaults.string(forKey: Self.appearanceKey) ?? "") ?? .system
         showAccountNames = defaults.bool(forKey: Self.showAccountNamesKey)
         splitAntigravityAccounts = defaults.bool(forKey: Self.splitAntigravityAccountsKey)
+        providerVisibility = (defaults.dictionary(forKey: Self.providerVisibilityKey) as? [String: Bool] ?? [:])
+            .filter { ProviderID(rawValue: $0.key) != nil }
         if let data = defaults.data(forKey: Self.accountPreferencesKey) {
             do {
                 accountPreferences = try JSONDecoder().decode(AccountPreferences.self, from: data)
@@ -119,6 +125,36 @@ final class PanelPreferences: ObservableObject {
     func setPrimaryAccount(_ id: AccountID?, for provider: ProviderID) {
         accountPreferences.setPrimary(id, for: provider)
         saveAccounts()
+    }
+
+    func isProviderVisible(_ provider: ProviderID) -> Bool { providerVisibility[provider.rawValue] == true }
+
+    /// Hidden providers are not fetched at all.
+    var disabledProviders: Set<ProviderID> {
+        Set(ProviderID.allCases.filter { providerVisibility[$0.rawValue] == false })
+    }
+
+    func setProviderVisible(_ visible: Bool, for provider: ProviderID) {
+        guard providerVisibility[provider.rawValue] != visible else { return }
+        providerVisibility[provider.rawValue] = visible
+        defaults.set(providerVisibility, forKey: Self.providerVisibilityKey)
+        onProviderVisibilityChange?(visible)
+    }
+
+    /// Automatic default: a provider with no explicit choice is turned on (and remembered)
+    /// the first time it reports configured usage data. Never turns anything off.
+    func reconcileProviders(in snapshot: MultiUsageSnapshot) {
+        var changed = false
+        for section in snapshot.sections where providerVisibility[section.provider.rawValue] == nil
+            && Self.hasConfiguredData(section) {
+            providerVisibility[section.provider.rawValue] = true
+            changed = true
+        }
+        if changed { defaults.set(providerVisibility, forKey: Self.providerVisibilityKey) }
+    }
+
+    static func hasConfiguredData(_ section: ProviderSection) -> Bool {
+        !section.windows.isEmpty || section.accounts.contains { $0.id != nil && $0.failureText == nil }
     }
 
     func reconcileAccounts(in snapshot: MultiUsageSnapshot, now: Date = Date()) {

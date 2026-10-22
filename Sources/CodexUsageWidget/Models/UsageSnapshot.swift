@@ -28,6 +28,8 @@ struct UsageLimit: Equatable, Sendable {
     let projectionText: String?
     let markerPercent: Double?
     var accountIndex: Int? = nil
+    /// Machine-readable reset time when the source reports one.
+    var resetAt: Date? = nil
 
     init(
         title: String,

@@ -63,8 +63,10 @@ enum CLIProxyParser {
         return [("five_hour", "5h"), ("seven_day", "Weekly"), ("seven_day_opus", "Opus weekly"),
                 ("seven_day_sonnet", "Sonnet weekly"), ("seven_day_oauth_apps", "OAuth apps weekly")].compactMap { key, title in
             guard let window = object[key] as? [String: Any], let used = number(window["utilization"]), (0...100).contains(used) else { return nil }
-            return UsageLimit(title: "\(label) · \(title)", leftPercent: 100 - used,
-                              resetText: reset(window["resets_at"] as? String, now: now))
+            var limit = UsageLimit(title: "\(label) · \(title)", leftPercent: 100 - used,
+                                   resetText: reset(window["resets_at"] as? String, now: now))
+            limit.resetAt = date(window["resets_at"] as? String)
+            return limit
         }
     }
 
@@ -139,6 +141,15 @@ enum CLIProxyParser {
     private static func number(_ value: Any?) -> Double? {
         guard let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), value.doubleValue.isFinite else { return nil }
         return value.doubleValue
+    }
+
+    static func date(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = formatter.date(from: value) { return d }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
     }
 
     private static func reset(_ value: String?, now: Date) -> String {

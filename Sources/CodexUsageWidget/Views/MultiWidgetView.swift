@@ -8,7 +8,7 @@ struct MultiWidgetView: View {
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
             MultiPanelContent(snapshot: store.snapshot, errorMessage: store.errorMessage,
-                              preferences: preferences)
+                              preferences: preferences, claudeChoice: store.claudeChoice)
                 .background(GeometryReader { proxy in
                     Color.clear.onChange(of: proxy.size, initial: true) { _, size in
                         onContentSizeChange(size)
@@ -54,6 +54,7 @@ struct MultiPanelContent: View {
     let snapshot: MultiUsageSnapshot
     var errorMessage: String?
     @ObservedObject var preferences: PanelPreferences
+    var claudeChoice: ClaudeAccountPolicy.Decision? = nil
     static let baseWidth: CGFloat = 480
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsSettings = false
@@ -73,6 +74,9 @@ struct MultiPanelContent: View {
                                              splitAntigravityAccounts: preferences.splitAntigravityAccounts,
                                              accountPreferences: preferences.accountPreferences)) { row in
                     ServiceRowView(row: row)
+                }
+                if let claudeChoice, let selected = claudeChoice.selected {
+                    ClaudeChoiceLine(decision: claudeChoice, selected: selected)
                 }
                 if let errorMessage {
                     Text(errorMessage).font(.system(size: 11)).foregroundStyle(.red)
@@ -150,6 +154,8 @@ struct PanelSettingsView: View {
             Text("Settings").font(.headline)
             Toggle("アカウント名を一部伏せて表示", isOn: $preferences.showAccountNames)
             Toggle("Antigravityをアカウント別に表示", isOn: $preferences.splitAntigravityAccounts)
+            Divider()
+            ProviderVisibilitySettingsView(preferences: preferences)
             Divider()
             AccountSettingsView(snapshot: snapshot, preferences: preferences)
             Divider()
@@ -403,6 +409,45 @@ private struct RingGrid: View {
                         .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
                 }
                 .accessibilityElement(children: .combine)
+            }
+        }
+    }
+}
+
+struct ClaudeChoiceLine: View {
+    let decision: ClaudeAccountPolicy.Decision
+    let selected: String
+
+    var title: String {
+        let name = selected.count == 1 && selected == selected.lowercased() ? "claude-\(selected)" : "Claude \(selected)"
+        return decision.state == .allLimited ? "Claudeの切り替え：\(name)を待機" : "Claudeの切り替え：いまは\(name)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            Text(decision.reason).font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct ProviderVisibilitySettingsView: View {
+    @ObservedObject var preferences: PanelPreferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("表示するサービス").font(.headline)
+            Text("契約しているもの・見たいものだけオンにします。オフにしたサービスは取得もしません。最初は、使用量が取れたサービスだけ自動でオンになります。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(MultiUsageSnapshot.displayOrder) { provider in
+                Toggle(provider.displayName, isOn: Binding(
+                    get: { preferences.isProviderVisible(provider) },
+                    set: { preferences.setProviderVisible($0, for: provider) }
+                ))
             }
         }
     }

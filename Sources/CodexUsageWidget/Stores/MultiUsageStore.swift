@@ -6,6 +6,13 @@ final class MultiUsageStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var opacityHUDPercent: Int?
+    /// Current Claude account choice and its plain-Japanese reason (nil when not applicable).
+    @Published private(set) var claudeChoice: ClaudeAccountPolicy.Decision?
+    private var rawSnapshot: MultiUsageSnapshot?
+    private var lastClaudeDecision: ClaudeAccountPolicy.Decision?
+    /// Injected for tests; nil disables publishing the decision file.
+    var claudeChoiceURL: URL? = nil
+    var claudeProfileMasks: () -> [String: String] = { ClaudeAccountChoice.localProfileMasks() }
 
     static let refreshInterval: TimeInterval = 60
 
@@ -23,6 +30,7 @@ final class MultiUsageStore: ObservableObject {
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
          preferences: PanelPreferences? = nil) {
         self.preferences = preferences
+        if preferences != nil, NSClassFromString("XCTestCase") == nil { claudeChoiceURL = ClaudeAccountChoice.fileURL() }
         do {
             let publisher = try UsageSnapshotPublisher(urls: snapshotURLs ?? MultiAppPaths.defaultSnapshotURLs())
             dataSource = .live(service: service, publisher: publisher)
@@ -77,7 +85,7 @@ final class MultiUsageStore: ObservableObject {
         case let .live(service, _):
             isRefreshing = true
             Task {
-                let snapshot = await service.fetchAll()
+                let snapshot = await service.fetchAll(disabled: preferences?.disabledProviders ?? [])
                 apply(snapshot)
             }
         }
@@ -99,7 +107,10 @@ final class MultiUsageStore: ObservableObject {
     private func apply(_ snapshot: MultiUsageSnapshot) {
         isRefreshing = false
         preferences?.reconcileAccounts(in: snapshot)
-        self.snapshot = snapshot
+        preferences?.reconcileProviders(in: snapshot)
+        rawSnapshot = snapshot
+        updateClaudeChoice(from: snapshot, now: Date())
+        self.snapshot = visible(snapshot)
         expiryTask?.cancel()
         expiryTask = nil
         let now = Date()
@@ -124,6 +135,34 @@ final class MultiUsageStore: ObservableObject {
         if let codexSnapshot = snapshot.codexSnapshot {
             publish(codexSnapshot)
         }
+    }
+
+    /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.
+    func providerVisibilityChanged(turnedOn: Bool) {
+        if let rawSnapshot { snapshot = visible(rawSnapshot) }
+        if turnedOn { refresh() }
+    }
+
+    func visible(_ snapshot: MultiUsageSnapshot) -> MultiUsageSnapshot {
+        guard let preferences else { return snapshot }
+        return MultiUsageSnapshot(sections: snapshot.sections.filter { preferences.isProviderVisible($0.provider) },
+                                  codexSnapshot: snapshot.codexSnapshot, updatedAt: snapshot.updatedAt)
+    }
+
+    func updateClaudeChoice(from snapshot: MultiUsageSnapshot, now: Date) {
+        guard let section = snapshot.sections.first(where: { $0.provider == .claude }),
+              section.accountIndices.count >= 2, preferences?.isProviderVisible(.claude) ?? true else {
+            claudeChoice = nil
+            return
+        }
+        let map = ClaudeAccountChoice.profileMap(section: section, masks: claudeProfileMasks())
+        let accounts = ClaudeAccountChoice.accounts(section: section, map: map, now: now)
+        let mapped = accounts.allSatisfy { ClaudeAccountChoice.profileKeys.contains($0.key) }
+        let decision = ClaudeAccountPolicy.decide(accounts, previous: lastClaudeDecision, now: now,
+                                                  name: { mapped ? "claude-\($0)" : "Claude \($0)" })
+        lastClaudeDecision = decision
+        claudeChoice = decision
+        if mapped, let url = claudeChoiceURL { ClaudeAccountChoice.publish(decision, now: now, url: url) }
     }
 
     private func publish(_ snapshot: UsageSnapshot) {
