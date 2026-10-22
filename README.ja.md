@@ -66,7 +66,7 @@ USAGERINGS_SIGN_IDENTITY='Your signing identity' ./script/build_and_run.sh usage
 
 最新の使用量を取得する通信は必要です。CodexBarCLIは各プロバイダーへ接続し、認証付きのローカルプロキシは各サービスへの要求を仲介します。GLMのリセット券はZ.aiへ直接問い合わせます。リモートClaude監視を有効にすると、指定したホストへのSSH通信も発生します。「ローカルのみ」は保存・処理の説明であり、オフライン動作という意味ではありません。
 
-ローカルClaude監視は `~/.claude/projects`、`~/.claude-a/projects`、`~/.claude-b/projects` の最近のログ末尾を、ファイル数・サイズを制限して読みます。SSHでは制限イベントの文面・時刻・モデル識別子に絞った情報を受け取ります。Codexの表示用スナップショットは `~/Library/Application Support/CodexUsageWidget-Multi/` と、macOSのユーザーごとの一時ディレクトリ（`$TMPDIR`）内の `UsageRings` フォルダ（権限0700、ファイルは0600）に保存し、プロバイダー・使用枠の診断JSONも同じフォルダに保存します。共有の `/private/tmp` には書き込みません。SSHでのリモートClaude監視に失敗した場合は、Claudeの欄に接続先を含まない短い理由（「Remote Claude logs」）を表示します。これらは個人の利用情報として扱い、ログや画像を共有する前に内容を確認してください。
+ローカルClaude監視は `~/.claude/projects`、`~/.claude-a/projects`、`~/.claude-b/projects` の最近のログ末尾を、ファイル数・サイズを制限して読みます。SSHでは制限イベントの文面・時刻・モデル識別子に絞った情報を受け取ります。Codexの表示用スナップショットは `~/Library/Application Support/CodexUsageWidget-Multi/` と、macOSのユーザーごとの一時ディレクトリ（`$TMPDIR`）内の `UsageRings` フォルダ（権限0700、ファイルは0600）に保存し、プロバイダー・使用枠の診断JSONも同じフォルダに保存します。このバージョンは共有の `/private/tmp` に書き込みません（古いビルドが残したファイルは自動では消しません）。SSHでのリモートClaude監視に失敗した場合は、Claudeの欄に接続先を含まない短い理由（「Remote Claude logs」）を表示します。これらは個人の利用情報として扱い、ログや画像を共有する前に内容を確認してください。
 
 ## アプリ本体は小さめ
 

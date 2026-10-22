@@ -16,6 +16,9 @@ enum DemoSnapshotExporter {
         guard let exportDefaults = UserDefaults(suiteName: exportSuite) else {
             throw DemoLaunchError.preferencesUnavailable
         }
+        defer {
+            exportDefaults.removePersistentDomain(forName: exportSuite)
+        }
         let preferences = PanelPreferences(defaults: exportDefaults)
         preferences.setZoom(1)
         preferences.setBarZoom(2.5)

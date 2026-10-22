@@ -116,7 +116,10 @@ struct MultiPanelContent: View {
             .help("Settings")
             .accessibilityLabel("Settings")
             .popover(isPresented: $showsSettings) {
+                // Bind to the same suite as the panel: demo mode never reads or
+                // writes the production SSH host.
                 ClaudeSSHSettingsView()
+                    .defaultAppStorage(preferences.defaults)
             }
         }
         .buttonStyle(.borderless)

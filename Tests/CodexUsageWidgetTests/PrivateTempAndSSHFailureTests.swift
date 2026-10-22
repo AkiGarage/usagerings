@@ -40,11 +40,24 @@ final class PrivateTempAndSSHFailureTests: XCTestCase {
 
     func testSSHFailureIsReportedAndClearedOnSuccess() async throws {
         let settings = try XCTUnwrap(ClaudeSSHSettings(enabled: true, host: "example.invalid"))
-        let outcomes = Outcomes([ClaudeRemoteFetch(lines: [], failure: "SSH timed out")])
-        let ssh = ClaudeRateLimitSSH(settings: { settings }, fetchResult: { _ in await outcomes.next() })
+        let outcomes = Outcomes([ClaudeRemoteFetch(lines: [], failure: "SSH timed out"),
+                                 ClaudeRemoteFetch(lines: ["ok"], failure: nil)])
+        let enabled = SettingsFlag()
+        let ssh = ClaudeRateLimitSSH(settings: { enabled.value ? settings : nil },
+                                     fetchResult: { _ in await outcomes.next() })
         _ = await ssh.lines()
         let failure = await ssh.failureText()
         XCTAssertEqual(failure, "SSH timed out")
+        // Disabling clears the reason; re-enabling fetches again and success leaves no reason.
+        enabled.value = false
+        _ = await ssh.lines()
+        let cleared = await ssh.failureText()
+        XCTAssertNil(cleared)
+        enabled.value = true
+        let lines = await ssh.lines()
+        XCTAssertEqual(lines, ["ok"])
+        let afterSuccess = await ssh.failureText()
+        XCTAssertNil(afterSuccess)
     }
 
     func testMonitorExposesRemoteFailure() async {
@@ -62,4 +75,13 @@ private actor Outcomes {
     private var items: [ClaudeRemoteFetch]
     init(_ items: [ClaudeRemoteFetch]) { self.items = items }
     func next() -> ClaudeRemoteFetch { items.isEmpty ? ClaudeRemoteFetch(lines: [], failure: nil) : items.removeFirst() }
+}
+
+private final class SettingsFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = true
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
 }

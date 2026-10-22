@@ -50,7 +50,7 @@ final class PanelPreferences: ObservableObject {
     // The tab scale is independent of the detail panel zoom. Keep its existing defaults key.
     static let barZoomRange = 0.6...2.5
     static let barZoomGestureStep = 0.05
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
     @Published private(set) var zoom: Double
     @Published private(set) var barZoom: Double
     @Published var orientation: PanelOrientation {
