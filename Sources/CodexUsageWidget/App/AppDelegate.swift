@@ -65,12 +65,14 @@ final class NanoUpdateController {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let persona: any AppPersona
+    private let demoMode: DemoMode
+    private let defaults: UserDefaults
+    private let showDemoShowcase: Bool
     private let tabPresentation = EdgeTabPresentationState()
-    private let panelOffsetStore = PanelOffsetStore()
-    private let opacityPreferences = SurfaceOpacityPreferences()
+    private let panelOffsetStore: PanelOffsetStore
+    private let tabOriginStore: TabOriginStore
+    private let opacityPreferences: SurfaceOpacityPreferences
     private var panelSize: NSSize { persona.panelDefaultSize }
-    private let tabOriginXKey = "tabOriginX"
-    private let tabOriginYKey = "tabOriginY"
     private let debugOpenPanelOnLaunchKey = "debugOpenPanelOnLaunch"
     private var panel: NSPanel?
     private var tabPanel: NSPanel?
@@ -86,9 +88,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var updateController: NanoUpdateController?
 
     @MainActor
-    init(persona: (any AppPersona)? = nil) {
+    init(persona: (any AppPersona)? = nil, demoMode: DemoMode = .production,
+         showDemoShowcase: Bool = false) {
+        let defaults = demoMode.defaults
+        self.demoMode = demoMode
+        self.defaults = defaults
+        self.showDemoShowcase = showDemoShowcase && demoMode.isEnabled
+        panelOffsetStore = PanelOffsetStore(defaults: defaults)
+        tabOriginStore = TabOriginStore(defaults: defaults)
+        opacityPreferences = SurfaceOpacityPreferences(defaults: defaults)
         self.persona = persona ?? makeAppPersona(
-            for: AppVariant.current(bundleIdentifier: Bundle.main.bundleIdentifier)
+            for: AppVariant.current(bundleIdentifier: Bundle.main.bundleIdentifier),
+            demoMode: demoMode
         )
         super.init()
     }
@@ -101,9 +112,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         createPanel()
         createTabPanel()
-        updateController = NanoUpdateController()
+        if !demoMode.isEnabled {
+            updateController = NanoUpdateController()
+        }
         persona.start()
-        showPanelOnLaunchIfRequested()
+        if showDemoShowcase {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.persona.refresh()
+                self.showPanel(context: "demo-showcase")
+            }
+        } else {
+            showPanelOnLaunchIfRequested()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -128,8 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func showPanelOnLaunchIfRequested() {
-        guard UserDefaults.standard.bool(forKey: debugOpenPanelOnLaunchKey) else { return }
-        UserDefaults.standard.removeObject(forKey: debugOpenPanelOnLaunchKey)
+        guard defaults.bool(forKey: debugOpenPanelOnLaunchKey) else { return }
+        defaults.removeObject(forKey: debugOpenPanelOnLaunchKey)
         DispatchQueue.main.async { [weak self] in
             self?.persona.refresh()
             self?.showPanel(context: "debug-open-panel-on-launch")
@@ -659,8 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func saveTabPosition() {
         guard let tabPanel else { return }
         let origin = tabPanel.frame.origin
-        UserDefaults.standard.set(origin.x, forKey: tabOriginXKey)
-        UserDefaults.standard.set(origin.y, forKey: tabOriginYKey)
+        tabOriginStore.save(origin)
     }
 
     private func frameNearTab(for size: NSSize) -> NSRect {
@@ -702,15 +722,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func savedTabOrigin() -> NSPoint? {
-        guard UserDefaults.standard.object(forKey: tabOriginXKey) != nil,
-              UserDefaults.standard.object(forKey: tabOriginYKey) != nil
-        else {
-            return nil
-        }
-        return NSPoint(
-            x: UserDefaults.standard.double(forKey: tabOriginXKey),
-            y: UserDefaults.standard.double(forKey: tabOriginYKey)
-        )
+        tabOriginStore.load()
     }
 
     private func constrainedOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {

@@ -9,20 +9,36 @@ final class MultiUsageStore: ObservableObject {
 
     static let refreshInterval: TimeInterval = 60
 
-    private let service: MultiUsageService
-    private let publisher: UsageSnapshotPublisher?
+    private enum DataSource {
+        case live(service: MultiUsageService, publisher: UsageSnapshotPublisher?)
+        case demo(snapshot: MultiUsageSnapshot)
+    }
+
+    private let dataSource: DataSource
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
 
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil) {
-        self.service = service
         do {
-            publisher = try UsageSnapshotPublisher(urls: snapshotURLs ?? MultiAppPaths.defaultSnapshotURLs())
+            let publisher = try UsageSnapshotPublisher(urls: snapshotURLs ?? MultiAppPaths.defaultSnapshotURLs())
+            dataSource = .live(service: service, publisher: publisher)
         } catch {
-            publisher = nil
+            dataSource = .live(service: service, publisher: nil)
             errorMessage = "Local snapshot publisher unavailable: \(error.localizedDescription)"
         }
+    }
+
+    /// A closed fixture-only path: no provider service or snapshot publisher is
+    /// constructed, so demo refreshes cannot access credentials or publish data.
+    init(demoSnapshot: MultiUsageSnapshot) {
+        self.snapshot = demoSnapshot
+        dataSource = .demo(snapshot: demoSnapshot)
+    }
+
+    var snapshotPublishingIsEnabled: Bool {
+        guard case let .live(_, publisher) = dataSource else { return false }
+        return publisher != nil
     }
 
     func start() {
@@ -48,12 +64,18 @@ final class MultiUsageStore: ObservableObject {
 
     func refresh() {
         guard !isRefreshing else { return }
-        isRefreshing = true
-        let service = service
-
-        Task {
-            let snapshot = await service.fetchAll()
-            apply(snapshot)
+        switch dataSource {
+        case let .demo(demoSnapshot):
+            snapshot = demoSnapshot
+            errorMessage = nil
+            isRefreshing = false
+            return
+        case let .live(service, _):
+            isRefreshing = true
+            Task {
+                let snapshot = await service.fetchAll()
+                apply(snapshot)
+            }
         }
     }
 
@@ -100,7 +122,7 @@ final class MultiUsageStore: ObservableObject {
     }
 
     private func publish(_ snapshot: UsageSnapshot) {
-        guard let publisher else { return }
+        guard case let .live(_, publisher) = dataSource, let publisher else { return }
         do {
             try publisher.publish(snapshot)
             errorMessage = nil

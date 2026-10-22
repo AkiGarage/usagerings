@@ -4,14 +4,19 @@ import SwiftUI
 @MainActor
 final class MultiProviderPersona: AppPersona {
     private let store: MultiUsageStore
-    private let preferences = PanelPreferences()
+    private let preferences: PanelPreferences
     private let ringHover = RingDetailCardController()
     var panelPreferences: PanelPreferences? { preferences }
     var onPanelContentSizeChange: ((CGSize) -> Void)?
     var ringHoverCard: RingDetailCardController? { ringHover }
 
-    init() {
-        store = MultiUsageStore()
+    init(demoMode: DemoMode = .production) {
+        preferences = PanelPreferences(defaults: demoMode.defaults)
+        if demoMode.isEnabled {
+            store = MultiUsageStore(demoSnapshot: UsageRingsDemoFixture.snapshot())
+        } else {
+            store = MultiUsageStore()
+        }
     }
 
     var quitMenuItemTitle: String { "Quit UsageRings" }

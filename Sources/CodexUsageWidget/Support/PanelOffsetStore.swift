@@ -34,3 +34,27 @@ struct PanelOffsetStore {
         defaults.removeObject(forKey: Self.offsetYKey)
     }
 }
+
+struct TabOriginStore {
+    private static let originXKey = "tabOriginX"
+    private static let originYKey = "tabOriginY"
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func load() -> NSPoint? {
+        guard defaults.object(forKey: Self.originXKey) != nil,
+              defaults.object(forKey: Self.originYKey) != nil
+        else { return nil }
+        return NSPoint(x: defaults.double(forKey: Self.originXKey),
+                       y: defaults.double(forKey: Self.originYKey))
+    }
+
+    func save(_ origin: NSPoint) {
+        defaults.set(origin.x, forKey: Self.originXKey)
+        defaults.set(origin.y, forKey: Self.originYKey)
+    }
+}
