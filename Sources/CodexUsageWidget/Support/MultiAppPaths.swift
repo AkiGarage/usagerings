@@ -15,7 +15,7 @@ enum MultiAppPaths {
             applicationSupport
                 .appendingPathComponent("CodexUsageWidget-Multi", isDirectory: true)
                 .appendingPathComponent("latest-usage-snapshot.json"),
-            URL(fileURLWithPath: "/private/tmp/codex-usage-widget-multi/latest-usage-snapshot.json")
+            PrivateTempPaths.unresolvedFile("codex-usage-widget-multi", "latest-usage-snapshot.json")
         ]
     }
 }

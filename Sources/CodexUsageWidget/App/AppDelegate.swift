@@ -991,17 +991,10 @@ enum FrameDiagnostics {
     }
 
     private static func appendToFile(_ message: String) {
-        let url = URL(fileURLWithPath: "/private/tmp/codex-usage-widget-frames.log")
+        guard let url = PrivateTempPaths.file("codex-usage-widget-frames.log") else { return }
         let line = "\(Date()) \(message)\n"
         guard let data = line.data(using: .utf8) else { return }
-        if FileManager.default.fileExists(atPath: url.path),
-           let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: url)
-        }
+        PrivateTempPaths.appendPrivately(data, to: url)
     }
 }
 

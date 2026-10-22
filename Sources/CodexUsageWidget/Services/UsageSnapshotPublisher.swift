@@ -23,11 +23,15 @@ struct UsageSnapshotPublisher {
     func publish(_ snapshot: UsageSnapshot) throws {
         let data = try Self.encodedData(for: snapshot)
         for url in urls {
+            let directory = url.deletingLastPathComponent()
             try fileManager.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
             )
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
             try data.write(to: url, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
     }
 
@@ -51,7 +55,7 @@ struct UsageSnapshotPublisher {
             applicationSupport
                 .appendingPathComponent("CodexUsageWidget", isDirectory: true)
                 .appendingPathComponent("latest-usage-snapshot.json"),
-            URL(fileURLWithPath: "/private/tmp/codex-usage-widget/latest-usage-snapshot.json")
+            PrivateTempPaths.unresolvedFile("codex-usage-widget", "latest-usage-snapshot.json")
         ]
     }
 }

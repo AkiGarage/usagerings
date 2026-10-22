@@ -21,6 +21,8 @@ struct MultiUsageService: Sendable {
         self.claudeRateLimitMonitor = claudeRateLimitMonitor ?? (commandRunner == nil ? .live() : nil)
     }
 
+    static let remoteClaudeStatTitle = "Remote Claude logs"
+
     /// Never throws: a provider that fails anywhere in the chain resolves
     /// to its own section carrying a failure reason, and the other sections
     /// are unaffected.
@@ -35,9 +37,15 @@ struct MultiUsageService: Sendable {
         async let tickets = zaiTicketClient?.fetch()
         async let blocks = claudeRateLimitMonitor?.blocks(now: now)
         let (codexResult, zaiResult, proxy, ticketResult, blockResult) = await (codex, zai, proxySections, tickets, blocks)
+        let sshFailure = await claudeRateLimitMonitor?.remoteFailureText()
         let proxyWithBlocks = proxy.map { section in
             var section = section
-            if section.provider == .claude { section.claudeBlocks = blockResult ?? [:] }
+            if section.provider == .claude {
+                section.claudeBlocks = blockResult ?? [:]
+                if let sshFailure {
+                    section.stats.append(ProviderStat(title: Self.remoteClaudeStatTitle, valueText: sshFailure))
+                }
+            }
             return section
         }
         var zaiSection = zaiResult.section
@@ -58,10 +66,9 @@ struct MultiUsageService: Sendable {
                                    "left": $0.leftPercent, "reset": $0.resetText] }
             + section.stats.map { ["provider": section.provider.rawValue, "stat": $0.title] }
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("codex-usage-widget-panel-windows.json")
-        if let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted]) {
-            try? data.write(to: url, options: .atomic)
-        }
+        guard let url = PrivateTempPaths.file("codex-usage-widget-panel-windows.json"),
+              let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted]) else { return }
+        PrivateTempPaths.writePrivately(data, to: url)
     }
 
     private struct ProviderResult: Sendable {

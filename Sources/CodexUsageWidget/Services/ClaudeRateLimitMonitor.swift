@@ -2,6 +2,18 @@ import Foundation
 
 protocol ClaudeRateLimitRemote: Sendable {
     func lines() async -> [String]
+    /// User-facing reason the most recent remote fetch failed, or nil when it succeeded.
+    func failureText() async -> String?
+}
+
+extension ClaudeRateLimitRemote {
+    func failureText() async -> String? { nil }
+}
+
+/// Outcome of one remote log fetch: lines on success, a short reason on failure.
+struct ClaudeRemoteFetch: Sendable, Equatable {
+    var lines: [String]
+    var failure: String?
 }
 
 struct ClaudeRateLimitMonitor: Sendable {
@@ -25,6 +37,10 @@ struct ClaudeRateLimitMonitor: Sendable {
 
     static func live() -> Self {
         Self(remote: ClaudeRateLimitSSH.shared)
+    }
+
+    func remoteFailureText() async -> String? {
+        await remote?.failureText()
     }
 
     func blocks(now: Date) async -> [Int: ClaudeBlock] {
@@ -105,27 +121,59 @@ private actor ClaudeRateLimitFiles {
 actor ClaudeRateLimitSSH: ClaudeRateLimitRemote {
     static let shared = ClaudeRateLimitSSH()
     private let settings: @Sendable () -> ClaudeSSHSettings?
-    private let fetch: @Sendable (ClaudeSSHSettings) async -> [String]
+    private let fetch: @Sendable (ClaudeSSHSettings) async -> ClaudeRemoteFetch
     private var cachedLines: [String] = []
+    private var lastFailure: String?
     private var cachedSettings: ClaudeSSHSettings?
     private var lastAttempt: Date?
-    private var pending: (id: UUID, settings: ClaudeSSHSettings, task: Task<[String], Never>)?
+    private var pending: (id: UUID, settings: ClaudeSSHSettings, task: Task<ClaudeRemoteFetch, Never>)?
 
     init(settings: @escaping @Sendable () -> ClaudeSSHSettings? = {
         guard NSClassFromString("XCTestCase") == nil else { return nil }
         return ClaudeSSHSettings.load()
-    }, fetch: @escaping @Sendable (ClaudeSSHSettings) async -> [String] = {
+    }, fetchResult: @escaping @Sendable (ClaudeSSHSettings) async -> ClaudeRemoteFetch = {
         await ClaudeRateLimitSSH.fetchLines($0)
     }) {
         self.settings = settings
-        self.fetch = fetch
+        self.fetch = fetchResult
     }
 
-    private static func fetchLines(_ settings: ClaudeSSHSettings) async -> [String] {
+    init(settings: @escaping @Sendable () -> ClaudeSSHSettings?,
+         fetch: @escaping @Sendable (ClaudeSSHSettings) async -> [String]) {
+        self.init(settings: settings, fetchResult: { ClaudeRemoteFetch(lines: await fetch($0), failure: nil) })
+    }
+
+    func failureText() async -> String? { lastFailure }
+
+    private static func fetchLines(_ settings: ClaudeSSHSettings) async -> ClaudeRemoteFetch {
         let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), timeout: 10)
-        guard let result = try? await runner.run(settings.arguments),
-              !result.timedOut, result.terminationStatus == 0 else { return [] }
-        return String(decoding: result.stdout, as: UTF8.self).split(separator: "\n").map(String.init)
+        let result: CodexUsageService.CommandResult
+        do {
+            result = try await runner.run(settings.arguments)
+        } catch {
+            return ClaudeRemoteFetch(lines: [], failure: "SSH could not start")
+        }
+        if result.timedOut { return ClaudeRemoteFetch(lines: [], failure: "SSH timed out") }
+        guard result.terminationStatus == 0 else {
+            return ClaudeRemoteFetch(lines: [], failure: Self.describeFailure(status: result.terminationStatus,
+                                                                              stderr: result.stderr))
+        }
+        return ClaudeRemoteFetch(
+            lines: String(decoding: result.stdout, as: UTF8.self).split(separator: "\n").map(String.init),
+            failure: nil
+        )
+    }
+
+    /// Short, host-free reason so the panel never echoes hostnames or paths from stderr.
+    static func describeFailure(status: Int32, stderr: Data) -> String {
+        let text = String(decoding: stderr.prefix(4096), as: UTF8.self).lowercased()
+        if text.contains("permission denied") { return "SSH authentication failed" }
+        if text.contains("could not resolve") { return "SSH host not found" }
+        if text.contains("connection refused") || text.contains("timed out") || text.contains("no route") {
+            return "SSH host unreachable"
+        }
+        if text.contains("host key verification failed") { return "SSH host key verification failed" }
+        return "SSH failed (exit \(status))"
     }
 
     // Fixed, read-only command. Only B's project transcripts are eligible. The
@@ -167,10 +215,11 @@ actor ClaudeRateLimitSSH: ClaudeRateLimitRemote {
             cachedLines = []
             cachedSettings = nil
             lastAttempt = nil
+            lastFailure = nil
             return []
         }
         if let pending, pending.settings == current {
-            let lines = await pending.task.value
+            let lines = await pending.task.value.lines
             return settings() == current ? lines : []
         }
         if cachedSettings != current {
@@ -178,6 +227,7 @@ actor ClaudeRateLimitSSH: ClaudeRateLimitRemote {
             pending = nil
             cachedLines = []
             lastAttempt = nil
+            lastFailure = nil
             cachedSettings = current
         }
         let now = Date()
@@ -186,16 +236,18 @@ actor ClaudeRateLimitSSH: ClaudeRateLimitRemote {
         let id = UUID()
         let task = Task { await fetch(current) }
         pending = (id, current, task)
-        let lines = await task.value
+        let outcome = await task.value
         guard pending?.id == id else { return [] }
         pending = nil
         guard settings() == current else {
             cachedLines = []
             cachedSettings = nil
             lastAttempt = nil
+            lastFailure = nil
             return []
         }
-        cachedLines = lines
+        cachedLines = outcome.lines
+        lastFailure = outcome.failure
         return cachedLines
     }
 }
