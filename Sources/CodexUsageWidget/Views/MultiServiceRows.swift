@@ -31,6 +31,9 @@ struct ServiceRowModel: Identifiable {
 
     /// Outer arc: 5h, else the weekly window, else the first other window.
     var primary: UsageLimit? { five ?? week ?? extras.first }
+    var emptyStateText: String? {
+        primary == nil && failureText == nil ? "使用量データがありません" : nil
+    }
     /// Inner arc only when a 5h window carries the outer one.
     var inner: UsageLimit? { five != nil ? week : nil }
     var remainingExtras: [UsageLimit] { five == nil && week == nil ? Array(extras.dropFirst()) : extras }
@@ -270,6 +273,10 @@ struct ServiceRowView: View {
                     valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
                 }
                 ForEach(Array(row.remainingExtras.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                if let message = row.emptyStateText {
+                    Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !row.ticketExpiries.isEmpty {
                     TicketList(expiries: row.ticketExpiries)
                         .padding(.top, 4)

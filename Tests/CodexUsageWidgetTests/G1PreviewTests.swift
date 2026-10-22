@@ -85,6 +85,38 @@ final class G1PreviewTests: XCTestCase {
     }
 
     @MainActor
+    func testWriteEmptyStatePreviews() throws {
+        guard let dir = ProcessInfo.processInfo.environment["G1_PREVIEW_DIR"] else { return }
+        let directory = URL(fileURLWithPath: dir)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let sections = [
+            ProviderSection(provider: .codex, windows: [], stats: [], failureText: nil),
+            ProviderSection(provider: .zai, windows: [], stats: [
+                ProviderStat(title: "Monthly", valueText: "No monthly cap")
+            ], failureText: nil),
+            ProviderSection(provider: .grok, windows: [], stats: [], failureText: "Usage refresh failed"),
+            ProviderSection(provider: .claude, windows: [
+                window("Weekly", 0, "Resets tomorrow", account: 0)
+            ], stats: [], failureText: nil)
+        ]
+        for appearance in [PanelAppearance.dark, .light] {
+            let view = VStack(spacing: 6) {
+                ForEach(sections) { section in
+                    ForEach(ServiceRowModel.rows(for: section)) { row in ServiceRowView(row: row) }
+                }
+            }
+            .padding(16)
+            .frame(width: MultiPanelContent.baseWidth)
+            .background(appearance == .dark ? Color(white: 0.10) : .white)
+            .environment(\.colorScheme, appearance.colorScheme ?? .light)
+            let size = NSHostingView(rootView: view).fittingSize
+            XCTAssertEqual(size.width, MultiPanelContent.baseWidth)
+            try writeSnapshotPNG(view, size: size, directory: directory,
+                                 filename: "empty-states-\(appearance.rawValue).png", appearance: appearance)
+        }
+    }
+
+    @MainActor
     func testWritePreviews() throws {
         guard let dir = ProcessInfo.processInfo.environment["G1_PREVIEW_DIR"] else { return }
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
