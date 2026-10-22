@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let demoMode: DemoMode
     private let defaults: UserDefaults
     private let showDemoShowcase: Bool
+    private let demoHoverRing: Int?
     private let tabPresentation = EdgeTabPresentationState()
     private let panelOffsetStore: PanelOffsetStore
     private let tabOriginStore: TabOriginStore
@@ -89,11 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @MainActor
     init(persona: (any AppPersona)? = nil, demoMode: DemoMode = .production,
-         showDemoShowcase: Bool = false) {
+         showDemoShowcase: Bool = false, demoHoverRing: Int? = nil) {
         let defaults = demoMode.defaults
         self.demoMode = demoMode
         self.defaults = defaults
         self.showDemoShowcase = showDemoShowcase && demoMode.isEnabled
+        self.demoHoverRing = demoMode.isEnabled ? demoHoverRing : nil
         panelOffsetStore = PanelOffsetStore(defaults: defaults)
         tabOriginStore = TabOriginStore(defaults: defaults)
         opacityPreferences = SurfaceOpacityPreferences(defaults: defaults)
@@ -116,7 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             updateController = NanoUpdateController()
         }
         persona.start()
-        if showDemoShowcase {
+        if let ring = demoHoverRing {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.showDemoHoverCard(ring: ring)
+            }
+        } else if showDemoShowcase {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.persona.refresh()
@@ -125,6 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             showPanelOnLaunchIfRequested()
         }
+    }
+
+    /// Demo-only: simulate the pointer resting on one ring so the hover card can be captured.
+    private func showDemoHoverCard(ring: Int) {
+        guard let tabView = tabPanel?.contentView else { return }
+        persona.ringHoverCard?.showDemoCard(ring: ring, in: tabView)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -39,7 +39,8 @@ enum CodexUsageWidgetApp {
         }
 
         let app = NSApplication.shared
-        let delegate = AppDelegate(demoMode: mode, showDemoShowcase: options.showcase)
+        let delegate = AppDelegate(demoMode: mode, showDemoShowcase: options.showcase,
+                                   demoHoverRing: options.hoverRing)
         app.delegate = delegate
         app.run()
     }

@@ -32,11 +32,14 @@ struct UsageRingsLaunchOptions: Equatable {
     let demoEnabled: Bool
     let showcase: Bool
     let exportDirectory: URL?
+    /// Demo-only: open the hover card for this ring index (README screenshots).
+    var hoverRing: Int? = nil
 
     static func parse(arguments: [String], environment: [String: String]) throws -> Self {
         var requested = false
         var showcase = false
         var exportDirectory: URL?
+        var hoverRing: Int?
         var index = 1
         while index < arguments.count {
             switch arguments[index] {
@@ -45,6 +48,13 @@ struct UsageRingsLaunchOptions: Equatable {
             case "--demo-showcase":
                 requested = true
                 showcase = true
+            case "--demo-hover-ring":
+                guard index + 1 < arguments.count, let ring = Int(arguments[index + 1]), ring >= 0 else {
+                    throw DemoLaunchError.invalidHoverRing
+                }
+                index += 1
+                hoverRing = ring
+                requested = true
             case "--demo-export":
                 guard index + 1 < arguments.count else { throw DemoLaunchError.missingExportDirectory }
                 index += 1
@@ -58,7 +68,8 @@ struct UsageRingsLaunchOptions: Equatable {
             index += 1
         }
         let enabled = requested || environment["USAGERINGS_DEMO"] == "1"
-        return Self(demoEnabled: enabled, showcase: showcase, exportDirectory: exportDirectory)
+        return Self(demoEnabled: enabled, showcase: showcase, exportDirectory: exportDirectory,
+                    hoverRing: hoverRing)
     }
 
     func makeMode(suiteName: String = DemoMode.preferenceSuiteName) throws -> DemoMode {
@@ -69,6 +80,7 @@ struct UsageRingsLaunchOptions: Equatable {
 
 enum DemoLaunchError: LocalizedError {
     case missingExportDirectory
+    case invalidHoverRing
     case exportDirectoryMustBeAbsolute
     case preferencesUnavailable
     case exportRequiresDemoMode
@@ -77,6 +89,8 @@ enum DemoLaunchError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .invalidHoverRing:
+            "--demo-hover-ring requires a non-negative ring index"
         case .missingExportDirectory:
             "--demo-export requires an absolute output directory"
         case .exportDirectoryMustBeAbsolute:

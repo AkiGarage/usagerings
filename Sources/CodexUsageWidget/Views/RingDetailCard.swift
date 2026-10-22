@@ -529,6 +529,16 @@ final class RingDetailCardController {
         }
     }
 
+    /// Demo-only (README screenshots): behave as if the pointer rests on `ring`.
+    func showDemoCard(ring: Int, in hostingView: NSView) {
+        guard let context = context(hostingView: hostingView),
+              let frame = MultiCollapsedUsageView.ringFrame(index: ring, size: context.size, layout: context.layout,
+                                                           count: context.bars.count,
+                                                           orientation: context.orientation) else { return }
+        let y = hostingView.isFlipped ? frame.midY : hostingView.bounds.height - frame.midY
+        mouseMoved(to: NSPoint(x: frame.midX, y: y), in: hostingView)
+    }
+
     /// Ring under a view-coordinate point with fresh bars (nil when the tab is
     /// not in its ring-showing state or the point misses every ring). Pass
     /// `snapshot` when reacting to `$snapshot`, which emits in willSet — the
