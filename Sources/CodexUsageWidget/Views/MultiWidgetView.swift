@@ -221,6 +221,7 @@ private struct MultiWindowRow: View {
         case .antigravity: color = CollapsedUsageBar.antigravityColor
         case .zai: color = CollapsedUsageBar.glmColor
         case .grok: color = CollapsedUsageBar.grokColor
+        case .minimax, .kimi, .deepseek: color = ServiceRowModel.color(for: provider, account: 0)
         }
         return CollapsedUsageBar(id: limit.title, label: "", title: limit.title,
                                  providerColor: color, limit: limit)

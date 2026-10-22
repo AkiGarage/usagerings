@@ -60,7 +60,7 @@ final class DemoModeTests: XCTestCase {
         XCTAssertEqual(tickets.filter { !$0.available }.count, 1)
 
         let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
-        XCTAssertEqual(bars.count, 10)
+        XCTAssertEqual(bars.count, 13)
         let accountA = try XCTUnwrap(bars.first { $0.id == "claude-0" })
         XCTAssertTrue(accountA.isWarning)
         let accountB = try XCTUnwrap(bars.first { $0.id == "claude-1" })

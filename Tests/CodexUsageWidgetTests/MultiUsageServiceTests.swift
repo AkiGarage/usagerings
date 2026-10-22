@@ -13,7 +13,7 @@ final class MultiUsageServiceTests: XCTestCase {
         let service = MultiUsageService(commandRunner: commandRunner(for: .allSuccess), cliProxyClient: CLIProxyFixtures.client())
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
-        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .antigravity])
+        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
 
         let codex = snapshot.sections[0]
         XCTAssertEqual(codex.windows.map(\.title), ["Weekly"])
@@ -53,7 +53,7 @@ final class MultiUsageServiceTests: XCTestCase {
         let service = MultiUsageService(commandRunner: commandRunner(for: .zaiFails), cliProxyClient: CLIProxyFixtures.client())
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
-        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .antigravity])
+        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
         XCTAssertNil(snapshot.sections[0].failureText)
         XCTAssertNotNil(snapshot.sections[3].failureText)
         XCTAssertFalse(snapshot.sections[3].failureText!.contains("synthetic-sensitive-message"))
@@ -93,7 +93,7 @@ final class MultiUsageServiceTests: XCTestCase {
 
     private func commandRunner(for fixture: Fixture) -> CodexUsageService.CommandRunner {
         { arguments in
-            XCTAssertTrue(["codex", "zai"].contains(arguments[2]))
+            XCTAssertTrue(["codex", "zai", "minimax", "kimi", "deepseek"].contains(arguments[2]))
             let provider = arguments[2]
             var json: String
             switch provider {
@@ -111,6 +111,10 @@ final class MultiUsageServiceTests: XCTestCase {
                     )
                 }
                 json = Self.zai
+            case "minimax", "kimi":
+                json = AdditionalCodexBarFixtures.quota(provider)
+            case "deepseek":
+                json = AdditionalCodexBarFixtures.balance
             default:
                 json = Self.claude
             }

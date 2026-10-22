@@ -21,11 +21,13 @@ The dashboard refreshes about once a minute. Individual providers can cache resu
 | Claude Code | Local CLIProxyAPI; local Claude Code logs supplement limit notices | An enabled Claude account in CLIProxyAPI |
 | Google Antigravity | Local CLIProxyAPI | An enabled Antigravity account with a project ID |
 | Z.ai / GLM Coding Plan | CodexBarCLI; Z.ai reset-ticket API for optional detail | CodexBar's Z.ai provider configured |
+| MiniMax / Kimi | CodexBarCLI | The corresponding provider configured in CodexBar |
+| DeepSeek | CodexBarCLI | DeepSeek configured in CodexBar; balance and usage details without a quota percentage |
 | Grok | Local CLIProxyAPI | An enabled Grok account |
 
 Requires **macOS 14 or later**. Building requires Xcode Command Line Tools with **Swift 5.9 or later** and internet access to resolve the pinned Sparkle dependency. The command-line tools must be selected with `xcode-select`.
 
-**CodexBarCLI is still required for the Codex and GLM usage sections.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Other sections can work independently when that helper is missing.
+**CodexBarCLI is still required for the Codex, GLM, MiniMax, Kimi, and DeepSeek sections.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Other sections can work independently when that helper is missing.
 
 For Claude, Antigravity, and Grok, UsageRings expects an existing CLIProxyAPI service at `http://127.0.0.1:8317/v8/management/` and its management key in a macOS Keychain generic-password item with the service name `cliproxyapi-management`. Configure these separately; UsageRings does not install the proxy or provide an account-sign-in screen. Missing setup is reported in the panel.
 

@@ -230,7 +230,7 @@ final class GrokQuotaTests: XCTestCase {
     @MainActor
     func testGrokLetterColorOrderAndWarnings() throws {
         XCTAssertEqual(ProviderID.grok.displayName, "Grok")
-        XCTAssertEqual(MultiUsageSnapshot.placeholder.sections.map(\.provider), [.codex, .claude, .grok, .zai, .antigravity])
+        XCTAssertEqual(MultiUsageSnapshot.placeholder.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
         for percent in [75.0, 30, 15] {
             let snapshot = MultiUsageSnapshot(sections: [ProviderSection(provider: .grok,
                 windows: [UsageLimit(title: "Weekly", leftPercent: percent, resetText: "")], stats: [], failureText: nil)],

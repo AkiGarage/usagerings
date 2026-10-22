@@ -97,6 +97,9 @@ enum DemoSnapshotExporter {
             ("hover-grok.png", "grok-0"),
             ("hover-grok-1.png", "grok-1"),
             ("hover-zai.png", "zai"),
+            ("hover-minimax.png", "minimax"),
+            ("hover-kimi.png", "kimi"),
+            ("hover-deepseek.png", "deepseek"),
             ("hover-antigravity-argon.png", "antigravity-Gemini 4 Argon"),
             ("hover-antigravity-gemini-models.png", "antigravity-Gemini Models"),
             ("hover-antigravity-claude-gpt.png", "antigravity-Claude and GPT models")

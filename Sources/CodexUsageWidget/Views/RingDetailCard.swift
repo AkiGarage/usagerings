@@ -155,6 +155,7 @@ struct RingDetailCardModel: Equatable {
     let extras: Extras?
     var ticketFailureText: String? = nil
     var blockText: String? = nil
+    var stats: [ProviderStat] = []
 
     static func make(bar: CollapsedUsageBar, now: Date, sourceTimeZone: TimeZone = .current) -> RingDetailCardModel? {
         let rows = bar.windows.map { Row(label: RingCardLabel.label(for: $0.title), leftPercent: $0.clampedLeftPercent) }
@@ -189,7 +190,7 @@ struct RingDetailCardModel: Equatable {
         let blockText = bar.block.flatMap {
             $0.isActive(at: now) ? ClaudeRateLimitParser.cardLine(block: $0, now: now) : nil
         }
-        guard !rows.isEmpty || extras != nil || ticketFailureText != nil || blockText != nil else { return nil }
+        guard !rows.isEmpty || extras != nil || ticketFailureText != nil || blockText != nil || !bar.stats.isEmpty else { return nil }
         let reset = bar.limit.flatMap { limit -> (label: String, text: String)? in
             guard let date = RingResetFormat.date(fromResetText: limit.resetText, now: now,
                                                   sourceTimeZone: sourceTimeZone) else { return nil }
@@ -197,7 +198,7 @@ struct RingDetailCardModel: Equatable {
         }
         return RingDetailCardModel(title: "\(bar.ringName) の詳細",
                                    resetText: reset?.text, resetLabel: reset?.label, rows: rows, extras: extras,
-                                   ticketFailureText: ticketFailureText, blockText: blockText)
+                                   ticketFailureText: ticketFailureText, blockText: blockText, stats: bar.stats)
     }
 
     private static func sortedTicketRows(_ tickets: [CodexExtrasParser.Ticket], now: Date) -> [TicketRow] {
@@ -365,6 +366,11 @@ struct RingDetailCardView: View {
             }
             if let failure = model.ticketFailureText {
                 Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            ForEach(Array(model.stats.enumerated()), id: \.offset) { _, stat in
+                Text("\(stat.title): \(stat.valueText)")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let extras = model.extras {
                 Divider().opacity(0.35)

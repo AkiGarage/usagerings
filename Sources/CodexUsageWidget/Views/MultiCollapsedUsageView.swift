@@ -15,6 +15,7 @@ struct CollapsedUsageBar: Identifiable {
     var zaiResetTickets: ZaiResetTickets? = nil
     var block: ClaudeBlock? = nil
     var blockedSymbolName: String = Self.blockedSymbol
+    var stats: [ProviderStat] = []
     var isBlocked: Bool { block?.isActive(at: Date()) == true }
     static let blockedSymbol = "lock.fill"
     static let blockedPauseSymbol = "pause.circle.fill"
@@ -118,6 +119,12 @@ struct CollapsedUsageBar: Identifiable {
         bars.append(Self(id: "zai", label: "Z", title: "GLM 5h", providerColor: glmColor,
                          limit: fiveHour(zaiWindows), windows: zaiWindows,
                          zaiResetTickets: snapshot.sections.first { $0.provider == .zai }?.zaiResetTickets))
+        for provider in [ProviderID.minimax, .kimi, .deepseek] {
+            guard let section = snapshot.sections.first(where: { $0.provider == provider }) else { continue }
+            bars.append(Self(id: provider.rawValue, label: String(provider.displayName.prefix(1)),
+                             title: provider.displayName, providerColor: ServiceRowModel.color(for: provider, account: 0),
+                             limit: lowest(section.windows), windows: section.windows, stats: section.stats))
+        }
         let required = ["Gemini 4 Argon", "Gemini Models", "Claude and GPT models"]
         let antigravity = Dictionary(grouping: windows(.antigravity)) { window in
             let name = window.title.components(separatedBy: " · ")[0]
@@ -272,7 +279,10 @@ struct MultiCollapsedUsageView: View {
         if bar.isBlocked { return "\(bar.ringName): \(CollapsedUsageBar.detailText(for: bar))" }
         let arcs = g1(for: bar, rows: rows)
         let windows = [arcs.outer, arcs.inner].compactMap { $0 }
-        guard !windows.isEmpty else { return "\(bar.ringName): No data" }
+        guard !windows.isEmpty else {
+            let details = bar.stats.map { "\($0.title): \($0.valueText)" }.joined(separator: "; ")
+            return "\(bar.ringName): \(details.isEmpty ? "No data" : details)"
+        }
         let values = windows.map { limit in
             let label: String
             switch ServiceRowModel.kind(limit.title) {

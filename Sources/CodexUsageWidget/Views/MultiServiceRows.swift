@@ -28,11 +28,12 @@ struct ServiceRowModel: Identifiable {
     }
     var notes: [String] = []
     var failureText: String?
+    var hasUsageDetails = false
 
     /// Outer arc: 5h, else the weekly window, else the first other window.
     var primary: UsageLimit? { five ?? week ?? extras.first }
     var emptyStateText: String? {
-        primary == nil && failureText == nil ? "使用量データがありません" : nil
+        primary == nil && failureText == nil && !hasUsageDetails ? "使用量データがありません" : nil
     }
     /// Inner arc only when a 5h window carries the outer one.
     var inner: UsageLimit? { five != nil ? week : nil }
@@ -73,6 +74,9 @@ struct ServiceRowModel: Identifiable {
         case .antigravity: CollapsedUsageBar.antigravityColor
         case .zai: CollapsedUsageBar.glmColor
         case .grok: CollapsedUsageBar.grokColor
+        case .minimax: .orange
+        case .kimi: .teal
+        case .deepseek: .blue
         }
     }
 
@@ -166,6 +170,7 @@ struct ServiceRowModel: Identifiable {
         }
         rows[0].ticketExpiries.sort()
         rows[0].failureText = section.failureText
+        rows[0].hasUsageDetails = provider == .deepseek && !section.stats.isEmpty
         if !showAccounts { for i in rows.indices { rows[i].account = nil } }
         return rows
     }

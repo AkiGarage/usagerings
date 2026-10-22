@@ -42,6 +42,16 @@ enum MultiProviderParser {
         var secondary: RawWindow?
         var tertiary: RawWindow?
         var extraRateWindows: [ExtraRateWindow]?
+        var details: [DetailSection]?
+    }
+
+    private struct DetailSection: Decodable {
+        struct Row: Decodable {
+            var label: String
+            var value: String
+        }
+        var title: String?
+        var rows: [Row]
     }
 
     private struct Entry: Decodable {
@@ -72,6 +82,23 @@ enum MultiProviderParser {
 
         let entry = try decodeEntry(data)
         let usage = entry.usage
+
+        // CodexBar encodes DeepSeek's balance availability as a 0/100 primary
+        // window. It is not a quota percentage and must never become a ring.
+        if provider == .deepseek {
+            var stats: [ProviderStat] = []
+            if let balance = usage?.primary?.resetDescription, !balance.isEmpty {
+                stats.append(ProviderStat(title: "Balance", valueText: balance))
+            }
+            let labels: Set<String> = ["Today", "This month", "Last 30 days", "Requests"]
+            for detail in usage?.details ?? [] where detail.title == "Usage" {
+                for row in detail.rows where labels.contains(row.label) && !row.value.isEmpty {
+                    stats.append(ProviderStat(title: row.label, valueText: row.value))
+                }
+            }
+            guard !stats.isEmpty else { throw ParseError.noWindows }
+            return ProviderSection(provider: provider, windows: [], stats: stats, failureText: nil)
+        }
 
         var limits: [UsageLimit] = []
 

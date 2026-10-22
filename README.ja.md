@@ -21,11 +21,13 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 | Claude Code | ローカルのCLIProxyAPI。制限表示はClaude Codeログでも補完 | CLIProxyAPIの有効なClaudeアカウント |
 | Google Antigravity | ローカルのCLIProxyAPI | プロジェクトIDのある有効なAntigravityアカウント |
 | Z.ai / GLM Coding Plan | CodexBarCLI。追加情報はZ.aiのリセット券API | CodexBarのZ.ai設定 |
+| MiniMax / Kimi | CodexBarCLI | CodexBarで対象プロバイダーを設定 |
+| DeepSeek | CodexBarCLI | CodexBarのDeepSeek設定。残高・使用実績を表示（割合の上限は表示しません） |
 | Grok | ローカルのCLIProxyAPI | 有効なGrokアカウント |
 
 **macOS 14以降**に対応します。ビルドには **Swift 5.9以降**を含むXcode Command Line Toolsと、固定バージョンのSparkleを取得するインターネット接続が必要です。使用する開発ツールを`xcode-select`で選択してください。
 
-**CodexとGLMの使用量表示には、現在もCodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがなくても、ほかの取得元が設定済みなら対応する項目は独立して動作します。
+**Codex・GLM・MiniMax・Kimi・DeepSeekの使用量表示には、CodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがなくても、ほかの取得元が設定済みなら対応する項目は独立して動作します。
 
 Claude・Antigravity・Grokには、既存のCLIProxyAPI（`http://127.0.0.1:8317/v8/management/`）と、macOS Keychainのサービス名 `cliproxyapi-management` の汎用パスワード項目に保存した管理キーが必要です。これらは別途設定してください。UsageRingsにプロキシのインストールやアカウントへのログイン画面はありません。設定が足りない場合はパネルに表示します。
 

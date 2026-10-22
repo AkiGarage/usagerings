@@ -34,6 +34,9 @@ struct MultiUsageService: Sendable {
         async let proxySections = cliProxyClient.fetchSections(now: now)
         async let codex = fetchProvider(.codex, now: now, timeZone: timeZone, calendar: calendar)
         async let zai = fetchProvider(.zai, now: now, timeZone: timeZone, calendar: calendar)
+        async let minimax = fetchProvider(.minimax, now: now, timeZone: timeZone, calendar: calendar)
+        async let kimi = fetchProvider(.kimi, now: now, timeZone: timeZone, calendar: calendar)
+        async let deepseek = fetchProvider(.deepseek, now: now, timeZone: timeZone, calendar: calendar)
         async let tickets = zaiTicketClient?.fetch()
         async let blocks = claudeRateLimitMonitor?.blocks(now: now)
         let (codexResult, zaiResult, proxy, ticketResult, blockResult) = await (codex, zai, proxySections, tickets, blocks)
@@ -50,9 +53,11 @@ struct MultiUsageService: Sendable {
         }
         var zaiSection = zaiResult.section
         zaiSection.zaiResetTickets = ticketResult
-        Self.writeWindowDump([codexResult.section, zaiSection] + proxyWithBlocks)
+        let additional = await [minimax.section, kimi.section, deepseek.section]
+        let sections = MultiUsageSnapshot.ordered([codexResult.section, zaiSection] + additional + proxyWithBlocks)
+        Self.writeWindowDump(sections)
         return MultiUsageSnapshot(
-            sections: MultiUsageSnapshot.ordered([codexResult.section, zaiSection] + proxyWithBlocks),
+            sections: sections,
             codexSnapshot: codexResult.codexSnapshot,
             updatedAt: now
         )
@@ -115,7 +120,7 @@ struct MultiUsageService: Sendable {
             switch provider {
             case .codex:
                 return try codexResult(from: result.stdout, now: now, timeZone: timeZone, calendar: calendar)
-            case .zai, .grok, .claude, .antigravity:
+            case .zai, .grok, .claude, .antigravity, .minimax, .kimi, .deepseek:
                 let section = try MultiProviderParser.parse(
                     result.stdout,
                     provider: provider,

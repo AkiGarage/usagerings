@@ -67,7 +67,7 @@ final class MultiUsageStoreTests: XCTestCase {
             store.snapshot.sections.first?.failureText == nil
         }
 
-        XCTAssertEqual(store.snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .antigravity])
+        XCTAssertEqual(store.snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
         XCTAssertNotNil(store.snapshot.sections[3].failureText)
         XCTAssertEqual(store.snapshot.sections[1].windows.count, 4)
         XCTAssertFalse(store.isRefreshing)

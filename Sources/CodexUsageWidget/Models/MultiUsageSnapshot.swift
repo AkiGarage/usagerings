@@ -5,6 +5,9 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
     case claude
     case grok
     case zai
+    case minimax
+    case kimi
+    case deepseek
     case antigravity
 
     var id: String { rawValue }
@@ -21,6 +24,12 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
             "Claude Code"
         case .antigravity:
             "Antigravity"
+        case .minimax:
+            "MiniMax"
+        case .kimi:
+            "Kimi"
+        case .deepseek:
+            "DeepSeek"
         }
     }
 }
@@ -85,7 +94,7 @@ struct MultiUsageSnapshot: Equatable, Sendable {
     let updatedAt: Date
 
     /// Display order shared by the tablet (left to right) and the window (top to bottom).
-    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .antigravity]
+    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity]
 
     static func ordered(_ sections: [ProviderSection]) -> [ProviderSection] {
         sections.enumerated().sorted { lhs, rhs in
