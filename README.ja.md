@@ -74,9 +74,17 @@ USAGERINGS_SIGN_IDENTITY='Your signing identity' ./script/build_and_run.sh usage
 
 ## スクリーンショット
 
-> 掲載予定: サンプルのアカウント・使用量を使った横並びのリング。
->
-> 掲載予定: 個人情報を含まない詳細パネルとSSH設定。
+画像はすべて内蔵のデモデータです（ダーク表示、バー200%）。
+
+| 閉じたときのバー | ホバーで出る詳細 |
+| --- | --- |
+| ![リングのバー](docs/images/collapsed-bar.png) | ![ホバーの詳細カード](docs/images/hover-detail.png) |
+
+![詳細パネル](docs/images/panel.png)
+
+リセットチケットは、期限と残り時間つきで1行ずつ並びます。
+
+![リセットチケット](docs/images/reset-tickets.png)
 
 ## 開発への参加とライセンス
 

@@ -74,9 +74,17 @@ The maintainer's reference app-bundle comparison is **CodexBar: 163 MB** versus 
 
 ## Screenshots
 
-> Screenshot placeholder: compact horizontal rings, using sample accounts and usage.
->
-> Screenshot placeholder: expanded provider panel and SSH settings, with no personal data.
+All screenshots use built-in demo data (dark appearance, bar zoom 200%).
+
+| Collapsed bar | Hover detail |
+| --- | --- |
+| ![Collapsed ring bar](docs/images/collapsed-bar.png) | ![Hover detail card](docs/images/hover-detail.png) |
+
+![Detail panel](docs/images/panel.png)
+
+Reset tickets are listed one per line with their expiry and time left:
+
+![Reset tickets](docs/images/reset-tickets.png)
 
 ## Contributing and license
 
