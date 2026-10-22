@@ -38,6 +38,7 @@ final class MultiUsageStore: ObservableObject {
             dataSource = .live(service: service, publisher: nil)
             errorMessage = "Local snapshot publisher unavailable: \(error.localizedDescription)"
         }
+        snapshot = visible(snapshot)
     }
 
     /// A closed fixture-only path: no provider service or snapshot publisher is
@@ -139,8 +140,8 @@ final class MultiUsageStore: ObservableObject {
 
     /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.
     func providerVisibilityChanged(turnedOn: Bool) {
-        if let rawSnapshot {
-            snapshot = visible(rawSnapshot)
+        snapshot = visible(rawSnapshot ?? .placeholder)
+        if rawSnapshot != nil {
             if preferences?.isProviderVisible(.claude) == false { claudeChoice = nil }
         }
         if turnedOn { refresh() }
@@ -148,8 +149,10 @@ final class MultiUsageStore: ObservableObject {
 
     func visible(_ snapshot: MultiUsageSnapshot) -> MultiUsageSnapshot {
         guard let preferences else { return snapshot }
-        return MultiUsageSnapshot(sections: snapshot.sections.filter { preferences.isProviderVisible($0.provider) },
-                                  codexSnapshot: snapshot.codexSnapshot, updatedAt: snapshot.updatedAt)
+        let hidden = Set(ProviderID.allCases.filter { !preferences.isProviderVisible($0) })
+        return MultiUsageSnapshot(sections: snapshot.sections.filter { !hidden.contains($0.provider) },
+                                  codexSnapshot: snapshot.codexSnapshot, updatedAt: snapshot.updatedAt,
+                                  hiddenProviders: hidden)
     }
 
     func updateClaudeChoice(from snapshot: MultiUsageSnapshot, now: Date) {

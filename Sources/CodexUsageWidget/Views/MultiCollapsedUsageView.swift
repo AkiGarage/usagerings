@@ -196,6 +196,7 @@ struct CollapsedUsageBar: Identifiable {
             } else { bars += antigravityBars([]) }
         }
         return bars.filter { bar in
+            if let provider = bar.provider, snapshot.hiddenProviders.contains(provider) { return false }
             guard accountPreferences.isVisible(bar.accountID) else { return false }
             guard let provider = bar.provider,
                   accountPreferences.primaryAccounts[provider.rawValue] != nil,

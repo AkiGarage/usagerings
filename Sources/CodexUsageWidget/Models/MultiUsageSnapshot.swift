@@ -130,6 +130,8 @@ struct MultiUsageSnapshot: Equatable, Sendable {
     let sections: [ProviderSection]
     let codexSnapshot: UsageSnapshot?
     let updatedAt: Date
+    /// Providers the user turned off; their rings are not drawn even as placeholders.
+    var hiddenProviders: Set<ProviderID> = []
 
     /// Display order shared by the tablet (left to right) and the window (top to bottom).
     static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity]

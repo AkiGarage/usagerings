@@ -68,3 +68,14 @@ final class Recorder: @unchecked Sendable {
     var calls: [String] { lock.lock(); defer { lock.unlock() }; return stored }
     func add(_ s: String) { lock.lock(); stored.append(s); lock.unlock() }
 }
+
+final class HiddenProviderRingTests: XCTestCase {
+    func testHiddenProvidersDrawNoPlaceholderRings() {
+        let all = CollapsedUsageBar.bars(for: .placeholder, blockedPreview: nil)
+        XCTAssertTrue(all.contains { $0.provider == .codex })
+        var snap = MultiUsageSnapshot(sections: [], codexSnapshot: nil, updatedAt: Date())
+        snap.hiddenProviders = [.codex, .claude, .grok, .zai, .antigravity]
+        let bars = CollapsedUsageBar.bars(for: snap, blockedPreview: nil)
+        XCTAssertFalse(bars.contains { $0.provider.map(snap.hiddenProviders.contains) ?? false })
+    }
+}
