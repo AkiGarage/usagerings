@@ -3,6 +3,31 @@ import XCTest
 
 @MainActor
 final class MultiUsageStoreTests: XCTestCase {
+    func testSuccessfulPublishClearsPreviousWriteFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let blocker = directory.appendingPathComponent("snapshot-directory")
+        try Data("synthetic blocker".utf8).write(to: blocker)
+        let fileURL = blocker.appendingPathComponent("snapshot.json")
+        let store = MultiUsageStore(
+            service: MultiUsageService(commandRunner: Self.successRunner, cliProxyClient: CLIProxyFixtures.client()),
+            snapshotURLs: [fileURL]
+        )
+
+        store.refresh()
+        try await waitUntil("failed write settles") { !store.isRefreshing }
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+
+        try FileManager.default.removeItem(at: blocker)
+        store.refresh()
+        try await waitUntil("recovery write settles") { !store.isRefreshing }
+        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        XCTAssertEqual(json?["schemaVersion"] as? Int, 2)
+        XCTAssertNil(store.errorMessage, "A successful retry must dismiss the old failure notice")
+    }
+
     func testRefreshPublishesCodexSnapshotToInjectedPaths() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

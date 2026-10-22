@@ -103,6 +103,7 @@ final class MultiUsageStore: ObservableObject {
         guard let publisher else { return }
         do {
             try publisher.publish(snapshot)
+            errorMessage = nil
         } catch {
             errorMessage = "Local snapshot update failed: \(error.localizedDescription)"
         }
