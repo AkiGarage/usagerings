@@ -308,9 +308,9 @@ actor CLIProxyClient {
                     period.windows = [window]
                     period.stats = []
                 case .noMonthlyCap:
+                    // SuperGrok-style plans report monthlyLimit 0 (no monthly window): show nothing.
                     period.windows = []
-                    period.stats = [ProviderStat(title: "\(account.maskedEmail) · Monthly",
-                                                 valueText: "No monthly cap")]
+                    period.stats = []
                 case .noData:
                     period.windows = []
                     period.stats = [ProviderStat(title: "\(account.maskedEmail) · \(period.providerName)",

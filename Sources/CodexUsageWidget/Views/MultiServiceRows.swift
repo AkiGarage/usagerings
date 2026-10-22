@@ -150,6 +150,10 @@ struct ServiceRowModel: Identifiable {
                 rows[0].notes.append("\(stat.title): \(stat.valueText)")
             }
         }
+        // Z.ai tickets carry real expiries: list usable ones vertically like Codex.
+        if rows[0].ticketExpiries.isEmpty, case let .loaded(tickets)? = section.zaiResetTickets {
+            rows[0].ticketExpiries = tickets.filter(\.available).map(\.expiresAt)
+        }
         rows[0].ticketExpiries.sort()
         rows[0].failureText = section.failureText
         if !showAccounts { for i in rows.indices { rows[i].account = nil } }

@@ -101,7 +101,7 @@ final class GrokQuotaTests: XCTestCase {
         await transport.respond(weekly: false, body: GrokFixtures.liveMonthly)
         let noCap = try await grok(client)
         XCTAssertFalse(noCap.windows.contains { $0.title.contains("Monthly") })
-        XCTAssertTrue(noCap.stats.contains { $0.valueText == "No monthly cap" })
+        XCTAssertFalse(noCap.stats.contains { $0.title.contains("Monthly") })
         XCTAssertNil(noCap.failureText)
     }
 
@@ -113,7 +113,7 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertNil(section.failureText)
         XCTAssertEqual(section.windows.map(\.leftPercent), [2, 2])
         XCTAssertTrue(section.windows.allSatisfy { $0.tone == .critical })
-        XCTAssertEqual(section.stats.map(\.valueText), ["No monthly cap", "No monthly cap"])
+        XCTAssertEqual(section.stats, [])
 
         let bars = CollapsedUsageBar.bars(for: MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: clock.read()))
         let grok = try XCTUnwrap(bars.first { $0.id == "grok" })

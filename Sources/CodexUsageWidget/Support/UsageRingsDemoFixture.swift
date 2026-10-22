@@ -60,7 +60,11 @@ enum UsageRingsDemoFixture {
             ProviderSection(provider: .codex,
                             windows: [limit("Session", 76, resetIn: 2.4), limit("Weekly", 49, resetIn: 94)],
                             stats: [ProviderStat(title: "Credits", valueText: "1,284 credits"),
-                                    ProviderStat(title: "Reset tickets", valueText: "2 available")],
+                                    ProviderStat(title: "Reset tickets", valueText: "2 available")]
+                                + codexExtras.ticketExpiries.map {
+                                    ProviderStat(title: "Reset ticket expiry",
+                                                 valueText: ISO8601DateFormatter().string(from: $0))
+                                },
                             failureText: nil,
                             codexExtras: codexExtras),
             ProviderSection(provider: .claude,
@@ -73,7 +77,7 @@ enum UsageRingsDemoFixture {
                                                           resetAt: now.addingTimeInterval(2 * 3_600),
                                                           timeZoneKnown: true)]),
             ProviderSection(provider: .grok,
-                            windows: [limit("Weekly", 68, resetIn: 120), limit("Monthly", 83, resetIn: 480)],
+                            windows: [limit("Weekly", 68, resetIn: 120)],
                             stats: [], failureText: nil),
             ProviderSection(provider: .zai,
                             windows: [limit("5h", 82, resetIn: 2.8), limit("Weekly", 64, resetIn: 112)],

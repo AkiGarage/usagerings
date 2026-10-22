@@ -68,8 +68,7 @@ enum DemoSnapshotExporter {
         if let grokIndex = failureSections.firstIndex(where: { $0.provider == .grok }) {
             failureSections[grokIndex].windows = []
             failureSections[grokIndex].stats = [
-                ProviderStat(title: "Weekly", valueText: "No data"),
-                ProviderStat(title: "Monthly", valueText: "No monthly cap")
+                ProviderStat(title: "Weekly", valueText: "No data")
             ]
             failureSections[grokIndex].failureText = "Demo-only provider failure fixture"
         }
