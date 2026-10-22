@@ -19,15 +19,25 @@ enum CLIProxyParser {
         case noData
     }
 
+    struct CredentialInventory {
+        let credentials: [CLIProxyCredential]
+        let isComplete: Bool
+    }
+
     static func credentials(_ data: Data) throws -> [CLIProxyCredential] {
+        try credentialInventory(data).credentials
+    }
+
+    static func credentialInventory(_ data: Data) throws -> CredentialInventory {
         let object = try JSONSerialization.jsonObject(with: data)
         let root = object as? [String: Any]
         guard let entries = (root?["files"] ?? root?["credentials"] ?? object) as? [[String: Any]] else {
             throw ParseError.invalid
         }
-        return entries.compactMap { entry in
-            guard let provider = (entry["provider"] ?? entry["type"]) as? String,
-                  let index = (entry["auth_index"] ?? entry["authIndex"]) as? String, !index.isEmpty else { return nil }
+        let credentials: [CLIProxyCredential] = entries.compactMap { entry in
+            guard let provider = (entry["provider"] ?? entry["type"]) as? String, !provider.isEmpty,
+                  provider == provider.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let index = (entry["auth_index"] ?? entry["authIndex"]) as? String, !index.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             let metadata = entry["metadata"] as? [String: Any]
             let attributes = entry["attributes"] as? [String: Any]
             return CLIProxyCredential(
@@ -38,6 +48,7 @@ enum CLIProxyParser {
                 userID: (entry["user_id"] ?? entry["userId"] ?? metadata?["user_id"]) as? String
             )
         }
+        return CredentialInventory(credentials: credentials, isComplete: credentials.count == entries.count)
     }
 
     static func mask(_ email: String?) -> String {

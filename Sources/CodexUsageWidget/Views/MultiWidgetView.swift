@@ -226,17 +226,25 @@ struct AccountSettingsView: View {
     }
 }
 
-private struct AccountSettingsRow: View {
+struct AccountSettingsRow: View {
     let id: AccountID
     let name: String
     @ObservedObject var preferences: PanelPreferences
     @State private var label: String
+    @FocusState private var labelFocused: Bool
 
     init(id: AccountID, name: String, preferences: PanelPreferences) {
         self.id = id
         self.name = name
         self.preferences = preferences
         _label = State(initialValue: preferences.accountPreferences.label(for: id) ?? "")
+    }
+
+    private func saveLabel() {
+        if label != (preferences.accountPreferences.label(for: id) ?? "") {
+            preferences.setAccountLabel(label, for: id)
+        }
+        label = preferences.accountPreferences.label(for: id) ?? ""
     }
 
     var body: some View {
@@ -249,10 +257,20 @@ private struct AccountSettingsRow: View {
                 TextField("カスタムラベル", text: $label)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("\(name)のラベル")
-                    .onChange(of: label) { _, value in preferences.setAccountLabel(value, for: id) }
+                    .focused($labelFocused)
+                    .onSubmit { saveLabel() }
+                    .onChange(of: labelFocused) { _, focused in
+                        if !focused { saveLabel() }
+                    }
+                    .onChange(of: preferences.accountPreferences.label(for: id)) { _, stored in
+                        label = stored ?? ""
+                    }
+                    .onChange(of: id) { _, _ in
+                        label = preferences.accountPreferences.label(for: id) ?? ""
+                    }
                 Button("クリア") {
                     label = ""
-                    preferences.setAccountLabel("", for: id)
+                    saveLabel()
                 }
                 .disabled(label.isEmpty)
             }

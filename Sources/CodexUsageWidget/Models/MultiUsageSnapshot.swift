@@ -72,6 +72,8 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
     var claudeProfileBlocks: [Int: ClaudeBlock] = [:]
     var accounts: [ProviderAccount] = []
     var claudeRemoteFailureText: String? = nil
+    /// Fetch evidence, independent of display messages such as "no configured accounts".
+    var accountInventoryComplete: Bool? = nil
 
     var claudeProfileNotices: [ClaudeProfileNotice] {
         let profiles = Set(claudeProfileBlocks.keys).union(claudeRemoteFailureText == nil ? [] : [1])

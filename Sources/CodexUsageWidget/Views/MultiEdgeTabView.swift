@@ -101,9 +101,9 @@ struct MultiEdgeTabView: View {
         store.opacityHUDPercent != nil
     }
 
-    private var displayPercent: Int {
+    var displayPercent: Int {
         store.opacityHUDPercent
-            ?? Int((visibleSnapshot.globalLowestWindow?.clampedLeftPercent ?? 0).rounded())
+            ?? Int((collapsedSnapshot.globalLowestWindow?.clampedLeftPercent ?? 0).rounded())
     }
 
     private var expandedTextColor: Color {
@@ -113,11 +113,13 @@ struct MultiEdgeTabView: View {
         return .primary.opacity(0.94)
     }
 
+    var displayTone: UsageTone { collapsedSnapshot.globalLowestWindow?.tone ?? .critical }
+
     private var tabTint: Color {
         if isShowingOpacity {
             return opacityColor
         }
-        return color(for: visibleSnapshot.globalLowestWindow?.tone ?? .critical)
+        return color(for: displayTone)
     }
 
     private var accessibilityText: String {
@@ -136,8 +138,8 @@ struct MultiEdgeTabView: View {
         return "Multi usage tab, \(providers.joined(separator: ", "))"
     }
 
-    private var visibleSnapshot: MultiUsageSnapshot {
-        MultiUsageSnapshot(sections: store.snapshot.sections.compactMap { preferences.accountPreferences.visibleSection($0) },
+    private var collapsedSnapshot: MultiUsageSnapshot {
+        MultiUsageSnapshot(sections: store.snapshot.sections.compactMap { preferences.accountPreferences.collapsedSection($0) },
                            codexSnapshot: nil, updatedAt: store.snapshot.updatedAt)
     }
 

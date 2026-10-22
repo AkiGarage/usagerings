@@ -15,11 +15,14 @@ final class MultiUsageStore: ObservableObject {
     }
 
     private let dataSource: DataSource
+    private let preferences: PanelPreferences?
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
 
-    init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil) {
+    init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
+         preferences: PanelPreferences? = nil) {
+        self.preferences = preferences
         do {
             let publisher = try UsageSnapshotPublisher(urls: snapshotURLs ?? MultiAppPaths.defaultSnapshotURLs())
             dataSource = .live(service: service, publisher: publisher)
@@ -32,6 +35,7 @@ final class MultiUsageStore: ObservableObject {
     /// A closed fixture-only path: no provider service or snapshot publisher is
     /// constructed, so demo refreshes cannot access credentials or publish data.
     init(demoSnapshot: MultiUsageSnapshot) {
+        preferences = nil
         self.snapshot = demoSnapshot
         dataSource = .demo(snapshot: demoSnapshot)
     }
@@ -94,6 +98,7 @@ final class MultiUsageStore: ObservableObject {
 
     private func apply(_ snapshot: MultiUsageSnapshot) {
         isRefreshing = false
+        preferences?.reconcileAccounts(in: snapshot)
         self.snapshot = snapshot
         expiryTask?.cancel()
         expiryTask = nil

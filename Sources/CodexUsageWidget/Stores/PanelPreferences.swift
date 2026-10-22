@@ -74,11 +74,13 @@ final class PanelPreferences: ObservableObject {
     }
     static let accountPreferencesKey = "multiAccountPreferencesV1"
     static let accountPreferencesBackupKey = "multiAccountPreferencesV1Backup"
+    static let accountPreferencesArchiveKey = "multiAccountPreferencesArchiveV1"
     @Published private(set) var accountPreferences: AccountPreferences
     private let canSaveAccountPreferences: Bool
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        _ = AccountIdentitySalt.load(defaults: defaults)
         let stored = defaults.object(forKey: Self.zoomKey) as? Double ?? 1
         zoom = Self.clamped(stored)
         let storedBarZoom = defaults.object(forKey: Self.barZoomKey) as? Double ?? 1
@@ -116,6 +118,21 @@ final class PanelPreferences: ObservableObject {
 
     func setPrimaryAccount(_ id: AccountID?, for provider: ProviderID) {
         accountPreferences.setPrimary(id, for: provider)
+        saveAccounts()
+    }
+
+    func reconcileAccounts(in snapshot: MultiUsageSnapshot, now: Date = Date()) {
+        guard canSaveAccountPreferences else { return }
+        var updated = accountPreferences
+        let archived = updated.reconcile(snapshot, now: now, salt: AccountIdentitySalt.load(defaults: defaults))
+        guard updated != accountPreferences else { return }
+        if !archived.observations.isEmpty, let data = try? JSONEncoder().encode(archived) {
+            // Keep expired choices recoverable outside the active preferences.
+            var archive = defaults.array(forKey: Self.accountPreferencesArchiveKey) as? [Data] ?? []
+            archive.append(data)
+            defaults.set(archive, forKey: Self.accountPreferencesArchiveKey)
+        }
+        accountPreferences = updated
         saveAccounts()
     }
 

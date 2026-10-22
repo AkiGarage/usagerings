@@ -145,14 +145,17 @@ actor CLIProxyClient {
         blockedKey = nil
         blockedUntil = nil
         do {
-            let credentials = try CLIProxyParser.credentials(
+            let inventory = try CLIProxyParser.credentialInventory(
                 try await management(path: "credentials", key: key)
             )
+            let credentials = inventory.credentials
             var sections: [ProviderSection] = []
             for provider in providers {
                 var section = ProviderSection(provider: provider, windows: [], stats: [], failureText: nil)
                 let accounts = credentials.filter { $0.provider == (provider == .grok ? "xai" : provider.rawValue) && !$0.disabled }
                 if accounts.isEmpty { section.failureText = Failure.noCredentials.text }
+                // An empty successful inventory is different from an unavailable fetch.
+                section.accountInventoryComplete = inventory.isComplete
                 for (accountIndex, account) in accounts.enumerated() {
                     let statsStart = section.stats.count
                     var accountState = ProviderAccount(index: accountIndex,
@@ -163,6 +166,7 @@ actor CLIProxyClient {
                             let usage = try await cachedClaudeUsage(account, key: key, now: now)
                             windows = usage.windows
                             if let notice = usage.notice {
+                                section.accountInventoryComplete = false
                                 section.stats.append(ProviderStat(title: account.maskedEmail, valueText: notice))
                                 section.failureText = usage.rateLimited ? "Some accounts rate limited" : "Some accounts unavailable"
                                 accountState.failureText = notice
@@ -174,6 +178,7 @@ actor CLIProxyClient {
                             for period in usage.periods {
                                 section.stats.append(contentsOf: period.stats)
                                 if let notice = period.notice {
+                                    section.accountInventoryComplete = false
                                     section.stats.append(ProviderStat(title: "\(account.maskedEmail) · \(period.providerName)",
                                                                       valueText: notice))
                                     unavailablePeriods += 1
@@ -196,6 +201,7 @@ actor CLIProxyClient {
                         // Invalidate even earlier results so every CLIProxy section explains the pause.
                         throw Failure.rejected
                     } catch {
+                        section.accountInventoryComplete = false
                         let reason = (error as? Failure)?.text ?? Failure.payload.text
                         section.stats.append(ProviderStat(title: account.maskedEmail, valueText: reason))
                         section.failureText = "Some accounts unavailable"

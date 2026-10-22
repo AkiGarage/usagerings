@@ -15,7 +15,7 @@ final class MultiProviderPersona: AppPersona {
         if demoMode.isEnabled {
             store = MultiUsageStore(demoSnapshot: UsageRingsDemoFixture.snapshot())
         } else {
-            store = MultiUsageStore()
+            store = MultiUsageStore(preferences: preferences)
         }
     }
 

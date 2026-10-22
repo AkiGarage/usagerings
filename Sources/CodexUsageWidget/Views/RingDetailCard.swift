@@ -530,6 +530,7 @@ final class RingDetailCardController {
             }
             .store(in: &cancellables)
         preferences.$accountPreferences
+            .removeDuplicates { $0.hasSameDisplayChoices(as: $1) }
             .dropFirst()
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.hide(immediately: true) }
