@@ -154,6 +154,8 @@ actor CLIProxyClient {
                 let accounts = credentials.filter { $0.provider == (provider == .grok ? "xai" : provider.rawValue) && !$0.disabled }
                 if accounts.isEmpty { section.failureText = Failure.noCredentials.text }
                 for (accountIndex, account) in accounts.enumerated() {
+                    let statsStart = section.stats.count
+                    var accountState = ProviderAccount(index: accountIndex)
                     do {
                         let windows: [UsageLimit]
                         if provider == .claude {
@@ -177,6 +179,7 @@ actor CLIProxyClient {
                             }
                             if !usage.periods.isEmpty, unavailablePeriods == usage.periods.count {
                                 section.failureText = "Some accounts unavailable"
+                                accountState.failureText = "Usage unavailable"
                             }
                         } else {
                             windows = try await quota(account, provider: provider, key: key, now: now)
@@ -194,6 +197,13 @@ actor CLIProxyClient {
                         let reason = (error as? Failure)?.text ?? Failure.payload.text
                         section.stats.append(ProviderStat(title: account.maskedEmail, valueText: reason))
                         section.failureText = "Some accounts unavailable"
+                        accountState.failureText = reason
+                    }
+                    if provider == .grok {
+                        section.accounts.append(accountState)
+                        for index in statsStart..<section.stats.count {
+                            section.stats[index].accountIndex = accountIndex
+                        }
                     }
                 }
                 sections.append(section)
@@ -208,7 +218,8 @@ actor CLIProxyClient {
                     return window
                 }
                 safe.stats = section.stats.map {
-                    ProviderStat(title: $0.title.replacingOccurrences(of: key, with: "[redacted]"), valueText: $0.valueText)
+                    ProviderStat(title: $0.title.replacingOccurrences(of: key, with: "[redacted]"),
+                                 valueText: $0.valueText, accountIndex: $0.accountIndex)
                 }
                 return safe
             }

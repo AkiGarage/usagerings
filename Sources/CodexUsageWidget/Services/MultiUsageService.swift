@@ -99,6 +99,12 @@ struct MultiUsageService: Sendable {
             if result.timedOut {
                 throw ProviderFailure.timedOut
             }
+            if provider == .codex, result.terminationStatus != 0,
+               let partial = try? codexResult(from: result.stdout, now: now, timeZone: timeZone, calendar: calendar),
+               partial.section.accounts.count > 1, !partial.section.windows.isEmpty,
+               partial.section.accounts.contains(where: { $0.failureText != nil }) {
+                return partial
+            }
             guard result.terminationStatus == 0 else {
                 throw CodexUsageError.commandFailure(
                     exitCode: result.terminationStatus,
@@ -133,7 +139,8 @@ struct MultiUsageService: Sendable {
     }
 
     private func run(_ provider: ProviderID) async throws -> CodexUsageService.CommandResult {
-        let arguments = ["usage", "--provider", provider.rawValue, "--format", "json"]
+        var arguments = ["usage", "--provider", provider.rawValue, "--format", "json"]
+        if provider == .codex { arguments.append("--all-accounts") }
         if let commandRunner {
             return try commandRunner(arguments)
         }
@@ -166,6 +173,48 @@ struct MultiUsageService: Sendable {
     }
 
     private func codexResult(
+        from data: Data,
+        now: Date,
+        timeZone: TimeZone,
+        calendar: Calendar
+    ) throws -> ProviderResult {
+        guard let entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw CodexUsageError.invalidJSON
+        }
+        let accounts = entries.filter { $0["provider"] as? String == "codex" }
+        guard accounts.count > 1 else {
+            return try codexAccountResult(from: data, now: now, timeZone: timeZone, calendar: calendar)
+        }
+        var section = ProviderSection(provider: .codex, windows: [], stats: [], failureText: nil)
+        var primarySnapshot: UsageSnapshot?
+        for (index, entry) in accounts.enumerated() {
+            do {
+                let data = try JSONSerialization.data(withJSONObject: [entry])
+                let result = try codexAccountResult(from: data, now: now, timeZone: timeZone, calendar: calendar)
+                if index == 0 {
+                    primarySnapshot = result.codexSnapshot
+                    section.codexExtras = result.section.codexExtras
+                }
+                section.accounts.append(ProviderAccount(index: index, codexExtras: result.section.codexExtras))
+                section.windows += result.section.windows.map { window in
+                    var window = window
+                    window.accountIndex = index
+                    return window
+                }
+                section.stats += result.section.stats.map { stat in
+                    var stat = stat
+                    stat.accountIndex = index
+                    return stat
+                }
+            } catch {
+                section.accounts.append(ProviderAccount(index: index, failureText: Self.failureText(for: error)))
+                section.failureText = "Some accounts unavailable"
+            }
+        }
+        return ProviderResult(provider: .codex, section: section, codexSnapshot: primarySnapshot)
+    }
+
+    private func codexAccountResult(
         from data: Data,
         now: Date,
         timeZone: TimeZone,

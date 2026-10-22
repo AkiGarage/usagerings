@@ -2,8 +2,8 @@ import SwiftUI
 
 /// One row per service (G1): open-bottom gauge (outer = 5h, inner = weekly) plus labelled values.
 struct ServiceRowModel: Identifiable {
-    let id: String
-    let name: String
+    var id: String
+    var name: String
     let color: Color
     var five: UsageLimit?
     var week: UsageLimit?
@@ -89,6 +89,16 @@ struct ServiceRowModel: Identifiable {
 
     static func rows(for section: ProviderSection, showAccounts: Bool = false) -> [Self] {
         let provider = section.provider
+        if (provider == .codex || provider == .grok), section.accountIndices.count > 1 {
+            return section.accountIndices.flatMap { index in
+                rows(for: section.forAccount(index), showAccounts: showAccounts).map { row in
+                    var row = row
+                    row.id = "\(provider.rawValue)-\(index)"
+                    row.name = "\(provider.displayName) \(ProviderSection.accountSuffix(index))"
+                    return row
+                }
+            }
+        }
         // Group key: Claude per account, Antigravity per quota group, others one row.
         func key(_ limit: UsageLimit) -> String {
             switch provider {

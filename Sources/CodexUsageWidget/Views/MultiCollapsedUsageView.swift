@@ -82,10 +82,24 @@ struct CollapsedUsageBar: Identifiable {
         }
         // Order (left to right) matches the window (top to bottom):
         // Codex, Claude 5h, Grok, GLM 5h, Antigravity.
-        let codexWindows = windows(.codex)
-        let codexExtras = snapshot.sections.first { $0.provider == .codex }?.codexExtras
-        var bars = [Self(id: "codex", label: "C", title: "Codex", providerColor: codexColor,
-                         limit: lowest(codexWindows), windows: codexWindows, codexExtras: codexExtras)]
+        func accountBars(_ provider: ProviderID, label: String, color: Color) -> [Self] {
+            let section = snapshot.sections.first { $0.provider == provider }
+                ?? ProviderSection(provider: provider, windows: [], stats: [], failureText: nil)
+            guard section.accountIndices.count > 1 else {
+                return [Self(id: provider.rawValue, label: label, title: provider.displayName,
+                             providerColor: color, limit: lowest(section.windows), windows: section.windows,
+                             codexExtras: section.codexExtras)]
+            }
+            return section.accountIndices.map { index in
+                let account = section.forAccount(index)
+                let suffix = ProviderSection.accountSuffix(index)
+                return Self(id: "\(provider.rawValue)-\(index)", label: suffix,
+                            title: "\(provider.displayName) \(suffix)", providerColor: color,
+                            limit: lowest(account.windows), windows: account.windows,
+                            codexExtras: account.codexExtras)
+            }
+        }
+        var bars = accountBars(.codex, label: "C", color: codexColor)
         let claude = windows(.claude)
         let blocks = snapshot.sections.first { $0.provider == .claude }?.claudeBlocks ?? [:]
         let accountCount = max(2, (claude.compactMap(\.accountIndex).max() ?? 0) + 1)
@@ -99,9 +113,7 @@ struct CollapsedUsageBar: Identifiable {
                              block: preview ? Self.previewBlock : blocks[index],
                              blockedSymbolName: preview && blockedPreview == "pause" ? Self.blockedPauseSymbol : Self.blockedSymbol))
         }
-        let grokWindows = windows(.grok)
-        bars.append(Self(id: "grok", label: "X", title: "Grok", providerColor: grokColor,
-                         limit: lowest(grokWindows), windows: grokWindows))
+        bars += accountBars(.grok, label: "X", color: grokColor)
         let zaiWindows = windows(.zai)
         bars.append(Self(id: "zai", label: "Z", title: "GLM 5h", providerColor: glmColor,
                          limit: fiveHour(zaiWindows), windows: zaiWindows,
@@ -240,7 +252,7 @@ struct MultiCollapsedUsageView: View {
     /// Inner arc source: the weekly window of the same service, only when the outer arc is 5h.
     static func weekly(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> ServiceRowModel? {
         let key: String
-        if bar.id.hasPrefix("claude-") { key = bar.id }
+        if bar.id.hasPrefix("claude-") || bar.id.hasPrefix("codex-") || bar.id.hasPrefix("grok-") { key = bar.id }
         else if bar.id.hasPrefix("antigravity-") { key = "antigravity-" + String(bar.id.dropFirst(12)) }
         else { key = bar.id + "-main" }
         if bar.id.hasPrefix("antigravity-") {
@@ -294,7 +306,7 @@ struct UsageRing<Label: View>: View {
         let fraction = (bar.limit?.clampedLeftPercent ?? 0) / 100
         let dark = colorScheme == .dark
         let base = bar.fillColor
-        let isGrok = bar.id == "grok"
+        let isGrok = bar.id == "grok" || bar.id.hasPrefix("grok-")
         let track = isGrok ? Color.primary.opacity(dark ? 0.16 : 0.12) : bar.providerColor.opacity(dark ? 0.22 : 0.18)
         let gradient = AngularGradient(colors: [base.lighter(dark ? 0.30 : 0.22), base],
                                        center: .center, startAngle: .degrees(0),
@@ -355,7 +367,7 @@ struct TabG1Gauge: View {
         let innerW = max(1.4, diameter * 0.08)
         let gap = max(0.7, diameter * 0.045)
         let showInner = weekly != nil && diameter >= 18
-        let isGrok = bar.id == "grok"
+        let isGrok = bar.id == "grok" || bar.id.hasPrefix("grok-")
         let track = blocked ? Color.secondary.opacity(0.45) : isGrok ? Color.primary.opacity(dark ? 0.16 : 0.12) : bar.providerColor.opacity(dark ? 0.24 : 0.20)
         let showGapText = weekly != nil && diameter >= 12
         let primaryText = outer.map { "\($0.percentInt)" } ?? "?"

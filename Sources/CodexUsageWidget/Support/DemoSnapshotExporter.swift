@@ -90,10 +90,12 @@ enum DemoSnapshotExporter {
 
         let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
         let cardFiles: [(String, String)] = [
-            ("hover-codex.png", "codex"),
+            ("hover-codex.png", "codex-0"),
+            ("hover-codex-1.png", "codex-1"),
             ("hover-claude-0.png", "claude-0"),
             ("hover-claude-1.png", "claude-1"),
-            ("hover-grok.png", "grok"),
+            ("hover-grok.png", "grok-0"),
+            ("hover-grok-1.png", "grok-1"),
             ("hover-zai.png", "zai"),
             ("hover-antigravity-argon.png", "antigravity-Gemini 4 Argon"),
             ("hover-antigravity-gemini-models.png", "antigravity-Gemini Models"),

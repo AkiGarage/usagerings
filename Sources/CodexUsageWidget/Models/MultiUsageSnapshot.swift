@@ -30,6 +30,14 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
 struct ProviderStat: Equatable, Codable, Sendable {
     let title: String
     let valueText: String
+    var accountIndex: Int? = nil
+}
+
+/// Keeps accounts with missing quota visible without using masked labels as identity.
+struct ProviderAccount: Equatable, Sendable {
+    let index: Int
+    var failureText: String? = nil
+    var codexExtras: CodexExtrasParser.Extras? = nil
 }
 
 struct ProviderSection: Equatable, Sendable, Identifiable {
@@ -42,8 +50,29 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
     var codexExtras: CodexExtrasParser.Extras? = nil
     var zaiResetTickets: ZaiResetTickets? = nil
     var claudeBlocks: [Int: ClaudeBlock] = [:]
+    var accounts: [ProviderAccount] = []
 
     var id: String { provider.id }
+
+    var accountIndices: [Int] {
+        Set(accounts.map(\.index) + windows.compactMap(\.accountIndex)
+            + stats.compactMap(\.accountIndex)).sorted()
+    }
+
+    func forAccount(_ index: Int) -> Self {
+        var section = self
+        section.windows = windows.filter { ($0.accountIndex ?? 0) == index }
+        section.stats = stats.filter { ($0.accountIndex ?? 0) == index }
+        let account = accounts.first { $0.index == index }
+        section.failureText = account?.failureText
+        section.codexExtras = account?.codexExtras ?? (index == 0 ? codexExtras : nil)
+        section.accounts = []
+        return section
+    }
+
+    static func accountSuffix(_ index: Int) -> String {
+        index < 26 && index >= 0 ? String(UnicodeScalar(65 + index)!) : String(index + 1)
+    }
 
     var lowestLeftWindow: UsageLimit? {
         windows.min { $0.clampedLeftPercent < $1.clampedLeftPercent }

@@ -58,7 +58,10 @@ enum UsageRingsDemoFixture {
 
         let sections = [
             ProviderSection(provider: .codex,
-                            windows: [limit("Session", 76, resetIn: 2.4), limit("Weekly", 49, resetIn: 94)],
+                            windows: [accountLimit("Session", 76, resetIn: 2.4, account: 0),
+                                      accountLimit("Weekly", 49, resetIn: 94, account: 0),
+                                      accountLimit("Session", 61, resetIn: 1.2, account: 1),
+                                      accountLimit("Weekly", 83, resetIn: 116, account: 1)],
                             stats: [ProviderStat(title: "Credits", valueText: "1,284 credits"),
                                     ProviderStat(title: "Reset tickets", valueText: "2 available")]
                                 + codexExtras.ticketExpiries.map {
@@ -66,7 +69,9 @@ enum UsageRingsDemoFixture {
                                                  valueText: ISO8601DateFormatter().string(from: $0))
                                 },
                             failureText: nil,
-                            codexExtras: codexExtras),
+                            codexExtras: codexExtras,
+                            accounts: [ProviderAccount(index: 0, codexExtras: codexExtras),
+                                       ProviderAccount(index: 1)]),
             ProviderSection(provider: .claude,
                             windows: [accountLimit("5h", 28, resetIn: 3, account: 0),
                                       accountLimit("Weekly", 58, resetIn: 86, account: 0),
@@ -77,7 +82,8 @@ enum UsageRingsDemoFixture {
                                                           resetAt: now.addingTimeInterval(2 * 3_600),
                                                           timeZoneKnown: true)]),
             ProviderSection(provider: .grok,
-                            windows: [limit("Weekly", 68, resetIn: 120)],
+                            windows: [accountLimit("Weekly", 68, resetIn: 120, account: 0),
+                                      accountLimit("Weekly", 41, resetIn: 96, account: 1)],
                             stats: [], failureText: nil),
             ProviderSection(provider: .zai,
                             windows: [limit("5h", 82, resetIn: 2.8), limit("Weekly", 64, resetIn: 112)],

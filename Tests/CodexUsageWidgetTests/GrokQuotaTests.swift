@@ -116,9 +116,9 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertEqual(section.stats, [])
 
         let bars = CollapsedUsageBar.bars(for: MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: clock.read()))
-        let grok = try XCTUnwrap(bars.first { $0.id == "grok" })
-        XCTAssertEqual(grok.label, "X")
-        XCTAssertTrue(grok.isWarning)
+        let grok = bars.filter { $0.id.hasPrefix("grok-") }
+        XCTAssertEqual(grok.map(\.label), ["A", "B"])
+        XCTAssertTrue(grok.allSatisfy(\.isWarning))
     }
 
     func testMinimumIntervalConcurrentRefreshAndPerAccountRetryAfter() async throws {

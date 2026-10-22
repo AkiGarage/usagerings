@@ -158,7 +158,7 @@ struct RingDetailCardModel: Equatable {
 
     static func make(bar: CollapsedUsageBar, now: Date, sourceTimeZone: TimeZone = .current) -> RingDetailCardModel? {
         let rows = bar.windows.map { Row(label: RingCardLabel.label(for: $0.title), leftPercent: $0.clampedLeftPercent) }
-        let codexExtras = bar.id == "codex" ? bar.codexExtras : nil
+        let codexExtras = bar.id == "codex" || bar.id.hasPrefix("codex-") ? bar.codexExtras : nil
         let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now)
         let hasExtras = codexExtras?.creditsText != nil || codexExtras?.availableCount != nil || !tickets.isEmpty
         var extras = hasExtras
