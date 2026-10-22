@@ -424,7 +424,7 @@ struct ClaudeChoiceLine: View {
 
     var title: String {
         let name = selected.count == 1 && selected == selected.lowercased() ? "claude-\(selected)" : "Claude \(selected)"
-        return decision.state == .allLimited ? "Claudeの切り替え：\(name)を待機" : "Claudeの切り替え：いまは\(name)"
+        return decision.state == .allLimited ? "Claudeは両方制限中：いまはCodexを使用（次は\(name)）" : "Claudeの切り替え：いまは\(name)"
     }
 
     var body: some View {

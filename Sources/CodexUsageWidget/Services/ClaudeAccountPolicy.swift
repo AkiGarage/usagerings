@@ -134,7 +134,7 @@ enum ClaudeAccountPolicy {
         }
         let soonest = accounts.min { clearsAt($0) < clearsAt($1) }!
         let at = clearsAt(soonest)
-        let reason = "すべて制限中です。先に解除される\(name(soonest.key))を待ちます" + (at == .distantFuture ? "（解除時刻は不明）" : "（\(time(at))）")
+        let reason = "Claudeはどちらも制限中のため、いまはCodexを使ってください。先に解除されるのは\(name(soonest.key))です" + (at == .distantFuture ? "（解除時刻は不明）" : "（\(time(at))に解除→\(name(soonest.key))に戻します）")
         return Decision(selected: soonest.key, preferred: pref, state: .allLimited, reason: reason,
                         fiveLimited: fiveMemory, order: order(soonest.key))
     }

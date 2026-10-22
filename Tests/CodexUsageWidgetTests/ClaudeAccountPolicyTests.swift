@@ -61,8 +61,8 @@ final class ClaudeAccountPolicyTests: XCTestCase {
     // T5: both at 5h → all limited, wait for the soonest clear
     func testBothFiveHourLimitedWaitsForSoonest() {
         let d = P.decide([acct("a", five: 0, fiveReset: 3, weekReset: 20), acct("b", five: 0, fiveReset: 1, weekReset: 100)], previous: nil, now: now)
-        XCTAssertEqual(d.state, .allLimited); XCTAssertEqual(d.selected, "b")
-        XCTAssertTrue(d.reason.contains("すべて制限中"))
+        XCTAssertEqual(d.state, .allLimited); XCTAssertEqual(d.selected, "b"); XCTAssertTrue(d.reason.contains("Codex"))
+        XCTAssertTrue(d.reason.contains("どちらも制限中"))
     }
 
     // T6: weekly exhausted account is never preferred
