@@ -176,7 +176,18 @@ struct MultiUsageService: Sendable {
             return try commandRunner(arguments)
         }
         let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath))
-        return try await runner.run(arguments)
+        let result = try await runner.run(arguments)
+        // A single API-key setup (e.g. GLM/zai) has no token accounts; --all-accounts then
+        // returns only an error. Fall back to the plain single-account query.
+        if provider != .codex, Self.isNoTokenAccounts(result.stdout) {
+            return try await runner.run(Array(arguments.dropLast()))
+        }
+        return result
+    }
+
+    static func isNoTokenAccounts(_ stdout: Data) -> Bool {
+        guard let rows = try? JSONSerialization.jsonObject(with: stdout) as? [[String: Any]], !rows.isEmpty else { return false }
+        return rows.allSatisfy { (($0["error"] as? [String: Any])?["message"] as? String)?.hasPrefix("No token accounts configured") == true }
     }
 
     /// Codex windows come from the contract parser; credits and tickets are

@@ -71,6 +71,14 @@ struct CollapsedUsageBar: Identifiable {
             ? NSColor(white: 0.88, alpha: 1) : NSColor(white: 0.18, alpha: 1)
     })
 
+    /// Lock a Claude account ring when its own quota window is exhausted (0% left, reset still ahead).
+    static func quotaBlock(_ windows: [UsageLimit], now: Date) -> ClaudeBlock? {
+        let exhausted = windows.filter { $0.leftPercent <= 0 && ($0.resetAt ?? .distantPast) > now }
+        guard let window = exhausted.max(by: { $0.resetAt! < $1.resetAt! }) else { return nil }
+        let kind: ClaudeBlock.Kind = ServiceRowModel.kind(window.title) == .week ? .weekly : .session
+        return ClaudeBlock(kind: kind, resetAt: window.resetAt!, timeZoneKnown: true)
+    }
+
     static func bars(for snapshot: MultiUsageSnapshot,
                      blockedPreview: String? = ProcessInfo.processInfo.environment["MULTIUSAGE_PREVIEW_BLOCKED"],
                      splitAntigravityAccounts: Bool = false,
@@ -124,15 +132,17 @@ struct CollapsedUsageBar: Identifiable {
             bars.append(Self(id: "claude-\(index)", label: label, title: "Claude \(label) 5h",
                              providerColor: index == 0 ? claudeAColor : claudeBColor,
                              limit: fiveHour(accountWindows), windows: accountWindows,
-                             block: preview ? Self.previewBlock : nil,
+                             block: preview ? Self.previewBlock : Self.quotaBlock(accountWindows, now: snapshot.updatedAt),
                              blockedSymbolName: preview && blockedPreview == "pause" ? Self.blockedPauseSymbol : Self.blockedSymbol,
                              stats: claudeSection?.forAccount(index).stats ?? [],
                              failureText: claudeSection?.forAccount(index).failureText,
                              provider: .claude, accountIndex: index,
                              accountID: claudeIndices.isEmpty ? nil : claudeSection?.accountID(at: index)))
         }
+        let quotaLocked = bars.contains { $0.provider == .claude && $0.isBlocked }
         for notice in claudeSection?.claudeProfileNotices ?? [] {
-            let block = notice.block.flatMap { $0.isActive(at: snapshot.updatedAt) ? $0 : nil }
+            // A quota ring already shows the lock; don't add a second, unlabeled one.
+            let block = notice.block.flatMap { $0.isActive(at: snapshot.updatedAt) && !quotaLocked ? $0 : nil }
             guard block != nil || notice.failureText != nil else { continue }
             bars.append(Self(id: notice.id, label: "!", title: notice.name,
                              providerColor: claudeBColor, limit: nil, block: block,
