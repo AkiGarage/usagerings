@@ -27,6 +27,16 @@ enum CodexUsageWidgetApp {
             LegacySettingsMigration.runIfNeeded(bundleIdentifier: Bundle.main.bundleIdentifier)
         }
 
+        if mode.isEnabled, let specPath = DemoDummy8Exporter.specPath() {
+            do {
+                for file in try DemoDummy8Exporter.run(specPath: specPath) { print(file) }
+                return
+            } catch {
+                FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+                exit(EXIT_FAILURE)
+            }
+        }
+
         if let exportDirectory = options.exportDirectory {
             do {
                 let files = try DemoSnapshotExporter.export(to: exportDirectory, mode: mode)

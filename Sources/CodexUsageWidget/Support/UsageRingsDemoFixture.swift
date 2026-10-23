@@ -10,6 +10,21 @@ enum UsageRingsDemoFixture {
         "antigravity-Gemini Models"
     ]
 
+    /// Display order of the eight dummy rings (used by the demo-only ring-count option).
+    static let dummy8RingOrder: [String] = [
+        "codex", "claude-0", "claude-1", "grok", "zai", "kimi", "deepseek",
+        "antigravity-Gemini Models"
+    ]
+
+    /// Demo-only: `--demo-ring-count N` shows the first N dummy rings (recording "grow" states).
+    static func dummy8VisibleRingIDs(arguments: [String] = CommandLine.arguments) -> Set<String> {
+        guard let index = arguments.firstIndex(of: "--demo-ring-count"), index + 1 < arguments.count,
+              let count = Int(arguments[index + 1]), (1...dummy8RingOrder.count).contains(count) else {
+            return dummy8RingIDs
+        }
+        return Set(dummy8RingOrder.prefix(count))
+    }
+
     static func snapshot(now: Date = Date()) -> MultiUsageSnapshot {
         let timeZone = RingResetFormat.tokyo
 
@@ -170,7 +185,7 @@ enum UsageRingsDemoFixture {
                                           weekly: limit("Weekly", 49, resetIn: 94), updatedAt: now)
         return MultiUsageSnapshot(sections: [codex, claude, grok, zai, kimi, deepseek, antigravity],
                                   codexSnapshot: codexSnapshot, updatedAt: now,
-                                  visibleRingIDs: dummy8RingIDs)
+                                  visibleRingIDs: dummy8VisibleRingIDs())
     }
 
     /// Updates only Claude A's model value, holds at 9%, then reaches its real exhausted state.
