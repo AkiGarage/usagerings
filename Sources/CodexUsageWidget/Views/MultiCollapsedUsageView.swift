@@ -139,9 +139,10 @@ struct CollapsedUsageBar: Identifiable {
                              provider: .claude, accountIndex: index,
                              accountID: claudeIndices.isEmpty ? nil : claudeSection?.accountID(at: index)))
         }
-        let quotaLocked = bars.contains { $0.provider == .claude && $0.isBlocked }
+        let lockedProfiles = Set(bars.filter { $0.provider == .claude && $0.isBlocked }.compactMap(\.accountIndex))
         for notice in claudeSection?.claudeProfileNotices ?? [] {
-            // A quota ring already shows the lock; don't add a second, unlabeled one.
+            // That account's quota ring already shows the lock; don't add a second, unlabeled one.
+            let quotaLocked = lockedProfiles.contains(notice.profile)
             let block = notice.block.flatMap { $0.isActive(at: snapshot.updatedAt) && !quotaLocked ? $0 : nil }
             guard block != nil || notice.failureText != nil else { continue }
             bars.append(Self(id: notice.id, label: "!", title: notice.name,
