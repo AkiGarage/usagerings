@@ -3,6 +3,13 @@ import Foundation
 /// Fictional, stable quota values that exercise every UsageRings provider UI.
 /// Deadlines are based on one captured `now`, so refreshes keep the same data.
 enum UsageRingsDemoFixture {
+    static let shrinkDuration: TimeInterval = 8
+    static let shrinkLimitAt: TimeInterval = 8.45
+    static let dummy8RingIDs: Set<String> = [
+        "codex", "claude-0", "claude-1", "grok", "zai", "kimi", "deepseek",
+        "antigravity-Gemini Models"
+    ]
+
     static func snapshot(now: Date = Date()) -> MultiUsageSnapshot {
         let timeZone = RingResetFormat.tokyo
 
@@ -115,6 +122,81 @@ enum UsageRingsDemoFixture {
         ]
 
         return MultiUsageSnapshot(sections: sections, codexSnapshot: codexSnapshot, updatedAt: now)
+    }
+
+    /// Eight actual collapsed rings for a safe recording fixture; no provider clients are involved.
+    static func dummy8Snapshot(now: Date = Date()) -> MultiUsageSnapshot {
+        let timeZone = RingResetFormat.tokyo
+        func limit(_ title: String, _ percent: Double, resetIn hours: Double) -> UsageLimit {
+            let resetAt = now.addingTimeInterval(hours * 3_600)
+            var value = UsageLimit(title: title, leftPercent: percent,
+                                   resetText: UsageDurationFormat.resetText(for: resetAt, now: now, timeZone: timeZone))
+            value.resetAt = resetAt
+            return value
+        }
+        func accountLimit(_ title: String, _ percent: Double, resetIn hours: Double,
+                          account: Int) -> UsageLimit {
+            var value = limit(title, percent, resetIn: hours)
+            value.accountIndex = account
+            return value
+        }
+
+        let codex = ProviderSection(provider: .codex,
+                                    windows: [accountLimit("Session", 76, resetIn: 2.4, account: 0),
+                                              accountLimit("Weekly", 49, resetIn: 94, account: 0)],
+                                    stats: [], failureText: nil)
+        let claude = ProviderSection(provider: .claude,
+                                     windows: [accountLimit("5h", 62, resetIn: 3, account: 0),
+                                               accountLimit("Weekly", 58, resetIn: 86, account: 0),
+                                               accountLimit("5h", 0, resetIn: 2, account: 1),
+                                               accountLimit("Weekly", 34, resetIn: 69, account: 1)],
+                                     stats: [], failureText: nil)
+        let grok = ProviderSection(provider: .grok,
+                                   windows: [accountLimit("Weekly", 68, resetIn: 120, account: 0)],
+                                   stats: [], failureText: nil)
+        let zai = ProviderSection(provider: .zai,
+                                  windows: [limit("5h", 82, resetIn: 2.8), limit("Weekly", 64, resetIn: 112)],
+                                  stats: [], failureText: nil)
+        let kimi = ProviderSection(provider: .kimi,
+                                   windows: [limit("Weekly", 56, resetIn: 89)], stats: [], failureText: nil)
+        let deepseek = ProviderSection(provider: .deepseek, windows: [limit("Weekly", 74, resetIn: 24)],
+                                       stats: [ProviderStat(title: "Balance", valueText: "$23.50")],
+                                       failureText: nil)
+        let antigravity = ProviderSection(provider: .antigravity,
+                                          windows: [accountLimit("Gemini Models · 5h", 72, resetIn: 4, account: 0),
+                                                    accountLimit("Gemini Models · Weekly", 53, resetIn: 102, account: 0)],
+                                          stats: [], failureText: nil)
+        let codexSnapshot = UsageSnapshot(session: limit("Session", 76, resetIn: 2.4),
+                                          weekly: limit("Weekly", 49, resetIn: 94), updatedAt: now)
+        return MultiUsageSnapshot(sections: [codex, claude, grok, zai, kimi, deepseek, antigravity],
+                                  codexSnapshot: codexSnapshot, updatedAt: now,
+                                  visibleRingIDs: dummy8RingIDs)
+    }
+
+    /// Updates only Claude A's model value, holds at 9%, then reaches its real exhausted state.
+    static func shrunkDummy8Snapshot(base: MultiUsageSnapshot, elapsed: TimeInterval,
+                                     now: Date = Date()) -> MultiUsageSnapshot {
+        let progress = min(max(elapsed / shrinkDuration, 0), 1)
+        let percent = elapsed >= shrinkLimitAt ? 0 : 62 + (9 - 62) * progress
+        let sections = base.sections.map { section -> ProviderSection in
+            guard section.provider == .claude else { return section }
+            var updated = section
+            updated.windows = section.windows.map { window in
+                guard window.accountIndex == 0, ServiceRowModel.kind(window.title) == .five else { return window }
+                var value = UsageLimit(title: window.title, leftPercent: percent,
+                                       resetText: window.resetAt.map {
+                                        UsageDurationFormat.resetText(for: $0, now: now, timeZone: RingResetFormat.tokyo)
+                                       } ?? window.resetText,
+                                       detailText: window.detailText, projectionText: window.projectionText,
+                                       markerPercent: window.markerPercent)
+                value.accountIndex = window.accountIndex
+                value.resetAt = window.resetAt
+                return value
+            }
+            return updated
+        }
+        return MultiUsageSnapshot(sections: sections, codexSnapshot: base.codexSnapshot, updatedAt: now,
+                                  hiddenProviders: base.hiddenProviders, visibleRingIDs: base.visibleRingIDs)
     }
 
     /// Keep Antigravity's provider-specific group in the card title while the

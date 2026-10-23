@@ -17,12 +17,75 @@ final class DemoModeTests: XCTestCase {
             UsageRingsLaunchOptions(demoEnabled: true, showcase: true, exportDirectory: nil)
         )
         XCTAssertEqual(
+            try UsageRingsLaunchOptions.parse(arguments: ["UsageRings", "--demo-dummy8"], environment: [:]),
+            UsageRingsLaunchOptions(demoEnabled: true, showcase: false, exportDirectory: nil, dummy8: true)
+        )
+        XCTAssertEqual(
+            try UsageRingsLaunchOptions.parse(arguments: ["UsageRings", "--demo-shrink"], environment: [:]),
+            UsageRingsLaunchOptions(demoEnabled: true, showcase: false, exportDirectory: nil,
+                                    dummy8: true, shrinkDemo: true)
+        )
+        XCTAssertEqual(
+            try UsageRingsLaunchOptions.parse(arguments: ["UsageRings", "--demo-shrink-delay", "3"], environment: [:]),
+            UsageRingsLaunchOptions(demoEnabled: true, showcase: false, exportDirectory: nil,
+                                    dummy8: true, shrinkDemo: true, shrinkDelay: 3)
+        )
+        XCTAssertEqual(
             try UsageRingsLaunchOptions.parse(arguments: ["UsageRings", "--demo-export", "/tmp/usagerings-demo"], environment: [:]),
             UsageRingsLaunchOptions(demoEnabled: true, showcase: false,
                                     exportDirectory: URL(fileURLWithPath: "/tmp/usagerings-demo", isDirectory: true))
         )
         XCTAssertThrowsError(try UsageRingsLaunchOptions.parse(
             arguments: ["UsageRings", "--demo-export", "relative"], environment: [:]))
+        XCTAssertThrowsError(try UsageRingsLaunchOptions.parse(
+            arguments: ["UsageRings", "--demo-shrink-delay", "-1"], environment: [:]))
+        XCTAssertThrowsError(try UsageRingsLaunchOptions.parse(
+            arguments: ["UsageRings", "--demo-shrink-delay"], environment: [:]))
+    }
+
+    func testDummy8FixtureUsesExactlyEightCollapsedRingsAndOneZeroQuotaLock() throws {
+        let now = Date()
+        let snapshot = UsageRingsDemoFixture.dummy8Snapshot(now: now)
+        let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
+
+        XCTAssertEqual(bars.map(\.id), ["codex", "claude-0", "claude-1", "grok", "zai", "kimi",
+                                         "deepseek", "antigravity-Gemini Models"])
+        XCTAssertEqual(bars.count, 8)
+        let deepseek = try XCTUnwrap(bars.first { $0.id == "deepseek" })
+        XCTAssertEqual(deepseek.limit?.leftPercent, 74)
+        XCTAssertGreaterThan(try XCTUnwrap(deepseek.limit?.resetAt), now)
+        let locked = try XCTUnwrap(bars.first { $0.id == "claude-1" })
+        XCTAssertEqual(locked.limit?.leftPercent, 0)
+        XCTAssertTrue(locked.isBlocked)
+        XCTAssertGreaterThan(try XCTUnwrap(locked.block).resetAt, now)
+        XCTAssertTrue(try XCTUnwrap(RingDetailCardModel.make(bar: locked, now: now)?.blockText).contains("復帰"))
+    }
+
+    func testShrinkTimelineShowsNinePercentThenLimitsAtZero() throws {
+        let start = Date()
+        let base = UsageRingsDemoFixture.dummy8Snapshot(now: start)
+        func claudeA(_ snapshot: MultiUsageSnapshot) throws -> CollapsedUsageBar {
+            try XCTUnwrap(CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
+                .first { $0.id == "claude-0" })
+        }
+
+        let initial = try claudeA(UsageRingsDemoFixture.shrunkDummy8Snapshot(base: base, elapsed: 0, now: start))
+        let midpoint = try claudeA(UsageRingsDemoFixture.shrunkDummy8Snapshot(
+            base: base, elapsed: 4, now: start.addingTimeInterval(4)))
+        let finished = try claudeA(UsageRingsDemoFixture.shrunkDummy8Snapshot(
+            base: base, elapsed: 8, now: start.addingTimeInterval(8)))
+        let limited = try claudeA(UsageRingsDemoFixture.shrunkDummy8Snapshot(
+            base: base, elapsed: 8.5, now: start.addingTimeInterval(8.5)))
+
+        XCTAssertEqual(initial.limit?.leftPercent, 62)
+        XCTAssertEqual(midpoint.limit?.leftPercent ?? 0, 35.5, accuracy: 0.01)
+        XCTAssertEqual(finished.limit?.leftPercent, 9)
+        XCTAssertEqual(limited.limit?.leftPercent, 0)
+        XCTAssertFalse(initial.isBlocked)
+        XCTAssertFalse(midpoint.isBlocked)
+        XCTAssertFalse(finished.isBlocked)
+        XCTAssertTrue(limited.isBlocked)
+        XCTAssertNotNil(limited.block?.resetAt)
     }
 
     func testFixtureCoversEveryProviderAndCollapsedRingDetail() throws {

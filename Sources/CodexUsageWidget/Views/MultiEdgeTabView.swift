@@ -140,7 +140,8 @@ struct MultiEdgeTabView: View {
 
     private var collapsedSnapshot: MultiUsageSnapshot {
         MultiUsageSnapshot(sections: store.snapshot.sections.compactMap { preferences.accountPreferences.collapsedSection($0) },
-                           codexSnapshot: nil, updatedAt: store.snapshot.updatedAt)
+                           codexSnapshot: nil, updatedAt: store.snapshot.updatedAt,
+                           visibleRingIDs: store.snapshot.visibleRingIDs)
     }
 
     private func color(for tone: UsageTone) -> Color {

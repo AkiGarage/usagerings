@@ -18,7 +18,7 @@ final class MultiUsageStore: ObservableObject {
 
     private enum DataSource {
         case live(service: MultiUsageService, publisher: UsageSnapshotPublisher?)
-        case demo(snapshot: MultiUsageSnapshot)
+        case demo(snapshot: MultiUsageSnapshot, shrinkTimeline: Bool, shrinkDelay: TimeInterval)
     }
 
     private let dataSource: DataSource
@@ -26,6 +26,7 @@ final class MultiUsageStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
+    private var demoTimelineTask: Task<Void, Never>?
 
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
          preferences: PanelPreferences? = nil) {
@@ -43,10 +44,11 @@ final class MultiUsageStore: ObservableObject {
 
     /// A closed fixture-only path: no provider service or snapshot publisher is
     /// constructed, so demo refreshes cannot access credentials or publish data.
-    init(demoSnapshot: MultiUsageSnapshot) {
+    init(demoSnapshot: MultiUsageSnapshot, shrinkTimeline: Bool = false, shrinkDelay: TimeInterval = 0) {
         preferences = nil
         self.snapshot = demoSnapshot
-        dataSource = .demo(snapshot: demoSnapshot)
+        dataSource = .demo(snapshot: demoSnapshot, shrinkTimeline: shrinkTimeline,
+                           shrinkDelay: max(0, shrinkDelay))
     }
 
     var snapshotPublishingIsEnabled: Bool {
@@ -56,6 +58,27 @@ final class MultiUsageStore: ObservableObject {
 
     func start() {
         refresh()
+        demoTimelineTask?.cancel()
+        if case let .demo(base, true, delay) = dataSource {
+            demoTimelineTask = Task { @MainActor [weak self] in
+                if delay > 0 {
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled else { return }
+                }
+                let startedAt = Date()
+                while !Task.isCancelled {
+                    let now = Date()
+                    let elapsed = now.timeIntervalSince(startedAt)
+                    self?.snapshot = UsageRingsDemoFixture.shrunkDummy8Snapshot(base: base,
+                                                                                elapsed: elapsed, now: now)
+                    if elapsed >= UsageRingsDemoFixture.shrinkLimitAt {
+                        self?.demoTimelineTask = nil
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(50), tolerance: .milliseconds(10))
+                }
+            }
+        }
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -73,13 +96,15 @@ final class MultiUsageStore: ObservableObject {
         opacityHUDTask = nil
         expiryTask?.cancel()
         expiryTask = nil
+        demoTimelineTask?.cancel()
+        demoTimelineTask = nil
     }
 
     func refresh() {
         guard !isRefreshing else { return }
         switch dataSource {
-        case let .demo(demoSnapshot):
-            snapshot = demoSnapshot
+        case let .demo(demoSnapshot, shrinkTimeline, _):
+            if !shrinkTimeline { snapshot = demoSnapshot }
             errorMessage = nil
             isRefreshing = false
             return
@@ -156,7 +181,7 @@ final class MultiUsageStore: ObservableObject {
         let hidden = Set(ProviderID.allCases.filter { !preferences.isProviderVisible($0) })
         return MultiUsageSnapshot(sections: snapshot.sections.filter { !hidden.contains($0.provider) },
                                   codexSnapshot: snapshot.codexSnapshot, updatedAt: snapshot.updatedAt,
-                                  hiddenProviders: hidden)
+                                  hiddenProviders: hidden, visibleRingIDs: snapshot.visibleRingIDs)
     }
 
     func updateClaudeChoice(from snapshot: MultiUsageSnapshot, now: Date) {

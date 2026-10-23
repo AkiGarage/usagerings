@@ -132,6 +132,8 @@ struct MultiUsageSnapshot: Equatable, Sendable {
     let updatedAt: Date
     /// Providers the user turned off; their rings are not drawn even as placeholders.
     var hiddenProviders: Set<ProviderID> = []
+    /// Optional demo-only selection of ring IDs for compact launch-video fixtures.
+    var visibleRingIDs: Set<String>? = nil
 
     /// Display order shared by the tablet (left to right) and the window (top to bottom).
     static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity]

@@ -10,10 +10,19 @@ final class MultiProviderPersona: AppPersona {
     var onPanelContentSizeChange: ((CGSize) -> Void)?
     var ringHoverCard: RingDetailCardController? { ringHover }
 
-    init(demoMode: DemoMode = .production) {
+    init(demoMode: DemoMode = .production, demoDummy8: Bool = false,
+         demoShrink: Bool = false, demoShrinkDelay: TimeInterval = 0) {
         preferences = PanelPreferences(defaults: demoMode.defaults)
         if demoMode.isEnabled {
-            store = MultiUsageStore(demoSnapshot: UsageRingsDemoFixture.snapshot())
+            let useDummy8 = demoDummy8 || demoShrink
+            if useDummy8 {
+                preferences.setBarZoom(2.5)
+                preferences.appearance = .dark
+                preferences.orientation = .horizontal
+            }
+            let snapshot = useDummy8 ? UsageRingsDemoFixture.dummy8Snapshot() : UsageRingsDemoFixture.snapshot()
+            store = MultiUsageStore(demoSnapshot: snapshot, shrinkTimeline: demoShrink,
+                                    shrinkDelay: demoShrinkDelay)
         } else {
             let live = MultiUsageStore(preferences: preferences)
             store = live

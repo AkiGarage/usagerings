@@ -69,6 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let defaults: UserDefaults
     private let showDemoShowcase: Bool
     private let demoHoverRing: Int?
+    private let demoDummy8: Bool
+    private let demoShrink: Bool
+    private let demoShrinkDelay: TimeInterval
     private let tabPresentation = EdgeTabPresentationState()
     private let panelOffsetStore: PanelOffsetStore
     private let tabOriginStore: TabOriginStore
@@ -90,18 +93,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @MainActor
     init(persona: (any AppPersona)? = nil, demoMode: DemoMode = .production,
-         showDemoShowcase: Bool = false, demoHoverRing: Int? = nil) {
+         showDemoShowcase: Bool = false, demoHoverRing: Int? = nil,
+         demoDummy8: Bool = false, demoShrink: Bool = false, demoShrinkDelay: TimeInterval = 0) {
         let defaults = demoMode.defaults
         self.demoMode = demoMode
         self.defaults = defaults
         self.showDemoShowcase = showDemoShowcase && demoMode.isEnabled
         self.demoHoverRing = demoMode.isEnabled ? demoHoverRing : nil
+        self.demoDummy8 = demoDummy8 && demoMode.isEnabled
+        self.demoShrink = demoShrink && demoMode.isEnabled
+        self.demoShrinkDelay = demoShrinkDelay
         panelOffsetStore = PanelOffsetStore(defaults: defaults)
         tabOriginStore = TabOriginStore(defaults: defaults)
         opacityPreferences = SurfaceOpacityPreferences(defaults: defaults)
         self.persona = persona ?? makeAppPersona(
             for: AppVariant.current(bundleIdentifier: Bundle.main.bundleIdentifier),
-            demoMode: demoMode
+            demoMode: demoMode, demoDummy8: self.demoDummy8,
+            demoShrink: self.demoShrink, demoShrinkDelay: demoShrinkDelay
         )
         super.init()
     }

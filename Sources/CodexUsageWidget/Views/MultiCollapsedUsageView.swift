@@ -207,6 +207,7 @@ struct CollapsedUsageBar: Identifiable {
             } else { bars += antigravityBars([]) }
         }
         return bars.filter { bar in
+            if let visibleRingIDs = snapshot.visibleRingIDs, !visibleRingIDs.contains(bar.id) { return false }
             if let provider = bar.provider, snapshot.hiddenProviders.contains(provider) { return false }
             guard accountPreferences.isVisible(bar.accountID) else { return false }
             guard let provider = bar.provider,

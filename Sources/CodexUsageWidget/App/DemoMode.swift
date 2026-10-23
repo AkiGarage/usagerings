@@ -4,6 +4,7 @@ import Foundation
 /// the existing defaults domain; demo mode always receives its own suite.
 enum DemoMode {
     static let preferenceSuiteName = "com.akigarage.usagerings.demo"
+    static let dummy8PreferenceSuiteName = "com.akigarage.usagerings.demo.dummy8"
 
     case production
     case demo(UserDefaults)
@@ -34,12 +35,18 @@ struct UsageRingsLaunchOptions: Equatable {
     let exportDirectory: URL?
     /// Demo-only: open the hover card for this ring index (README screenshots).
     var hoverRing: Int? = nil
+    var dummy8: Bool = false
+    var shrinkDemo: Bool = false
+    var shrinkDelay: TimeInterval = 0
 
     static func parse(arguments: [String], environment: [String: String]) throws -> Self {
         var requested = false
         var showcase = false
         var exportDirectory: URL?
         var hoverRing: Int?
+        var dummy8 = false
+        var shrinkDemo = false
+        var shrinkDelay: TimeInterval = 0
         var index = 1
         while index < arguments.count {
             switch arguments[index] {
@@ -48,6 +55,23 @@ struct UsageRingsLaunchOptions: Equatable {
             case "--demo-showcase":
                 requested = true
                 showcase = true
+            case "--demo-dummy8":
+                requested = true
+                dummy8 = true
+            case "--demo-shrink":
+                requested = true
+                dummy8 = true
+                shrinkDemo = true
+            case "--demo-shrink-delay":
+                guard index + 1 < arguments.count,
+                      let delay = Double(arguments[index + 1]), delay.isFinite, delay >= 0 else {
+                    throw DemoLaunchError.invalidShrinkDelay
+                }
+                index += 1
+                requested = true
+                dummy8 = true
+                shrinkDemo = true
+                shrinkDelay = delay
             case "--demo-hover-ring":
                 guard index + 1 < arguments.count, let ring = Int(arguments[index + 1]), ring >= 0 else {
                     throw DemoLaunchError.invalidHoverRing
@@ -69,18 +93,21 @@ struct UsageRingsLaunchOptions: Equatable {
         }
         let enabled = requested || environment["USAGERINGS_DEMO"] == "1"
         return Self(demoEnabled: enabled, showcase: showcase, exportDirectory: exportDirectory,
-                    hoverRing: hoverRing)
+                    hoverRing: hoverRing, dummy8: dummy8, shrinkDemo: shrinkDemo,
+                    shrinkDelay: shrinkDelay)
     }
 
-    func makeMode(suiteName: String = DemoMode.preferenceSuiteName) throws -> DemoMode {
+    func makeMode(suiteName: String? = nil) throws -> DemoMode {
         guard demoEnabled else { return .production }
-        return try DemoMode.isolated(suiteName: suiteName)
+        let selectedSuite = suiteName ?? (dummy8 ? DemoMode.dummy8PreferenceSuiteName : DemoMode.preferenceSuiteName)
+        return try DemoMode.isolated(suiteName: selectedSuite)
     }
 }
 
 enum DemoLaunchError: LocalizedError {
     case missingExportDirectory
     case invalidHoverRing
+    case invalidShrinkDelay
     case exportDirectoryMustBeAbsolute
     case preferencesUnavailable
     case exportRequiresDemoMode
@@ -89,6 +116,8 @@ enum DemoLaunchError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .invalidShrinkDelay:
+            "--demo-shrink-delay requires a non-negative number of seconds"
         case .invalidHoverRing:
             "--demo-hover-ring requires a non-negative ring index"
         case .missingExportDirectory:

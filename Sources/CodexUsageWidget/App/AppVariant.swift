@@ -23,9 +23,12 @@ enum AppVariant: Equatable, Sendable {
 }
 
 @MainActor
-func makeAppPersona(for variant: AppVariant, demoMode: DemoMode = .production) -> any AppPersona {
+func makeAppPersona(for variant: AppVariant, demoMode: DemoMode = .production,
+                    demoDummy8: Bool = false, demoShrink: Bool = false,
+                    demoShrinkDelay: TimeInterval = 0) -> any AppPersona {
     if demoMode.isEnabled {
-        return MultiProviderPersona(demoMode: demoMode)
+        return MultiProviderPersona(demoMode: demoMode, demoDummy8: demoDummy8,
+                                    demoShrink: demoShrink, demoShrinkDelay: demoShrinkDelay)
     }
     return switch variant {
     case .single:
