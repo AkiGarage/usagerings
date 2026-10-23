@@ -158,6 +158,17 @@ struct RingDetailCardModel: Equatable {
     var stats: [ProviderStat] = []
     var failureText: String? = nil
 
+    static func visibleStats(for bar: CollapsedUsageBar) -> [ProviderStat] {
+        switch bar.provider {
+        case .minimax, .kimi, .deepseek:
+            return bar.stats.filter {
+                !["Account", "5h", "Reset tickets updated", "Reset ticket expiry"].contains($0.title)
+            }
+        default:
+            return []
+        }
+    }
+
     static func make(bar: CollapsedUsageBar, now: Date, sourceTimeZone: TimeZone = .current) -> RingDetailCardModel? {
         func windowLabel(_ window: UsageLimit) -> String {
             if let account = window.accountIndex, bar.id.hasPrefix("antigravity-\(account)-") {
@@ -201,8 +212,9 @@ struct RingDetailCardModel: Equatable {
         let blockText = bar.block.flatMap {
             $0.isActive(at: now) ? ClaudeRateLimitParser.cardLine(block: $0, now: now) : nil
         }
+        let stats = visibleStats(for: bar)
         guard !rows.isEmpty || extras != nil || ticketFailureText != nil || blockText != nil
-            || !bar.stats.isEmpty || bar.failureText != nil else { return nil }
+            || !stats.isEmpty || bar.failureText != nil else { return nil }
         let reset = bar.limit.flatMap { limit -> (label: String, text: String)? in
             guard let date = RingResetFormat.date(fromResetText: limit.resetText, now: now,
                                                   sourceTimeZone: sourceTimeZone) else { return nil }
@@ -210,7 +222,7 @@ struct RingDetailCardModel: Equatable {
         }
         return RingDetailCardModel(title: "\(bar.ringName) の詳細",
                                    resetText: reset?.text, resetLabel: reset?.label, rows: rows, extras: extras,
-                                   ticketFailureText: ticketFailureText, blockText: blockText, stats: bar.stats,
+                                   ticketFailureText: ticketFailureText, blockText: blockText, stats: stats,
                                    failureText: bar.failureText)
     }
 

@@ -360,7 +360,8 @@ struct MultiCollapsedUsageView: View {
         let windows = [arcs.outer, arcs.inner].compactMap { $0 }
         guard !windows.isEmpty else {
             if let failure = bar.failureText { return "\(bar.ringName): \(failure)" }
-            let details = bar.stats.map { "\($0.title): \($0.valueText)" }.joined(separator: "; ")
+            let details = RingDetailCardModel.visibleStats(for: bar)
+                .map { "\($0.title): \($0.valueText)" }.joined(separator: "; ")
             return "\(bar.ringName): \(details.isEmpty ? "No data" : details)"
         }
         let values = windows.map { limit in
