@@ -18,11 +18,34 @@ struct ClaudeRemoteFetch: Sendable, Equatable {
 
 struct ClaudeRateLimitMonitor: Sendable {
     // Profile slots identify log roots, never the order of CLIProxy quota accounts.
-    static let defaultAccounts: [Int: [URL]] = [
-        0: [".claude-a/projects", ".claude/projects"],
-        1: [".claude-b/projects"]
-    ].mapValues { paths in
-        paths.map { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent($0) }
+    // The plain ~/.claude dir belongs to whichever account ~/.claude.json is
+    // signed in to (it was B on the Air), so never assume it is A.
+    static var defaultAccounts: [Int: [URL]] {
+        accounts(home: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    static func accounts(home: URL) -> [Int: [URL]] {
+        var result: [Int: [URL]] = [0: [home.appendingPathComponent(".claude-a/projects")],
+                                    1: [home.appendingPathComponent(".claude-b/projects")]]
+        if let slot = defaultDirSlot(home: home) {
+            result[slot, default: []].append(home.appendingPathComponent(".claude/projects"))
+        }
+        return result
+    }
+
+    /// Slot (0 = A, 1 = B) owning ~/.claude, by matching signed-in emails; nil when unknown.
+    static func defaultDirSlot(home: URL) -> Int? {
+        func email(_ path: String) -> String? {
+            guard let data = try? Data(contentsOf: home.appendingPathComponent(path)),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let account = json["oauthAccount"] as? [String: Any],
+                  let value = account["emailAddress"] as? String, !value.isEmpty else { return nil }
+            return value.lowercased()
+        }
+        guard let main = email(".claude.json") ?? email(".claude/.claude.json") else { return nil }
+        if main == email(".claude-a/.claude.json") { return 0 }
+        if main == email(".claude-b/.claude.json") { return 1 }
+        return nil
     }
     let accounts: [Int: [URL]]
     let remote: (any ClaudeRateLimitRemote)?
