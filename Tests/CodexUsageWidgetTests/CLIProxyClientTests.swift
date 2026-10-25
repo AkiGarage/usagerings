@@ -121,16 +121,6 @@ final class CLIProxyClientTests: XCTestCase {
         XCTAssertEqual(count, 5)
     }
 
-    func testWrapped401StopsFallbackAndLaterRefresh() async {
-        let transport = ScriptedTransport([credentials(), usage(), usage(), (CLIProxyFixtures.envelope("{}", status: 401), 200)])
-        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey())
-        let sections = await client.fetchSections()
-        _ = await client.fetchSections()
-        XCTAssertTrue(sections.allSatisfy { $0.failureText == CLIProxyClient.rejectedKeyText })
-        let count = await transport.count
-        XCTAssertEqual(count, 4)
-    }
-
     func testConcurrentRefreshesShare401Latch() async {
         let transport = ScriptedTransport([(Data(), 401)])
         let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey())

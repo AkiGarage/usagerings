@@ -115,7 +115,7 @@ actor CLIProxyClient {
     }
 
     private enum Failure: Error {
-        case rejected, request, payload, noCredentials, noQuota, missingProject
+        case rejected, request, payload, noCredentials, noQuota, missingProject, upstreamAuth
         case rateLimited(retryAfter: TimeInterval?)
         var text: String {
             switch self {
@@ -125,6 +125,7 @@ actor CLIProxyClient {
             case .noCredentials: "No enabled CLIProxyAPI credentials"
             case .noQuota: "No quota data reported"
             case .missingProject: "Antigravity project ID not available"
+            case .upstreamAuth: "取得失敗: ログアウト/認証切れ"
             case .rateLimited: "Usage rate-limited"
             }
         }
@@ -272,6 +273,9 @@ actor CLIProxyClient {
         if status == 429 {
             throw Failure.rateLimited(retryAfter: retryAfter(envelope["header"]))
         }
+        // The wrapped status is the upstream provider's answer for this account's own login.
+        // The management key was already accepted, so it must not latch the key for every section.
+        if account.provider == "claude", status == 401 || status == 403 { throw Failure.upstreamAuth }
         try checkStatus(status, key: key)
         if let string = envelope["body"] as? String { return Data(string.utf8) }
         guard let object = envelope["body"], JSONSerialization.isValidJSONObject(object) else { throw Failure.payload }
@@ -303,6 +307,11 @@ actor CLIProxyClient {
         } catch {
             cached.failure = (error as? Failure)?.text ?? Failure.payload.text
             cached.rateLimited = false
+            if case Failure.upstreamAuth? = error as? Failure {
+                // A logged-out account has no current usage; never keep showing its old numbers.
+                cached.windows = []
+                cached.fetchedAt = nil
+            }
         }
         claudeUsage[id] = cached
         return cached

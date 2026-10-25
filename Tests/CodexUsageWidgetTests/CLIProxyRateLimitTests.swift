@@ -46,6 +46,21 @@ final class CLIProxyRateLimitTests: XCTestCase {
         XCTAssertEqual(counts["c1"], 3)
     }
 
+    func testLoggedOutAccountDropsStaleWindowsAndKeepsOtherAccount() async {
+        let clock = QuotaClock()
+        let transport = QuotaTransport()
+        let client = client(transport, clock)
+        let good = await client.fetchSections()
+        XCTAssertTrue(good[0].windows.contains { $0.accountIndex == 0 })
+        clock.advance(300)
+        await transport.respond(status: 401)
+        let out = await client.fetchSections()
+        XCTAssertNotEqual(out[0].failureText, CLIProxyClient.rejectedKeyText)
+        XCTAssertFalse(out[0].windows.contains { $0.accountIndex == 0 })
+        XCTAssertTrue(out[0].windows.contains { $0.accountIndex == 1 })
+        XCTAssertEqual(out[0].stats.first?.valueText, "取得失敗: ログアウト/認証切れ")
+    }
+
     func testHTTPDateRetryAfterAndNoPreviousDataMessage() async {
         let clock = QuotaClock()
         let transport = QuotaTransport()
