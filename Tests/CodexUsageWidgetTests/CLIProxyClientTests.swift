@@ -41,11 +41,95 @@ final class CLIProxyClientTests: XCTestCase {
 
     func testMissingKeyDoesNotMakeAnyRequest() async {
         let transport = ScriptedTransport([])
-        let client = CLIProxyClient(transport: transport, keyProvider: MutableKey(nil))
+        let client = CLIProxyClient(transport: transport, keyProvider: MutableKey(nil), peerVerifier: FixtureCLIProxyPeerVerifier())
         let sections = await client.fetchSections()
         XCTAssertEqual(sections.map(\.failureText), Array(repeating: CLIProxyClient.missingKeyText, count: 3))
         let count = await transport.count
         XCTAssertEqual(count, 0)
+    }
+
+    func testUnverifiedPeerDoesNotReadKeyOrSendAndShowsRowErrors() async {
+        let transport = ScriptedTransport([])
+        let key = MutableKey(UUID().uuidString)
+        let client = CLIProxyClient(transport: transport, keyProvider: key,
+                                    peerVerifier: FixtureCLIProxyPeerVerifier(trusted: false))
+        let sections = await client.fetchSections()
+        XCTAssertEqual(key.readCount, 0)
+        let count = await transport.count
+        XCTAssertEqual(count, 0)
+        XCTAssertEqual(sections.map(\.failureText), Array(repeating: CLIProxyClient.unverifiedPeerText, count: 3))
+        let rows = sections.flatMap { ServiceRowModel.rows(for: $0) }
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertTrue(rows.allSatisfy { $0.failureText == CLIProxyClient.unverifiedPeerText && $0.primary == nil })
+    }
+
+    func testVerifiedPeerPreservesExistingRequestsAndUsage() async {
+        let transport = ScriptedTransport([credentials(), usage(), usage(), antigravity()])
+        let key = MutableKey(UUID().uuidString)
+        let verifier = ScriptedPeerVerifier([true, true, true, true, true])
+        let sections = await CLIProxyClient(transport: transport, keyProvider: key,
+                                            peerVerifier: verifier).fetchSections(now: now)
+        XCTAssertEqual(key.readCount, 1)
+        XCTAssertEqual(verifier.checkCount, 5)
+        let count = await transport.count
+        XCTAssertEqual(count, 4)
+        XCTAssertEqual(sections.map(\.failureText), [nil, nil, "No enabled CLIProxyAPI credentials"])
+        XCTAssertEqual(sections[0].windows.map(\.leftPercent), [79, 64, 79, 64])
+        XCTAssertEqual(sections[1].windows.first?.leftPercent, 86)
+    }
+
+    func testPeerIsRecheckedBeforeFirstRequest() async {
+        let transport = ScriptedTransport([])
+        let key = MutableKey(UUID().uuidString)
+        let verifier = ScriptedPeerVerifier([true, false])
+        let sections = await CLIProxyClient(transport: transport, keyProvider: key,
+                                            peerVerifier: verifier).fetchSections()
+        XCTAssertEqual(key.readCount, 1)
+        XCTAssertEqual(verifier.checkCount, 2)
+        let count = await transport.count
+        XCTAssertEqual(count, 0)
+        XCTAssertTrue(sections.allSatisfy { $0.failureText == CLIProxyClient.unverifiedPeerText })
+    }
+
+    func testPeerChangeStopsEveryProvidersQuotaRequest() async {
+        for provider in ["claude", "antigravity", "xai"] {
+            let inventory = #"{"files":[{"provider":"\#(provider)","auth_index":"one","project_id":"fixture-project"}]}"#
+            let transport = ScriptedTransport([(Data(inventory.utf8), 200)])
+            let verifier = ScriptedPeerVerifier([true, true, false])
+            let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(),
+                                                peerVerifier: verifier).fetchSections()
+            let count = await transport.count
+            XCTAssertEqual(count, 1, provider)
+            XCTAssertEqual(verifier.checkCount, 3, provider)
+            XCTAssertTrue(sections.allSatisfy { $0.failureText == CLIProxyClient.unverifiedPeerText }, provider)
+        }
+    }
+
+    func testPeerIsRecheckedAfterQuotaRequestsBeforeFallbackOrSecondPeriod() async {
+        for provider in ["antigravity", "xai"] {
+            let inventory = #"{"files":[{"provider":"\#(provider)","auth_index":"one","project_id":"fixture-project"}]}"#
+            let transport = ScriptedTransport([(Data(inventory.utf8), 200), (CLIProxyFixtures.envelope("{}", status: 503), 200)])
+            let verifier = ScriptedPeerVerifier([true, true, true, false])
+            let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(),
+                                                peerVerifier: verifier).fetchSections()
+            let count = await transport.count
+            XCTAssertEqual(count, 2, provider)
+            XCTAssertEqual(verifier.checkCount, 4, provider)
+            XCTAssertTrue(sections.allSatisfy { $0.failureText == CLIProxyClient.unverifiedPeerText }, provider)
+        }
+    }
+
+    func testPeerVerificationRecoversOnNextRefresh() async {
+        let transport = ScriptedTransport([credentials(), usage(), usage(), antigravity()])
+        let key = MutableKey(UUID().uuidString)
+        let verifier = ScriptedPeerVerifier([false, true, true, true, true, true])
+        let client = CLIProxyClient(transport: transport, keyProvider: key, peerVerifier: verifier)
+        let failed = await client.fetchSections()
+        XCTAssertTrue(failed.allSatisfy { $0.failureText == CLIProxyClient.unverifiedPeerText })
+        XCTAssertEqual(key.readCount, 0)
+        let recovered = await client.fetchSections()
+        XCTAssertEqual(recovered.map(\.failureText), [nil, nil, "No enabled CLIProxyAPI credentials"])
+        XCTAssertEqual(key.readCount, 1)
     }
 
     func testStableAccountIDsKeepPreferencesAndUsageAcrossReorderingAndRenumbering() async throws {
@@ -56,7 +140,7 @@ final class CLIProxyClientTests: XCTestCase {
             (CLIProxyFixtures.envelope(#"{"five_hour":{"utilization":63}}"#), 200),
             (Data(reordered.utf8), 200)
         ])
-        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), clock: { self.now })
+        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier(), clock: { self.now })
         let firstSections = await client.fetchSections(now: now)
         let first = try XCTUnwrap(firstSections.first { $0.provider == .claude })
         let accountID = try XCTUnwrap(first.accountID(at: 0))
@@ -82,7 +166,7 @@ final class CLIProxyClientTests: XCTestCase {
     func testAccountIdentityFallsBackToAuthIndexWhenStableIDsAreEmpty() async throws {
         let credentials = #"{"files":[{"provider":"claude","auth_index":"legacy","account_id":"  ","user_id":""},{"provider":"claude","auth_index":"other"}]}"#
         let transport = ScriptedTransport([(Data(credentials.utf8), 200), usage(), usage()])
-        let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey()).fetchSections(now: now)
+        let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier()).fetchSections(now: now)
         let section = try XCTUnwrap(sections.first { $0.provider == .claude })
         XCTAssertEqual(section.accountID(at: 0), AccountID(provider: .claude, source: "proxy-auth-index", value: "legacy"))
         XCTAssertEqual(section.accountID(at: 1), AccountID(provider: .claude, source: "proxy-auth-index", value: "other"))
@@ -92,7 +176,7 @@ final class CLIProxyClientTests: XCTestCase {
     func test401StopsRefreshAndBacksOffUntilThirtyMinutes() async {
         let clock = TestClock(now)
         let transport = ScriptedTransport([credentials(), (Data(), 401), credentials(), usage(), usage(), antigravity()])
-        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), clock: { clock.read() })
+        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier(), clock: { clock.read() })
         let first = await client.fetchSections(now: now)
         XCTAssertEqual(first.map(\.failureText), Array(repeating: CLIProxyClient.rejectedKeyText, count: 3))
         clock.advance(1799)
@@ -109,7 +193,7 @@ final class CLIProxyClientTests: XCTestCase {
     func testCredentials401AndChangedKeyRecovery() async {
         let key = MutableKey(UUID().uuidString)
         let transport = ScriptedTransport([(Data(), 401), credentials(), usage(), usage(), antigravity()])
-        let client = CLIProxyClient(transport: transport, keyProvider: key)
+        let client = CLIProxyClient(transport: transport, keyProvider: key, peerVerifier: FixtureCLIProxyPeerVerifier())
         _ = await client.fetchSections()
         _ = await client.fetchSections()
         let blockedCount = await transport.count
@@ -123,7 +207,7 @@ final class CLIProxyClientTests: XCTestCase {
 
     func testConcurrentRefreshesShare401Latch() async {
         let transport = ScriptedTransport([(Data(), 401)])
-        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey())
+        let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<10 { group.addTask { _ = await client.fetchSections() } }
         }
@@ -133,7 +217,7 @@ final class CLIProxyClientTests: XCTestCase {
 
     func testAntigravityFallbackAndExactRequestContract() async throws {
         let transport = ScriptedTransport([credentials(), usage(), usage(), (CLIProxyFixtures.envelope("{}", status: 503), 200), (CLIProxyFixtures.envelope(#"{"groups":[]}"#), 200), antigravity()])
-        let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey()).fetchSections(now: now)
+        let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier()).fetchSections(now: now)
         XCTAssertEqual(sections[1].windows.first?.leftPercent, 86)
         XCTAssertEqual(sections[0].windows.map(\.accountIndex), [0, 0, 1, 1])
         let calls = await transport.calls
@@ -154,7 +238,7 @@ final class CLIProxyClientTests: XCTestCase {
 
     func testAccountFailureDoesNotLoseOtherAccountsOrProvider() async {
         let transport = ScriptedTransport([credentials(), (Data(), 500), usage(), antigravity()])
-        let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey()).fetchSections()
+        let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier()).fetchSections()
         XCTAssertEqual(sections[0].windows.count, 2)
         XCTAssertEqual(sections[0].windows.map(\.accountIndex), [1, 1])
         let bars = CollapsedUsageBar.bars(for: MultiUsageSnapshot(sections: sections, codexSnapshot: nil, updatedAt: now))
@@ -169,12 +253,12 @@ final class CLIProxyClientTests: XCTestCase {
         let key = UUID().uuidString
         let echo = "{\"groups\":[{\"displayName\":\"\(key)\",\"buckets\":[{\"remainingFraction\":0.86}]}]}"
         let transport = ScriptedTransport([credentials(), usage(), usage(), (CLIProxyFixtures.envelope(echo), 200)])
-        let sections = await CLIProxyClient(transport: transport, keyProvider: MutableKey(key)).fetchSections()
+        let sections = await CLIProxyClient(transport: transport, keyProvider: MutableKey(key), peerVerifier: FixtureCLIProxyPeerVerifier()).fetchSections()
         XCTAssertFalse(String(describing: sections).contains(key))
-        let failure = await CLIProxyClient(transport: ThrowingTransport(message: key), keyProvider: MutableKey(key)).fetchSections()
+        let failure = await CLIProxyClient(transport: ThrowingTransport(message: key), keyProvider: MutableKey(key), peerVerifier: FixtureCLIProxyPeerVerifier()).fetchSections()
         XCTAssertFalse(String(describing: failure).contains(key))
         let malformed = ScriptedTransport([(Data(key.utf8), 200)])
-        let malformedSections = await CLIProxyClient(transport: malformed, keyProvider: MutableKey(key)).fetchSections()
+        let malformedSections = await CLIProxyClient(transport: malformed, keyProvider: MutableKey(key), peerVerifier: FixtureCLIProxyPeerVerifier()).fetchSections()
         XCTAssertFalse(String(describing: malformedSections).contains(key))
     }
 
@@ -231,9 +315,25 @@ private actor ScriptedTransport: CLIProxyTransport {
 private final class MutableKey: CLIProxyKeyProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var value: String?
+    private var reads = 0
     init(_ value: String?) { self.value = value }
-    func managementKey() -> String? { lock.lock(); defer { lock.unlock() }; return value }
+    var readCount: Int { lock.lock(); defer { lock.unlock() }; return reads }
+    func managementKey() -> String? { lock.lock(); defer { lock.unlock() }; reads += 1; return value }
     func set(_ value: String?) { lock.lock(); defer { lock.unlock() }; self.value = value }
+}
+
+private final class ScriptedPeerVerifier: CLIProxyPeerVerifier, @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [Bool]
+    private var checks = 0
+    init(_ results: [Bool]) { self.results = results }
+    var checkCount: Int { lock.lock(); defer { lock.unlock() }; return checks }
+    func isTrustedListener() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        checks += 1
+        guard !results.isEmpty else { XCTFail("Unexpected peer verification"); return false }
+        return results.removeFirst()
+    }
 }
 
 private final class TestClock: @unchecked Sendable {

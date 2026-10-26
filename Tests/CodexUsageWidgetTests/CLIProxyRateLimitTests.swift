@@ -149,7 +149,7 @@ final class CLIProxyRateLimitTests: XCTestCase {
     }
 
     private func client(_ transport: QuotaTransport, _ clock: QuotaClock) -> CLIProxyClient {
-        CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), clock: { clock.read() })
+        CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier(), clock: { clock.read() })
     }
 
     private func time(_ date: Date) -> String {

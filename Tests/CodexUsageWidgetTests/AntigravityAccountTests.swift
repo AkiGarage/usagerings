@@ -65,7 +65,7 @@ final class AntigravityAccountTests: XCTestCase {
     }
 
     func testProxyKeepsFailedAccountAndScopesItsNotice() async throws {
-        let client = CLIProxyClient(transport: AntigravityAccountsTransport(), keyProvider: FixtureCLIProxyKey())
+        let client = CLIProxyClient(transport: AntigravityAccountsTransport(), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
         let sections = await client.fetchSections()
         let section = try XCTUnwrap(sections.first { $0.provider == .antigravity })
         XCTAssertEqual(section.accountIndices, [0, 1])
@@ -95,7 +95,7 @@ final class AntigravityAccountTests: XCTestCase {
 
     func testProxyAssignsTwoSuccessfulAccountsTheirOwnQuota() async throws {
         let client = CLIProxyClient(transport: AntigravityAccountsTransport(secondAccountHasProject: true),
-                                    keyProvider: FixtureCLIProxyKey())
+                                    keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
         let sections = await client.fetchSections()
         let section = try XCTUnwrap(sections.first { $0.provider == .antigravity })
         XCTAssertEqual(section.accountIndices, [0, 1])

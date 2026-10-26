@@ -246,11 +246,11 @@ final class AccountReconciliationTests: XCTestCase {
         preferences.setPrimary(id, for: .claude)
         preferences.reconcile(snapshot([id], provider: .claude), now: start, salt: salt)
         let later = start.addingTimeInterval(AccountPreferences.retentionInterval + 1)
-        let failedClient = CLIProxyClient(transport: EmptyAccountInventoryTransport(status: 503), keyProvider: FixtureCLIProxyKey())
+        let failedClient = CLIProxyClient(transport: EmptyAccountInventoryTransport(status: 503), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
         let failed = await failedClient.fetchSections(now: later)
         preferences.reconcile(MultiUsageSnapshot(sections: failed, codexSnapshot: nil, updatedAt: later), now: later, salt: salt)
         XCTAssertEqual(preferences.label(for: id), "Gone")
-        let emptyClient = CLIProxyClient(transport: EmptyAccountInventoryTransport(status: 200), keyProvider: FixtureCLIProxyKey())
+        let emptyClient = CLIProxyClient(transport: EmptyAccountInventoryTransport(status: 200), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
         let empty = await emptyClient.fetchSections(now: later)
         XCTAssertTrue(empty.allSatisfy { $0.accountInventoryComplete == true && $0.accounts.isEmpty })
         preferences.reconcile(MultiUsageSnapshot(sections: empty, codexSnapshot: nil, updatedAt: later), now: later, salt: salt)
@@ -271,7 +271,7 @@ final class AccountReconciliationTests: XCTestCase {
         ]
         for payload in payloads {
             let transport = EmptyAccountInventoryTransport(status: 200, payload: payload)
-            let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey())
+            let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
             let sections = await client.fetchSections(now: later)
             XCTAssertTrue(sections.allSatisfy { $0.accountInventoryComplete == false })
             let archived = preferences.reconcile(MultiUsageSnapshot(sections: sections, codexSnapshot: nil, updatedAt: later), now: later, salt: salt)

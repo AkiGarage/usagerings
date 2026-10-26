@@ -11,7 +11,7 @@ enum CLIProxyFixtures {
         return try! JSONSerialization.data(withJSONObject: ["status_code": status, "header": [:], "body": value])
     }
     static func client() -> CLIProxyClient {
-        CLIProxyClient(transport: FixtureCLIProxyTransport(), keyProvider: FixtureCLIProxyKey())
+        CLIProxyClient(transport: FixtureCLIProxyTransport(), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
     }
 }
 
@@ -19,6 +19,11 @@ struct FixtureCLIProxyKey: CLIProxyKeyProvider {
     // Random per fixture instance, never an actual management key or recorded request.
     let value: String? = UUID().uuidString
     func managementKey() -> String? { value }
+}
+
+struct FixtureCLIProxyPeerVerifier: CLIProxyPeerVerifier {
+    var trusted = true
+    func isTrustedListener() -> Bool { trusted }
 }
 
 struct FixtureCLIProxyTransport: CLIProxyTransport {

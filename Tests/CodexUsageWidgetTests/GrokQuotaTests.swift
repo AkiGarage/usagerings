@@ -259,7 +259,7 @@ final class GrokQuotaTests: XCTestCase {
     }
 
     private func client(_ transport: GrokTransport, _ clock: GrokClock) -> CLIProxyClient {
-        CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), clock: { clock.read() })
+        CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier(), clock: { clock.read() })
     }
     private func grok(_ client: CLIProxyClient) async throws -> ProviderSection {
         let sections = await client.fetchSections()

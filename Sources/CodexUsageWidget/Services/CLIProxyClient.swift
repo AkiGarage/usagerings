@@ -59,8 +59,10 @@ final class CLIProxyURLSessionTransport: NSObject, CLIProxyTransport, URLSession
 actor CLIProxyClient {
     static let missingKeyText = "Management key not in Keychain (cliproxyapi-management)"
     static let rejectedKeyText = "CLIProxyAPI rejected management key"
+    static let unverifiedPeerText = "取得失敗: 8317の待受プロセスを確認できません"
     private let transport: any CLIProxyTransport
     private let keyProvider: any CLIProxyKeyProvider
+    private let peerVerifier: any CLIProxyPeerVerifier
     private let clock: @Sendable () -> Date
     private var blockedKey: SHA256.Digest?
     private var blockedUntil: Date?
@@ -97,10 +99,12 @@ actor CLIProxyClient {
     init(
         transport: any CLIProxyTransport = CLIProxyURLSessionTransport(),
         keyProvider: any CLIProxyKeyProvider = KeychainCLIProxyKeyProvider(),
+        peerVerifier: any CLIProxyPeerVerifier = LibprocCLIProxyPeerVerifier(),
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.keyProvider = keyProvider
+        self.peerVerifier = peerVerifier
         self.clock = clock
     }
 
@@ -115,11 +119,12 @@ actor CLIProxyClient {
     }
 
     private enum Failure: Error {
-        case rejected, request, payload, noCredentials, noQuota, missingProject, upstreamAuth
+        case rejected, unverifiedPeer, request, payload, noCredentials, noQuota, missingProject, upstreamAuth
         case rateLimited(retryAfter: TimeInterval?)
         var text: String {
             switch self {
             case .rejected: CLIProxyClient.rejectedKeyText
+            case .unverifiedPeer: CLIProxyClient.unverifiedPeerText
             case .request: "CLIProxyAPI request failed"
             case .payload: "CLIProxyAPI returned an unreadable response"
             case .noCredentials: "No enabled CLIProxyAPI credentials"
@@ -137,6 +142,7 @@ actor CLIProxyClient {
         func failed(_ text: String) -> [ProviderSection] {
             providers.map { ProviderSection(provider: $0, windows: [], stats: [], failureText: text) }
         }
+        guard peerVerifier.isTrustedListener() else { return failed(Self.unverifiedPeerText) }
         guard let key = keyProvider.managementKey(), !key.isEmpty else {
             return failed(Self.missingKeyText)
         }
@@ -199,6 +205,8 @@ actor CLIProxyClient {
                             identified.accountIndex = accountIndex
                             return identified
                         }
+                    } catch Failure.unverifiedPeer {
+                        throw Failure.unverifiedPeer
                     } catch Failure.rejected {
                         // Invalidate even earlier results so every CLIProxy section explains the pause.
                         throw Failure.rejected
@@ -248,6 +256,7 @@ actor CLIProxyClient {
         }
         let data: Data
         let status: Int
+        guard peerVerifier.isTrustedListener() else { throw Failure.unverifiedPeer }
         do { (data, status) = try await transport.send(request) }
         catch { throw Failure.request }
         try checkStatus(status, key: key)
@@ -296,6 +305,8 @@ actor CLIProxyClient {
             cached.backoff = 0
             cached.failure = nil
             cached.rateLimited = false
+        } catch Failure.unverifiedPeer {
+            throw Failure.unverifiedPeer
         } catch Failure.rejected {
             // Preserve the existing global management-key latch and recovery path.
             throw Failure.rejected
@@ -349,6 +360,8 @@ actor CLIProxyClient {
                 period.fetchedAt = clock()
                 period.failure = nil
                 period.rateLimited = false
+            } catch Failure.unverifiedPeer {
+                throw Failure.unverifiedPeer
             } catch Failure.rejected {
                 throw Failure.rejected
             } catch Failure.rateLimited(let retryAfter) {
@@ -407,7 +420,8 @@ actor CLIProxyClient {
                 ], data: body, key: key)
                 let windows = try CLIProxyParser.antigravity(data, now: now)
                 if !windows.isEmpty { return windows }
-            } catch Failure.rejected { throw Failure.rejected }
+            } catch Failure.unverifiedPeer { throw Failure.unverifiedPeer }
+            catch Failure.rejected { throw Failure.rejected }
             catch { continue }
         }
         throw Failure.noQuota

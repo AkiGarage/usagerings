@@ -300,7 +300,7 @@ final class AccountPreferencesTests: XCTestCase {
     }
 
     func testClaudeRetainsFailedAccountsWithAccountScopedNotices() async throws {
-        let client = CLIProxyClient(transport: AccountFailureTransport(), keyProvider: FixtureCLIProxyKey())
+        let client = CLIProxyClient(transport: AccountFailureTransport(), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
         let sections = await client.fetchSections()
         let section = try XCTUnwrap(sections.first { $0.provider == .claude })
         XCTAssertEqual(section.accounts.count, 2)
