@@ -404,6 +404,7 @@ private struct RingGrid: View {
                         .monospacedDigit()
                     }
                     .frame(width: 104, height: 104)
+                    .opacity(bar.isStale ? 0.55 : 1)
                     HStack(spacing: 4) {
                         Circle().fill(bar.providerColor).frame(width: 7, height: 7)
                         Text(bar.ringName).font(.system(size: 13, weight: .semibold)).lineLimit(1)
@@ -411,6 +412,9 @@ private struct RingGrid: View {
                     }
                     Text(bar.resetShort).font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                    if bar.isStale {
+                        Text("Stale").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                 }
                 .accessibilityElement(children: .combine)
             }

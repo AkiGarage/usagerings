@@ -109,9 +109,10 @@ final class MultiUsageStore: ObservableObject {
         isRefreshing = false
         preferences?.reconcileAccounts(in: snapshot)
         preferences?.reconcileProviders(in: snapshot)
-        rawSnapshot = snapshot
+        let displaySnapshot = retainingStaleValues(in: snapshot, previous: rawSnapshot)
+        rawSnapshot = displaySnapshot
         updateClaudeChoice(from: snapshot, now: Date())
-        self.snapshot = visible(snapshot)
+        self.snapshot = visible(displaySnapshot)
         expiryTask?.cancel()
         expiryTask = nil
         let now = Date()
@@ -139,6 +140,44 @@ final class MultiUsageStore: ObservableObject {
         }
     }
 
+    /// Keep display data only; decisions and the published Codex snapshot use the fresh result.
+    private func retainingStaleValues(in fresh: MultiUsageSnapshot, previous: MultiUsageSnapshot?) -> MultiUsageSnapshot {
+        guard let previous else { return fresh }
+        let sections = fresh.sections.map { section -> ProviderSection in
+            guard let old = previous.sections.first(where: { $0.provider == section.provider }) else { return section }
+            var result = section
+            // An empty successful inventory or a disabled provider is authoritative.
+            if section.windows.isEmpty, section.accounts.isEmpty, let failure = section.failureText,
+               failure != MultiUsageService.hiddenText,
+               failure != "No enabled CLIProxyAPI credentials", !old.windows.isEmpty {
+                result.windows = old.windows
+                result.accounts = old.accounts
+                result.isStale = true
+                return result
+            }
+            // Match stable account identity, never a recycled account index.
+            for i in result.accounts.indices {
+                let account = result.accounts[i]
+                guard let failure = account.failureText, !failure.contains("ログアウト"),
+                      let id = account.id, let oldAccount = old.accounts.first(where: { $0.id == id }) else { continue }
+                let current = result.windows.filter { ($0.accountIndex ?? 0) == account.index }
+                if current.isEmpty {
+                    result.windows += old.windows.filter { ($0.accountIndex ?? 0) == oldAccount.index }.map {
+                        var window = $0
+                        window.accountIndex = account.index
+                        return window
+                    }
+                }
+                if result.windows.contains(where: { ($0.accountIndex ?? 0) == account.index }) {
+                    result.accounts[i].isStale = true
+                }
+            }
+            return result
+        }
+        return MultiUsageSnapshot(sections: sections, codexSnapshot: fresh.codexSnapshot,
+                                  updatedAt: fresh.updatedAt, hiddenProviders: fresh.hiddenProviders)
+    }
+
     /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.
     func providerVisibilityChanged(turnedOn: Bool) {
         snapshot = visible(rawSnapshot ?? .placeholder)
@@ -161,6 +200,7 @@ final class MultiUsageStore: ObservableObject {
 
     func updateClaudeChoice(from snapshot: MultiUsageSnapshot, now: Date) {
         guard let section = snapshot.sections.first(where: { $0.provider == .claude }),
+              !section.isStale, !section.accounts.contains(where: \.isStale),
               section.accountIndices.count >= 2, preferences?.isProviderVisible(.claude) ?? true else {
             claudeChoice = nil
             if let url = claudeChoiceURL { ClaudeAccountChoice.retract(now: now, url: url) }

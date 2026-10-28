@@ -484,7 +484,7 @@ final class RingDetailCardTests: XCTestCase {
     }
 
     @MainActor
-    func testSnapshotRefreshRetiresCardWhenHoveredRingLosesData() async throws {
+    func testSnapshotRefreshMarksHoveredCardStaleAfterFailure() async throws {
         var codexHasData = true
         let fixture = try await makeHoveredFixture {
             codexHasData ? Self.codexWindow(usedPercent: 19) : Self.codexFailure
@@ -493,10 +493,11 @@ final class RingDetailCardTests: XCTestCase {
 
         codexHasData = false
         fixture.store.refresh()
-        // The subscription must retire the card instead of showing stale numbers.
-        try await waitUntil("card retires after the hovered ring loses data") {
-            fixture.controller.highlight.barID == nil
+        try await waitUntil("card indicates retained data is stale") {
+            fixture.controller.currentModel?.failureText?.contains("Stale") == true
         }
+        XCTAssertEqual(fixture.controller.highlight.barID, "codex")
+        XCTAssertEqual(fixture.controller.currentModel?.rows.first?.leftPercent, 81)
     }
 
     @MainActor

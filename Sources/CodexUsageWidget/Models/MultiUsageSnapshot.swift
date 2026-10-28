@@ -48,6 +48,7 @@ struct ProviderAccount: Equatable, Sendable {
     var failureText: String? = nil
     var codexExtras: CodexExtrasParser.Extras? = nil
     var id: AccountID? = nil
+    var isStale = false
 }
 
 struct ClaudeProfileNotice: Equatable, Sendable, Identifiable {
@@ -74,6 +75,7 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
     var claudeRemoteFailureText: String? = nil
     /// Fetch evidence, independent of display messages such as "no configured accounts".
     var accountInventoryComplete: Bool? = nil
+    var isStale = false
 
     var claudeProfileNotices: [ClaudeProfileNotice] {
         let profiles = Set(claudeProfileBlocks.keys).union(claudeRemoteFailureText == nil ? [] : [1])
@@ -108,7 +110,8 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
         section.windows = windows.filter { ($0.accountIndex ?? 0) == index }
         section.stats = stats.filter { ($0.accountIndex ?? 0) == index }
         let account = accounts.first { $0.index == index }
-        section.failureText = account?.failureText
+        section.isStale = isStale || (account?.isStale ?? false)
+        section.failureText = section.isStale ? "Stale · last successful reading" : account?.failureText
         section.codexExtras = accounts.isEmpty ? (index == 0 ? codexExtras : nil) : account?.codexExtras
         if index != 0 { section.zaiResetTickets = nil }
         section.accounts = account.map { [$0] } ?? []

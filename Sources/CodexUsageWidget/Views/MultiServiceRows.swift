@@ -203,6 +203,9 @@ struct ServiceRowModel: Identifiable {
         }
         rows[0].ticketExpiries.sort()
         rows[0].failureText = section.failureText
+        if section.isStale || section.accounts.contains(where: \.isStale) {
+            for index in rows.indices { rows[index].failureText = "Stale · last successful reading" }
+        }
         rows[0].hasUsageDetails = provider == .deepseek && !section.stats.isEmpty
         if !showAccounts { for i in rows.indices { rows[i].account = nil } }
         return rows + profileRows

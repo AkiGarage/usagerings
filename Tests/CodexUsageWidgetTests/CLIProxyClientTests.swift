@@ -297,7 +297,7 @@ private actor ScriptedTransport: CLIProxyTransport {
         count += 1
         XCTAssertEqual(request.url?.host, "127.0.0.1")
         XCTAssertEqual(request.url?.port, 8317)
-        XCTAssertEqual(request.timeoutInterval, 15)
+        XCTAssertEqual(request.timeoutInterval, 25)
         XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Bearer ") == true)
         if let body = request.httpBody {
             XCTAssertEqual(request.url?.path, "/v8/management/requests/api-call")

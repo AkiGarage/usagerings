@@ -35,8 +35,8 @@ protocol CLIProxyTransport: Sendable {
 final class CLIProxyURLSessionTransport: NSObject, CLIProxyTransport, URLSessionTaskDelegate, @unchecked Sendable {
     func send(_ request: URLRequest) async throws -> (Data, Int) {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 15
-        configuration.timeoutIntervalForResource = 15
+        configuration.timeoutIntervalForRequest = 25
+        configuration.timeoutIntervalForResource = 25
         configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
@@ -174,6 +174,7 @@ actor CLIProxyClient {
                             let usage = try await cachedClaudeUsage(account, key: key, now: now)
                             windows = usage.windows
                             if let notice = usage.notice {
+                                accountState.isStale = !usage.windows.isEmpty
                                 section.accountInventoryComplete = false
                                 section.stats.append(ProviderStat(title: account.maskedEmail, valueText: notice))
                                 section.failureText = usage.rateLimited ? "Some accounts rate limited" : "Some accounts unavailable"
@@ -186,6 +187,7 @@ actor CLIProxyClient {
                             for period in usage.periods {
                                 section.stats.append(contentsOf: period.stats)
                                 if let notice = period.notice {
+                                    if !period.windows.isEmpty { accountState.isStale = true }
                                     section.accountInventoryComplete = false
                                     section.stats.append(ProviderStat(title: "\(account.maskedEmail) · \(period.providerName)",
                                                                       valueText: notice))
@@ -247,20 +249,32 @@ actor CLIProxyClient {
 
     private func management(path: String, key: String, body: [String: Any]? = nil) async throws -> Data {
         try Task.checkCancellation()
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:8317/v8/management/\(path)")!, timeoutInterval: 15)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8317/v8/management/\(path)")!, timeoutInterval: 25)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         if let body {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        let data: Data
-        let status: Int
-        guard peerVerifier.isTrustedListener() else { throw Failure.unverifiedPeer }
-        do { (data, status) = try await transport.send(request) }
-        catch { throw Failure.request }
-        try checkStatus(status, key: key)
-        return data
+        for attempt in 0...1 {
+            try Task.checkCancellation()
+            guard peerVerifier.isTrustedListener() else { throw Failure.unverifiedPeer }
+            do {
+                let (data, status) = try await transport.send(request)
+                try checkStatus(status, key: key)
+                return data
+            } catch let error as URLError where attempt == 0 &&
+                [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(error.code) {
+                continue
+            } catch let failure as Failure {
+                throw failure
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw Failure.request
+            }
+        }
+        throw Failure.request
     }
 
     private func checkStatus(_ status: Int, key: String) throws {
