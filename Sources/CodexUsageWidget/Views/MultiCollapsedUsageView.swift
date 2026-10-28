@@ -20,6 +20,7 @@ struct CollapsedUsageBar: Identifiable {
     var provider: ProviderID? = nil
     var accountIndex: Int? = nil
     var accountID: AccountID? = nil
+    var isStale = false
     var isBlocked: Bool { block?.isActive(at: Date()) == true }
     static let blockedSymbol = "lock.fill"
     static let blockedPauseSymbol = "pause.circle.fill"
@@ -215,6 +216,12 @@ struct CollapsedUsageBar: Identifiable {
             return bar.accountIndex == nil || bar.accountIndex == accountPreferences.primaryIndex(in: section)
         }.map { bar in
             var bar = bar
+            if let provider = bar.provider, let section = snapshot.sections.first(where: { $0.provider == provider }) {
+                bar.isStale = section.isStale || section.accounts.contains {
+                    $0.isStale && (bar.accountID == nil || $0.id == bar.accountID)
+                }
+                if bar.isStale { bar.failureText = "Stale · last successful reading" }
+            }
             if let label = accountPreferences.label(for: bar.accountID) { bar.title += " · \(label)" }
             return bar
         }
@@ -317,6 +324,7 @@ struct MultiCollapsedUsageView: View {
                 TabG1Gauge(bar: bar, outer: arcs.outer, weekly: arcs.inner,
                            diameter: layout.ringDiameter)
                 .frame(width: layout.ringDiameter, height: layout.ringDiameter)
+                .opacity(bar.isStale ? 0.55 : 1)
                 .overlay {
                     if highlightedBarID == bar.id {
                         // Hover highlight stays inside the ring frame (no layout shift).
@@ -355,7 +363,7 @@ struct MultiCollapsedUsageView: View {
     }
 
     static func accessibilitySummary(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> String {
-        if bar.isBlocked { return "\(bar.ringName): \(CollapsedUsageBar.detailText(for: bar))" }
+        if bar.isBlocked { return "\(bar.ringName): \(bar.isStale ? "Stale; " : "")\(CollapsedUsageBar.detailText(for: bar))" }
         let arcs = g1(for: bar, rows: rows)
         let windows = [arcs.outer, arcs.inner].compactMap { $0 }
         guard !windows.isEmpty else {
@@ -373,7 +381,7 @@ struct MultiCollapsedUsageView: View {
             }
             return "\(label): \(limit.leftText), \(limit.resetText)"
         }
-        return "\(bar.ringName): " + values.joined(separator: "; ")
+        return "\(bar.ringName): " + (bar.isStale ? "Stale; " : "") + values.joined(separator: "; ")
     }
 
     private static func scale(for value: Double) -> CGFloat {

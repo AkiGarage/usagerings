@@ -73,6 +73,77 @@ final class MultiUsageStoreTests: XCTestCase {
         XCTAssertFalse(store.isRefreshing)
     }
 
+    func testTimeoutRetainsLastGoodRingAndOtherProviderUpdates() async throws {
+        let state = RefreshState()
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: { args in
+            if args[2] == "zai", state.shouldFail() {
+                return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
+            }
+            return try Self.successRunner(args)
+        }, cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [])
+        store.refresh()
+        try await waitUntil("first refresh") { !store.isRefreshing }
+        let before = CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .zai }?.limit
+        XCTAssertNotNil(before)
+        state.fail()
+        store.refresh()
+        try await waitUntil("second refresh") { !store.isRefreshing }
+        let bar = try XCTUnwrap(CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .zai })
+        XCTAssertEqual(bar.limit, before, "A transient timeout must not replace a previous value with ?")
+        XCTAssertTrue(bar.isStale)
+        XCTAssertTrue(ServiceRowModel.rows(for: store.snapshot).first { $0.id.hasPrefix("zai-") }?.failureText?.contains("Stale") == true)
+        XCTAssertEqual(state.failedAttempts, 2, "A timeout gets exactly one retry")
+        XCTAssertTrue(MultiCollapsedUsageView.accessibilitySummary(for: bar, rows: ServiceRowModel.rows(for: store.snapshot)).contains("Stale"))
+        XCTAssertNotNil(CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .codex }?.limit)
+        state.recover()
+        store.refresh()
+        try await waitUntil("recovery") { !store.isRefreshing }
+        let recovered = try XCTUnwrap(CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .zai })
+        XCTAssertEqual(recovered.limit, before)
+        XCTAssertFalse(recovered.isStale)
+    }
+
+    func testFirstFailureHasNoInventedRingValue() async throws {
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: { args in
+            if args[2] == "zai" {
+                return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
+            }
+            return try Self.successRunner(args)
+        }, cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [])
+        store.refresh()
+        try await waitUntil("first failure") { !store.isRefreshing }
+        let bar = try XCTUnwrap(CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .zai })
+        XCTAssertNil(bar.limit)
+        XCTAssertFalse(bar.isStale)
+    }
+
+    func testStaleClaudeAccountDoesNotProduceAutomaticChoice() {
+        let store = MultiUsageStore(demoSnapshot: .placeholder)
+        store.claudeProfileMasks = { [:] }
+        var first = UsageLimit(title: "5h", leftPercent: 70, resetText: "Reset pending")
+        first.accountIndex = 0
+        var second = UsageLimit(title: "5h", leftPercent: 20, resetText: "Reset pending")
+        second.accountIndex = 1
+        var section = ProviderSection(provider: .claude, windows: [first, second], stats: [], failureText: nil,
+                                      accounts: [ProviderAccount(index: 0), ProviderAccount(index: 1)])
+        let now = Date()
+        store.updateClaudeChoice(from: MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: now), now: now)
+        XCTAssertNotNil(store.claudeChoice)
+        section.accounts[0].isStale = true
+        store.updateClaudeChoice(from: MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: now), now: now)
+        XCTAssertNil(store.claudeChoice, "Stale usage must not select an account")
+    }
+
+    private final class RefreshState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var failing = false
+        private var attempts = 0
+        var failedAttempts: Int { lock.lock(); defer { lock.unlock() }; return attempts }
+        func shouldFail() -> Bool { lock.lock(); defer { lock.unlock() }; if failing { attempts += 1 }; return failing }
+        func fail() { lock.lock(); defer { lock.unlock() }; failing = true }
+        func recover() { lock.lock(); defer { lock.unlock() }; failing = false }
+    }
+
     private static let successRunner: CodexUsageService.CommandRunner = { arguments in
         let json: String
         switch arguments[2] {

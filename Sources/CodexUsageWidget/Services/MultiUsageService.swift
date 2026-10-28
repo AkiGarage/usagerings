@@ -172,15 +172,30 @@ struct MultiUsageService: Sendable {
 
     private func run(_ provider: ProviderID) async throws -> CodexUsageService.CommandResult {
         let arguments = ["usage", "--provider", provider.rawValue, "--format", "json", "--all-accounts"]
-        if let commandRunner {
-            return try commandRunner(arguments)
+        func attempt(_ arguments: [String]) async throws -> CodexUsageService.CommandResult {
+            for attempt in 0...1 {
+                try Task.checkCancellation()
+                do {
+                    let result: CodexUsageService.CommandResult
+                    if let commandRunner {
+                        result = try commandRunner(arguments)
+                    } else {
+                        let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: 30)
+                        result = try await runner.run(arguments)
+                    }
+                    if result.timedOut && attempt == 0 { continue }
+                    return result
+                } catch let error as CodexUsageError {
+                    if case .commandFailed(-1, _) = error, attempt == 0 { continue }
+                    throw error
+                }
+            }
+            throw ProviderFailure.timedOut
         }
-        let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath))
-        let result = try await runner.run(arguments)
-        // A single API-key setup (e.g. GLM/zai) has no token accounts; --all-accounts then
-        // returns only an error. Fall back to the plain single-account query.
+        let result = try await attempt(arguments)
+        // A single API-key setup has no token accounts; try its single-account query.
         if provider != .codex, Self.isNoTokenAccounts(result.stdout) {
-            return try await runner.run(Array(arguments.dropLast()))
+            return try await attempt(Array(arguments.dropLast()))
         }
         return result
     }

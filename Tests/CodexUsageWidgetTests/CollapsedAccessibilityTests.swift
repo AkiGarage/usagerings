@@ -42,5 +42,10 @@ final class CollapsedAccessibilityTests: XCTestCase {
         XCTAssertFalse(text.contains("80%"))
         XCTAssertTrue(text.contains("制限中"))
         XCTAssertTrue(text.contains("復帰"))
+        var stale = bar
+        stale.isStale = true
+        let staleText = MultiCollapsedUsageView.accessibilitySummary(for: stale, rows: [])
+        XCTAssertTrue(staleText.contains("Stale"))
+        XCTAssertTrue(staleText.contains("復帰"))
     }
 }
