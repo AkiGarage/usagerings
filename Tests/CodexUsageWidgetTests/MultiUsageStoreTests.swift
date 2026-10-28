@@ -3,6 +3,17 @@ import XCTest
 
 @MainActor
 final class MultiUsageStoreTests: XCTestCase {
+    func testCodexResetDateSurvivesTheMultiProviderPath() async throws {
+        let service = MultiUsageService(commandRunner: { _ in
+            let json = #"[{"provider":"codex","usage":{"primary":{"usedPercent":20,"windowMinutes":300,"resetsAt":"2026-10-29T00:00:00Z"}}}]"#
+            return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
+        }, cliProxyClient: CLIProxyFixtures.client())
+        let snapshot = await service.fetchAll(disabled: Set(ProviderID.allCases.filter { $0 != .codex }))
+        let limit = try XCTUnwrap(snapshot.sections.first { $0.provider == .codex }?.windows.first)
+        XCTAssertEqual(limit.title, "5h")
+        XCTAssertEqual(limit.resetAt, ISO8601DateFormatter().date(from: "2026-10-29T00:00:00Z"))
+    }
+
     func testSuccessfulPublishClearsPreviousWriteFailure() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

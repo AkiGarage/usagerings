@@ -252,7 +252,7 @@ struct CodexUsageTextParser {
             throw CodexUsageError.invalidJSON
         }
         let pace = paceContext(for: limit, now: now, timeZone: timeZone)
-        return UsageLimit(
+        var result = UsageLimit(
             title: title,
             leftPercent: leftPercent(fromUsedPercent: usedPercent),
             resetText: resetText(for: limit, now: now, timeZone: timeZone),
@@ -260,6 +260,8 @@ struct CodexUsageTextParser {
             projectionText: projectionText(for: pace, prefix: projectionPrefix),
             markerPercent: pace?.markerPercent
         )
+        result.resetAt = limit.resetsAt.flatMap(parseDate)
+        return result
     }
 
     private static func resetText(for limit: CodexBarLimit, now: Date, timeZone: TimeZone) -> String {

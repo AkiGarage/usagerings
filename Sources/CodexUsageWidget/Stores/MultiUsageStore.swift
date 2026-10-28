@@ -23,6 +23,7 @@ final class MultiUsageStore: ObservableObject {
 
     private let dataSource: DataSource
     private let preferences: PanelPreferences?
+    private var cloudSender: CloudSnapshotSender?
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
@@ -30,6 +31,9 @@ final class MultiUsageStore: ObservableObject {
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
          preferences: PanelPreferences? = nil) {
         self.preferences = preferences
+        if let preferences {
+            cloudSender = CloudSnapshotSender(defaults: preferences.defaults, enabled: preferences.cloudSyncEnabled)
+        }
         if preferences != nil, NSClassFromString("XCTestCase") == nil { claudeChoiceURL = ClaudeAccountChoice.fileURL() }
         do {
             let publisher = try UsageSnapshotPublisher(urls: snapshotURLs ?? MultiAppPaths.defaultSnapshotURLs())
@@ -112,6 +116,9 @@ final class MultiUsageStore: ObservableObject {
         rawSnapshot = snapshot
         updateClaudeChoice(from: snapshot, now: Date())
         self.snapshot = visible(snapshot)
+        if preferences?.cloudSyncEnabled == true, preferences?.cloudSyncStopping == false {
+            cloudSender?.offer(self.snapshot)
+        }
         expiryTask?.cancel()
         expiryTask = nil
         let now = Date()
@@ -137,6 +144,12 @@ final class MultiUsageStore: ObservableObject {
         if let codexSnapshot = snapshot.codexSnapshot {
             publish(codexSnapshot)
         }
+    }
+
+    func cloudSyncChanged(enabled: Bool) async {
+        if enabled, preferences?.cloudSyncEnabled != true || preferences?.cloudSyncStopping == true { return }
+        await cloudSender?.setEnabled(enabled)
+        if enabled, preferences?.cloudSyncStopping == false, rawSnapshot != nil { cloudSender?.offer(snapshot) }
     }
 
     /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.

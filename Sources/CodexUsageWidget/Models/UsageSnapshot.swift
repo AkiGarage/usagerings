@@ -30,6 +30,15 @@ struct UsageLimit: Equatable, Sendable {
     var accountIndex: Int? = nil
     /// Machine-readable reset time when the source reports one.
     var resetAt: Date? = nil
+    /// Time the source actually obtained this value, including cached proxy values.
+    var observedAt: Date? = nil
+
+    // Observation age does not change the displayed limit's identity or values.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.title == rhs.title && lhs.leftPercent == rhs.leftPercent && lhs.resetText == rhs.resetText &&
+        lhs.detailText == rhs.detailText && lhs.projectionText == rhs.projectionText &&
+        lhs.markerPercent == rhs.markerPercent && lhs.accountIndex == rhs.accountIndex && lhs.resetAt == rhs.resetAt
+    }
 
     init(
         title: String,

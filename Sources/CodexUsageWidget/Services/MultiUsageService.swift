@@ -336,7 +336,7 @@ struct MultiUsageService: Sendable {
 
 private extension UsageLimit {
     func retitled(_ title: String) -> UsageLimit {
-        UsageLimit(
+        var result = UsageLimit(
             title: title,
             leftPercent: leftPercent,
             resetText: resetText,
@@ -344,5 +344,8 @@ private extension UsageLimit {
             projectionText: projectionText,
             markerPercent: markerPercent
         )
+        result.resetAt = resetAt
+        result.observedAt = observedAt
+        return result
     }
 }

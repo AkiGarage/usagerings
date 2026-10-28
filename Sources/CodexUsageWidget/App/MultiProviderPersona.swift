@@ -23,6 +23,9 @@ final class MultiProviderPersona: AppPersona {
             preferences.onClaudeAutoSwitchChange = { [weak live] enabled in
                 live?.claudeAutoSwitchChanged(enabled: enabled)
             }
+            preferences.onCloudSyncChange = { [weak live] enabled in
+                await live?.cloudSyncChanged(enabled: enabled)
+            }
         }
     }
 
