@@ -103,18 +103,11 @@ struct CloudKitSnapshotTransport: CloudSnapshotTransport {
         let existing: CKRecord?
         do {
             let record = try await database.record(for: id)
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
             guard record.recordType == Self.recordType,
                   record["sourceDeviceID"] as? String == snapshot.sourceDeviceID.uuidString.lowercased(),
-                  (record["schemaVersion"] as? NSNumber)?.intValue == 1,
                   let revision = (record["revision"] as? NSNumber)?.int64Value,
-                  let data = record["payload"] as? Data, data.count <= 128_000,
-                  let payload = try? decoder.decode(CloudSnapshot.self, from: data),
-                  payload.schemaVersion == 1, payload.sourceDeviceID == snapshot.sourceDeviceID,
-                  payload.revision == revision, record["observedAt"] as? Date == payload.observedAt,
-                  record["publishedAt"] as? Date == payload.publishedAt,
-                  revision < snapshot.revision else { throw CloudSenderError.conflict }
+                  revision >= 0 else { throw CloudSenderError.conflict }
+            guard revision < snapshot.revision else { return }
             existing = record
         } catch let error as CKError where error.code == .unknownItem {
             existing = nil
@@ -126,17 +119,17 @@ struct CloudKitSnapshotTransport: CloudSnapshotTransport {
 
 enum CloudSenderError: Error { case conflict }
 
-// RingsCore RetryPolicy, with midpoint jitter and persisted sender state.
-private struct RetryPolicy {
+// RingsCore RetryPolicy, with jitter and persisted sender state.
+struct RetryPolicy {
     var failures: Int
     var quotaBlocked: Bool
     var nextAttempt: Date?
 
-    mutating func failed(quotaExceeded: Bool, retryAfter: TimeInterval?, now: Date) {
+    mutating func failed(quotaExceeded: Bool, retryAfter: TimeInterval?, now: Date, jitter: Double = Double.random(in: 0...1)) {
         if quotaExceeded { quotaBlocked = true; return }
         failures = min(max(failures, 0) + 1, 6)
         let serverDelay = retryAfter.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
-        let delay = min(30 * pow(2, Double(failures - 1)), 900) + 5
+        let delay = min(30 * pow(2, Double(failures - 1)), 900) + min(max(jitter, 0), 1) * 10
         nextAttempt = now.addingTimeInterval(max(delay, serverDelay))
     }
 }
@@ -183,7 +176,7 @@ final class CloudSnapshotSender {
         guard enabled, state.quotaBlocked != true, pending == nil, now >= nextAttempt else { return }
         let (readings, observedAt) = makeReadings(snapshot, now: now)
         let refreshAge = state.lastObservedAt.map { observedAt < $0 || (now.timeIntervalSince($0) >= 600 && observedAt > $0) } ?? false
-        guard readings.count <= 64, (readings != state.lastReadings || refreshAge), state.revision < Int64.max,
+        guard !readings.isEmpty, readings.count <= 64, (readings != state.lastReadings || refreshAge), state.revision < Int64.max,
               snapshot.updatedAt.timeIntervalSince1970 >= 0, snapshot.updatedAt <= now else { return }
         state.revision += 1
         state.lastAttempt = now
@@ -229,14 +222,24 @@ final class CloudSnapshotSender {
         var result: [CloudReading] = []
         var oldest: Date?
         for section in snapshot.sections where [ProviderID.codex, .claude, .grok].contains(section.provider) {
+            if section.failureText != nil, let previous = state.lastReadings,
+               let observed = state.lastObservedAt, observed <= now {
+                let failed = previous.filter { $0.provider == section.provider.rawValue }
+                if !failed.isEmpty {
+                    oldest = oldest.map { min($0, observed) } ?? observed
+                    result += failed.map { CloudReading(provider: $0.provider, accountID: $0.accountID,
+                        window: $0.window, remainingPercent: nil, resetAt: nil, availability: "unavailable") }
+                    continue
+                }
+            }
             let accounts = section.displayAccounts
             let multi = accounts.count > 1
             var seen = Set<String>()
             for limit in section.windows {
                 let account = accounts.first { $0.index == (limit.accountIndex ?? 0) }
                 let stableID = account?.id.flatMap { $0.stableForCloud ? $0 : nil }
-                // A positional or absent identity is safe only for a single anonymous account.
-                guard !multi || stableID != nil else { continue }
+                // Ambiguous multi-account readings are represented by one anonymous unavailable reading.
+                let unavailable = multi && stableID == nil
                 let key = stableID.map { "\(section.provider.rawValue)/\($0.rawValue)" } ?? section.provider.rawValue
                 let title = (limit.title.components(separatedBy: " · ").last ?? limit.title).lowercased()
                 let window: String
@@ -250,8 +253,7 @@ final class CloudSnapshotSender {
                 let readingKey = "\(key)/\(window)"
                 guard !seen.contains(readingKey), limit.leftPercent.isFinite,
                       (0...100).contains(limit.leftPercent) else { continue }
-                if section.provider != .codex, limit.observedAt == nil { continue }
-                let observed = limit.observedAt ?? snapshot.updatedAt
+                guard let observed = limit.observedAt else { continue }
                 guard observed.timeIntervalSince1970.isFinite, observed.timeIntervalSince1970 >= 0,
                       observed <= now else { continue }
                 oldest = oldest.map { min($0, observed) } ?? observed
@@ -263,7 +265,8 @@ final class CloudSnapshotSender {
                         date <= Date(timeIntervalSince1970: floor(now.timeIntervalSince1970)).addingTimeInterval(90 * 24 * 60 * 60) ? date : nil
                 }
                 result.append(CloudReading(provider: section.provider.rawValue, accountID: id, window: window,
-                                           remainingPercent: limit.leftPercent, resetAt: reset, availability: "available"))
+                                           remainingPercent: unavailable ? nil : limit.leftPercent,
+                                           resetAt: unavailable ? nil : reset, availability: unavailable ? "unavailable" : "available"))
             }
         }
         return (result.sorted { "\($0.provider)/\($0.accountID)/\($0.window)" < "\($1.provider)/\($1.accountID)/\($1.window)" }, oldest ?? snapshot.updatedAt)

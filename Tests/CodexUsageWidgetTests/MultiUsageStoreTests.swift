@@ -20,6 +20,23 @@ final class MultiUsageStoreTests: XCTestCase {
         XCTAssertFalse(transport.sent.first!.readings.contains { $0.provider == "gemini" })
     }
 
+    func testHiddenProviderIsFetchedAndSentWhenSyncEnabled() async throws {
+        let defaults = UserDefaults(suiteName: "CloudStoreTests-\(UUID())")!
+        let preferences = PanelPreferences(defaults: defaults)
+        preferences.setProviderVisible(false, for: .codex)
+        let transport = CloudSnapshotSenderTests.MockTransport()
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: Self.successRunner,
+            cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [], preferences: preferences, cloudTransport: transport)
+        store.refresh()
+        try await waitUntil("refresh settles before opt-in") { !store.isRefreshing }
+        XCTAssertTrue(transport.sent.isEmpty)
+        preferences.setCloudSyncEnabled(true)
+        await store.cloudSyncChanged(enabled: true)
+        try await waitUntil("hidden provider sent") { !transport.sent.isEmpty }
+        XCTAssertFalse(store.snapshot.sections.contains { $0.provider == .codex })
+        XCTAssertTrue(transport.sent[0].readings.contains { $0.provider == "codex" && $0.window == "weekly" })
+    }
+
     func testCodexResetDateSurvivesTheMultiProviderPath() async throws {
         let service = MultiUsageService(commandRunner: { _ in
             let json = #"[{"provider":"codex","usage":{"primary":{"usedPercent":20,"windowMinutes":300,"resetsAt":"2026-10-29T00:00:00Z"}}}]"#
@@ -128,7 +145,7 @@ final class MultiUsageStoreTests: XCTestCase {
         XCTFail("waitUntil timed out: \(message)", file: file, line: line)
     }
 
-    private static let codex = #"[{"provider":"codex","usage":{"primary":{"usedPercent":null,"windowMinutes":null,"resetsAt":null},"secondary":{"usedPercent":19,"windowMinutes":10080,"resetsAt":"2026-10-22T06:38:56Z"}},"credits":{"remaining":61003.32,"balanceReadSucceeded":true}}]"#
+    private static let codex = #"[{"provider":"codex","usage":{"updatedAt":"2023-11-14T22:13:20.000Z","primary":{"usedPercent":null,"windowMinutes":null,"resetsAt":null},"secondary":{"usedPercent":19,"windowMinutes":10080,"resetsAt":"2026-10-22T06:38:56Z"}},"credits":{"remaining":61003.32,"balanceReadSucceeded":true}}]"#
 
     private static let zai = #"[{"provider":"zai","usage":{"primary":{"usedPercent":10,"windowMinutes":300,"resetsAt":"2026-10-16T15:52:28Z"},"secondary":null,"tertiary":null,"extraRateWindows":[{"title":"MCP","window":{"usedPercent":0.4,"windowMinutes":43200,"resetsAt":"2026-11-04T05:08:05Z"}}]}}]"#
 

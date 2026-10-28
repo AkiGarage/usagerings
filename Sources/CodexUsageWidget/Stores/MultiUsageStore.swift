@@ -90,8 +90,13 @@ final class MultiUsageStore: ObservableObject {
         case let .live(service, _):
             isRefreshing = true
             Task {
-                let snapshot = await service.fetchAll(disabled: preferences?.providersToSkip() ?? [])
-                apply(snapshot)
+                var disabled = preferences?.providersToSkip() ?? []
+                if preferences?.cloudSyncEnabled == true, preferences?.cloudSyncStopping == false {
+                    disabled.subtract([.codex, .claude, .grok])
+                }
+                let cloudDataComplete = disabled.isDisjoint(with: [.codex, .claude, .grok])
+                let snapshot = await service.fetchAll(disabled: disabled)
+                apply(snapshot, cloudDataComplete: cloudDataComplete)
             }
         }
     }
@@ -109,7 +114,7 @@ final class MultiUsageStore: ObservableObject {
         }
     }
 
-    private func apply(_ snapshot: MultiUsageSnapshot) {
+    private func apply(_ snapshot: MultiUsageSnapshot, cloudDataComplete: Bool) {
         isRefreshing = false
         preferences?.reconcileAccounts(in: snapshot)
         preferences?.reconcileProviders(in: snapshot)
@@ -117,7 +122,7 @@ final class MultiUsageStore: ObservableObject {
         updateClaudeChoice(from: snapshot, now: Date())
         self.snapshot = visible(snapshot)
         if preferences?.cloudSyncEnabled == true, preferences?.cloudSyncStopping == false {
-            cloudSender?.offer(self.snapshot)
+            if cloudDataComplete { cloudSender?.offer(snapshot) } else { refresh() }
         }
         expiryTask?.cancel()
         expiryTask = nil
@@ -149,7 +154,7 @@ final class MultiUsageStore: ObservableObject {
     func cloudSyncChanged(enabled: Bool) async {
         if enabled, preferences?.cloudSyncEnabled != true || preferences?.cloudSyncStopping == true { return }
         await cloudSender?.setEnabled(enabled)
-        if enabled, preferences?.cloudSyncStopping == false, rawSnapshot != nil { cloudSender?.offer(snapshot) }
+        if enabled, preferences?.cloudSyncStopping == false { refresh() }
     }
 
     /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.

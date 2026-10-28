@@ -55,17 +55,20 @@ final class PanelPreferences: ObservableObject {
     @Published private(set) var cloudSyncEnabled: Bool
     @Published private(set) var cloudSyncStopping = false
     var onCloudSyncChange: ((Bool) async -> Void)?
+    private var cloudSyncTask: Task<Void, Never>?
 
     func setCloudSyncEnabled(_ enabled: Bool) {
         guard !cloudSyncStopping, enabled != cloudSyncEnabled else { return }
+        let previous = cloudSyncTask
         if enabled {
             cloudSyncEnabled = true
             defaults.set(true, forKey: Self.cloudSyncKey)
-            Task { await onCloudSyncChange?(true) }
+            cloudSyncTask = Task { await previous?.value; await onCloudSyncChange?(true) }
         } else {
             cloudSyncStopping = true
             defaults.set(false, forKey: Self.cloudSyncKey)
-            Task {
+            cloudSyncTask = Task {
+                await previous?.value
                 await onCloudSyncChange?(false)
                 cloudSyncEnabled = false
                 cloudSyncStopping = false

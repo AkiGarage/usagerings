@@ -59,8 +59,10 @@ final class CloudSnapshotSenderTests: XCTestCase {
     }
 
     private func fixture(_ value: Double, at date: Date) -> MultiUsageSnapshot {
-        MultiUsageSnapshot(sections: [ProviderSection(provider: .codex,
-            windows: [UsageLimit(title: "5h", leftPercent: value, resetText: "")],
+        var limit = UsageLimit(title: "5h", leftPercent: value, resetText: "")
+        limit.observedAt = date
+        return MultiUsageSnapshot(sections: [ProviderSection(provider: .codex,
+            windows: [limit],
             stats: [], failureText: nil)], codexSnapshot: nil, updatedAt: date)
     }
 
@@ -107,7 +109,9 @@ final class CloudSnapshotSenderTests: XCTestCase {
         await sender.waitForPending()
         let sent = try XCTUnwrap(mock.sent.first)
         XCTAssertEqual(sent.observedAt, cached.observedAt)
-        XCTAssertEqual(sent.readings.map(\.provider), ["claude"])
+        XCTAssertEqual(sent.readings.map(\.provider), ["claude", "grok"])
+        XCTAssertEqual(sent.readings.last?.availability, "unavailable")
+        XCTAssertNil(sent.readings.last?.remainingPercent)
     }
 
     func testDisabledAndUnavailableDoNotSendAndRetryLater() async {
@@ -190,6 +194,89 @@ final class CloudSnapshotSenderTests: XCTestCase {
 
 @MainActor
 extension CloudSnapshotSenderTests {
+    func testEmptyAndUnknownObservationNeverPublish() async {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = MockTransport()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let sender = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        let unknown = UsageLimit(title: "5h", leftPercent: 80, resetText: "")
+        let snapshot = MultiUsageSnapshot(sections: [ProviderSection(provider: .codex, windows: [unknown], stats: [], failureText: nil)], codexSnapshot: nil, updatedAt: now)
+        sender.offer(snapshot, now: now)
+        sender.offer(MultiUsageSnapshot(sections: [], codexSnapshot: nil, updatedAt: now), now: now)
+        await sender.waitForPending()
+        XCTAssertTrue(mock.sent.isEmpty)
+        XCTAssertEqual(mock.checks, 0)
+    }
+
+    func testFailurePublishesUnavailableWithPreviousObservationAndIdentity() async throws {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = MockTransport()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let sender = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        sender.offer(fixture(80, at: now), now: now)
+        await sender.waitForPending()
+        let failed = MultiUsageSnapshot(sections: [ProviderSection(provider: .codex, windows: [], stats: [], failureText: "failed")], codexSnapshot: nil, updatedAt: now.addingTimeInterval(60))
+        sender.offer(failed, now: now.addingTimeInterval(60))
+        await sender.waitForPending()
+        let sent = try XCTUnwrap(mock.sent.last)
+        XCTAssertEqual(mock.sent.count, 2)
+        XCTAssertEqual(sent.observedAt, now)
+        XCTAssertEqual(sent.readings.first?.accountID, mock.sent.first?.readings.first?.accountID)
+        XCTAssertEqual(sent.readings.first?.availability, "unavailable")
+        XCTAssertNil(sent.readings.first?.remainingPercent)
+    }
+
+    func testAmbiguousAccountsEmitAnonymousUnavailable() async throws {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = MockTransport()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var first = UsageLimit(title: "5h", leftPercent: 80, resetText: "")
+        first.observedAt = now
+        var second = first; second.accountIndex = 1
+        let section = ProviderSection(provider: .claude, windows: [first, second], stats: [], failureText: nil,
+                                      accounts: [ProviderAccount(index: 0), ProviderAccount(index: 1)])
+        let sender = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        sender.offer(MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: now), now: now)
+        await sender.waitForPending()
+        let reading = try XCTUnwrap(mock.sent.first?.readings.first)
+        XCTAssertEqual(mock.sent.first?.readings.count, 1)
+        XCTAssertEqual(reading.availability, "unavailable")
+        XCTAssertNil(reading.remainingPercent)
+    }
+
+    func testRetryJitterAndServerMinimum() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var low = RetryPolicy(failures: 0, quotaBlocked: false, nextAttempt: nil)
+        var high = low
+        low.failed(quotaExceeded: false, retryAfter: nil, now: now, jitter: 0)
+        high.failed(quotaExceeded: false, retryAfter: nil, now: now, jitter: 1)
+        XCTAssertEqual(low.nextAttempt, now.addingTimeInterval(30))
+        XCTAssertEqual(high.nextAttempt, now.addingTimeInterval(40))
+        var server = RetryPolicy(failures: 0, quotaBlocked: false, nextAttempt: nil)
+        server.failed(quotaExceeded: false, retryAfter: 300, now: now, jitter: 1)
+        XCTAssertEqual(server.nextAttempt, now.addingTimeInterval(300))
+    }
+
+    func testPreferenceSerializesRapidOnOff() async {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let preferences = PanelPreferences(defaults: defaults)
+        var events: [Bool] = []
+        var resume: CheckedContinuation<Void, Never>?
+        preferences.onCloudSyncChange = { enabled in
+            XCTAssertTrue(Thread.isMainThread)
+            events.append(enabled)
+            if enabled { await withCheckedContinuation { resume = $0 } }
+        }
+        preferences.setCloudSyncEnabled(true)
+        preferences.setCloudSyncEnabled(false)
+        while resume == nil { await Task.yield() }
+        XCTAssertEqual(events, [true])
+        resume?.resume()
+        while preferences.cloudSyncStopping { await Task.yield() }
+        XCTAssertEqual(events, [true, false])
+        XCTAssertFalse(preferences.cloudSyncEnabled)
+    }
+
     final class FakeDatabase: CloudSnapshotDatabase {
         var existing: CKRecord?
         var saves = 0
@@ -224,12 +311,19 @@ extension CloudSnapshotSenderTests {
         let snapshot = CloudSnapshot(sourceDeviceID: id, revision: 2, observedAt: now, publishedAt: now, readings: [])
         db.existing = try CloudKitSnapshotTransport.record(snapshot)
         let transport = CloudKitSnapshotTransport(database: db)
-        do { try await transport.save(snapshot); XCTFail("Expected conflict") } catch {}
+        try await transport.save(snapshot)
         XCTAssertEqual(db.saves, 0)
+        let older = CloudSnapshot(sourceDeviceID: id, revision: 1, observedAt: now, publishedAt: now, readings: [])
+        try await transport.save(older)
+        XCTAssertEqual(db.saves, 0)
+        db.existing?["observedAt"] = now.addingTimeInterval(0.5)
+        let newer = CloudSnapshot(sourceDeviceID: id, revision: 3, observedAt: now, publishedAt: now, readings: [])
+        try await transport.save(newer)
+        XCTAssertEqual(db.saves, 1)
         db.existing = nil
         db.saveError = CKError(.serverRecordChanged)
         do { try await transport.save(snapshot); XCTFail("Expected server conflict") } catch {}
-        XCTAssertEqual(db.saves, 1)
+        XCTAssertEqual(db.saves, 2)
     }
 
     func testRealProviderMappingStableAccountsAndNoSecrets() async throws {
