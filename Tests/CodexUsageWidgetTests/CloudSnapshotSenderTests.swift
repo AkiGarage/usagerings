@@ -187,3 +187,171 @@ final class CloudSnapshotSenderTests: XCTestCase {
         XCTAssertEqual(decoded.readings, snapshot.readings)
     }
 }
+
+@MainActor
+extension CloudSnapshotSenderTests {
+    final class FakeDatabase: CloudSnapshotDatabase {
+        var existing: CKRecord?
+        var saves = 0
+        var saveError: Error?
+        func record(for id: CKRecord.ID) async throws -> CKRecord {
+            guard let existing else { throw CKError(.unknownItem) }
+            return existing
+        }
+        func saveIfUnchanged(_ record: CKRecord) async throws {
+            saves += 1
+            if let saveError { throw saveError }
+            existing = record
+        }
+    }
+
+    func testGoldenJSONMatchesPhoneSnapshotCodec() throws {
+        let snapshot = CloudSnapshot(sourceDeviceID: UUID(uuidString: "11111111-2222-4333-8444-555555555555")!,
+            revision: 42, observedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            publishedAt: Date(timeIntervalSince1970: 1_700_000_001), readings: [CloudReading(
+                provider: "codex", accountID: UUID(uuidString: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")!,
+                window: "session", remainingPercent: 42.5, resetAt: nil, availability: "available")])
+        let record = try CloudKitSnapshotTransport.record(snapshot)
+        let payload = try XCTUnwrap(record["payload"] as? Data)
+        let golden = #"{"observedAt":"2023-11-14T22:13:20Z","publishedAt":"2023-11-14T22:13:21Z","readings":[{"accountID":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE","availability":"available","provider":"codex","remainingPercent":42.5,"window":"session"}],"revision":42,"schemaVersion":1,"sourceDeviceID":"11111111-2222-4333-8444-555555555555"}"#
+        XCTAssertEqual(payload, Data(golden.utf8))
+    }
+
+    func testConflictNeverFallsBackToUnconditionalSave() async throws {
+        let db = FakeDatabase()
+        let id = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let snapshot = CloudSnapshot(sourceDeviceID: id, revision: 2, observedAt: now, publishedAt: now, readings: [])
+        db.existing = try CloudKitSnapshotTransport.record(snapshot)
+        let transport = CloudKitSnapshotTransport(database: db)
+        do { try await transport.save(snapshot); XCTFail("Expected conflict") } catch {}
+        XCTAssertEqual(db.saves, 0)
+        db.existing = nil
+        db.saveError = CKError(.serverRecordChanged)
+        do { try await transport.save(snapshot); XCTFail("Expected server conflict") } catch {}
+        XCTAssertEqual(db.saves, 1)
+    }
+
+    func testRealProviderMappingStableAccountsAndNoSecrets() async throws {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = MockTransport()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let salt = Data(repeating: 1, count: 32)
+        let a = AccountID(provider: .claude, source: "id", value: "private-a", salt: salt)
+        let b = AccountID(provider: .claude, source: "id", value: "private-b", salt: salt)
+        var aLimit = UsageLimit(title: "secret label · 5h", leftPercent: 42.5, resetText: "")
+        aLimit.accountIndex = 0; aLimit.observedAt = now.addingTimeInterval(-300)
+        var bLimit = UsageLimit(title: "other label · Weekly", leftPercent: 13, resetText: "")
+        bLimit.accountIndex = 1; bLimit.observedAt = now.addingTimeInterval(-600)
+        var grok = UsageLimit(title: "label · Monthly", leftPercent: 30, resetText: "")
+        grok.observedAt = now.addingTimeInterval(-100); grok.resetAt = now.addingTimeInterval(1000)
+        let sections = [ProviderSection(provider: .claude, windows: [aLimit, bLimit], stats: [], failureText: nil,
+                            accounts: [ProviderAccount(index: 0, id: a), ProviderAccount(index: 1, id: b)]),
+                        ProviderSection(provider: .grok, windows: [grok], stats: [], failureText: nil),
+                        ProviderSection(provider: .antigravity, windows: [grok], stats: [], failureText: nil)]
+        let sender = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        sender.offer(MultiUsageSnapshot(sections: sections, codexSnapshot: nil, updatedAt: now), now: now)
+        await sender.waitForPending()
+        let sent = try XCTUnwrap(mock.sent.first)
+        XCTAssertEqual(sent.readings.count, 3)
+        XCTAssertEqual(Set(sent.readings.map(\.provider)), ["claude", "grok"])
+        XCTAssertEqual(Set(sent.readings.filter { $0.provider == "claude" }.map(\.accountID)).count, 2)
+        XCTAssertEqual(sent.observedAt, bLimit.observedAt)
+        XCTAssertEqual(sent.readings.first(where: { $0.provider == "grok" })?.resetAt, grok.resetAt)
+        let payload = try XCTUnwrap(try CloudKitSnapshotTransport.record(sent)["payload"] as? Data)
+        let text = String(decoding: payload, as: UTF8.self)
+        XCTAssertFalse(text.contains("secret")); XCTAssertFalse(text.contains("private")); XCTAssertFalse(text.contains("label"))
+    }
+
+    func testLostRevisionCreatesNewSource() async throws {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = MockTransport(); let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        first.offer(fixture(80, at: now), now: now); await first.waitForPending()
+        let source = try XCTUnwrap(mock.sent.first?.sourceDeviceID)
+        defaults.set(Data("{\"sourceDeviceID\":\"\(source.uuidString)\"}".utf8), forKey: CloudSnapshotSender.stateKey)
+        let second = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        second.offer(fixture(80, at: now), now: now); await second.waitForPending()
+        XCTAssertNotEqual(mock.sent.last?.sourceDeviceID, source)
+        XCTAssertEqual(mock.sent.last?.revision, 1)
+    }
+
+    func testUnchangedFreshObservationRepublishedBeforeRemainingStale() async throws {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = MockTransport(); let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let sender = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        sender.offer(fixture(80, at: now), now: now); await sender.waitForPending()
+        let later = now.addingTimeInterval(600)
+        sender.offer(fixture(80, at: later), now: later); await sender.waitForPending()
+        XCTAssertEqual(mock.sent.count, 2)
+        XCTAssertEqual(mock.sent.last?.observedAt, later)
+    }
+}
+
+@MainActor
+extension CloudSnapshotSenderTests {
+    final class SavingTransport: CloudSnapshotTransport {
+        var continuation: CheckedContinuation<Void, Never>?
+        var saves = 0
+        func accountAvailable() async throws -> Bool { true }
+        func save(_ snapshot: CloudSnapshot) async throws {
+            saves += 1
+            await withCheckedContinuation { continuation = $0 }
+        }
+    }
+
+    func testOptOutAwaitsAlreadyStartedSave() async {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = SavingTransport(); let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let sender = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        sender.offer(fixture(80, at: now), now: now)
+        while mock.continuation == nil { await Task.yield() }
+        var stopped = false
+        let stop = Task { await sender.setEnabled(false); stopped = true }
+        await Task.yield()
+        XCTAssertFalse(stopped)
+        sender.offer(fixture(60, at: now.addingTimeInterval(60)), now: now.addingTimeInterval(60))
+        mock.continuation?.resume()
+        await stop.value
+        XCTAssertTrue(stopped)
+        sender.offer(fixture(50, at: now.addingTimeInterval(120)), now: now.addingTimeInterval(120))
+        XCTAssertEqual(mock.saves, 1)
+    }
+}
+
+@MainActor
+extension CloudSnapshotSenderTests {
+    func testProviderParsersRetainObservationAndResetTimes() throws {
+        let now = Date(timeIntervalSince1970: 1_700_001_000)
+        let codex = Data(#"[{"provider":"codex","usage":{"updatedAt":"2023-11-14T22:13:20.000Z","primary":{"usedPercent":20},"secondary":null}}]"#.utf8)
+        let parsed = try CodexUsageTextParser.parseJSON(codex, now: now)
+        XCTAssertEqual(parsed.session?.observedAt, Date(timeIntervalSince1970: 1_700_000_000))
+        let grok = Data(#"{"config":{"creditUsagePercent":25,"currentPeriod":{"end":"2023-11-15T00:00:00Z"}}}"#.utf8)
+        guard case .quota(let limit) = try CLIProxyParser.grok(grok, label: "private", weekly: true, now: now) else {
+            return XCTFail("Expected quota")
+        }
+        XCTAssertEqual(limit.leftPercent, 75)
+        XCTAssertEqual(limit.resetAt, ISO8601DateFormatter().date(from: "2023-11-15T00:00:00Z"))
+    }
+}
+
+@MainActor
+extension CloudSnapshotSenderTests {
+    func testMissingWindowsAreOmittedAndOldestIsTakenFromReadings() async throws {
+        let defaults = UserDefaults(suiteName: "CloudSenderTests-\(UUID())")!
+        let mock = MockTransport()
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        var actual = UsageLimit(title: "Weekly", leftPercent: 25, resetText: "")
+        actual.observedAt = start.addingTimeInterval(10)
+        let sections = [ProviderSection(provider: .claude, windows: [actual], stats: [], failureText: nil),
+                        ProviderSection(provider: .codex, windows: [], stats: [ProviderStat(title: "5h", valueText: "Not reported")], failureText: nil)]
+        let sender = CloudSnapshotSender(defaults: defaults, transport: mock, enabled: true)
+        sender.offer(MultiUsageSnapshot(sections: sections, codexSnapshot: nil, updatedAt: start), now: start.addingTimeInterval(20))
+        await sender.waitForPending()
+        let sent = try XCTUnwrap(mock.sent.first)
+        XCTAssertEqual(sent.observedAt, actual.observedAt)
+        XCTAssertEqual(sent.readings.count, 1)
+        XCTAssertEqual(sent.readings.first?.remainingPercent, 25)
+        XCTAssertFalse(sent.readings.contains { $0.provider == "codex" })
+    }
+}

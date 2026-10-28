@@ -3,6 +3,23 @@ import XCTest
 
 @MainActor
 final class MultiUsageStoreTests: XCTestCase {
+    func testRefreshSendsProviderReadingsOnlyAfterOptIn() async throws {
+        let defaults = UserDefaults(suiteName: "CloudStoreTests-\(UUID())")!
+        let preferences = PanelPreferences(defaults: defaults)
+        let transport = CloudSnapshotSenderTests.MockTransport()
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: Self.successRunner,
+            cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [], preferences: preferences, cloudTransport: transport)
+        store.refresh()
+        try await waitUntil("refresh settles") { !store.isRefreshing }
+        XCTAssertTrue(transport.sent.isEmpty)
+        preferences.setCloudSyncEnabled(true)
+        await store.cloudSyncChanged(enabled: true)
+        try await waitUntil("cloud publish settles") { !transport.sent.isEmpty }
+        let reading = try XCTUnwrap(transport.sent.first?.readings.first { $0.provider == "codex" && $0.window == "weekly" })
+        XCTAssertEqual(reading.remainingPercent, 81)
+        XCTAssertFalse(transport.sent.first!.readings.contains { $0.provider == "gemini" })
+    }
+
     func testCodexResetDateSurvivesTheMultiProviderPath() async throws {
         let service = MultiUsageService(commandRunner: { _ in
             let json = #"[{"provider":"codex","usage":{"primary":{"usedPercent":20,"windowMinutes":300,"resetsAt":"2026-10-29T00:00:00Z"}}}]"#

@@ -89,8 +89,10 @@ enum CLIProxyParser {
             guard let usedPercent = percentage, usedPercent.isFinite, usedPercent >= 0 else {
                 return .noData
             }
-            return .quota(UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
-                                     resetText: reset(end, now: now)))
+            var limit = UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
+                                   resetText: reset(end, now: now))
+            limit.resetAt = date(end)
+            return .quota(limit)
         }
 
         // An explicit zero monthly cap denotes an uncapped account. It wins even
@@ -100,8 +102,10 @@ enum CLIProxyParser {
         }
 
         if let usedPercent = percentage, usedPercent.isFinite, usedPercent >= 0 {
-            return .quota(UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
-                                     resetText: reset(end, now: now)))
+            var limit = UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
+                                   resetText: reset(end, now: now))
+            limit.resetAt = date(end)
+            return .quota(limit)
         }
 
         if let spent = amount(config["used"]),
@@ -109,8 +113,10 @@ enum CLIProxyParser {
            let monthlyLimit, monthlyLimit.isFinite, monthlyLimit > 0 {
             let usedPercent = spent / monthlyLimit * 100
             guard usedPercent.isFinite, usedPercent >= 0 else { return .noData }
-            return .quota(UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
-                                     resetText: reset(end, now: now)))
+            var limit = UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
+                                   resetText: reset(end, now: now))
+            limit.resetAt = date(end)
+            return .quota(limit)
         }
         return .noData
     }

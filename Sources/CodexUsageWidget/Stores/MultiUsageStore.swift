@@ -29,10 +29,10 @@ final class MultiUsageStore: ObservableObject {
     private var expiryTask: Task<Void, Never>?
 
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
-         preferences: PanelPreferences? = nil) {
+         preferences: PanelPreferences? = nil, cloudTransport: CloudSnapshotTransport = CloudKitSnapshotTransport()) {
         self.preferences = preferences
         if let preferences {
-            cloudSender = CloudSnapshotSender(defaults: preferences.defaults, enabled: preferences.cloudSyncEnabled)
+            cloudSender = CloudSnapshotSender(defaults: preferences.defaults, transport: cloudTransport, enabled: preferences.cloudSyncEnabled)
         }
         if preferences != nil, NSClassFromString("XCTestCase") == nil { claudeChoiceURL = ClaudeAccountChoice.fileURL() }
         do {
