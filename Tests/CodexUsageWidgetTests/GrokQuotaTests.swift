@@ -135,9 +135,11 @@ final class GrokQuotaTests: XCTestCase {
         clock.advance(1)
         await transport.respond(weekly: true, status: 429, header: ["rEtRy-AfTeR": ["900"]])
         let limited = try await grok(client)
-        XCTAssertEqual(limited.windows, good.windows)
+        XCTAssertEqual(good.windows.count, 4)
+        XCTAssertEqual(limited.windows.filter { $0.accountIndex == 0 }.count, 1)
+        XCTAssertEqual(limited.windows.filter { $0.accountIndex == 1 }.count, 2)
         XCTAssertNil(limited.failureText)
-        XCTAssertTrue(limited.stats[0].valueText.contains("rate limited · data from"))
+        XCTAssertTrue(limited.stats[0].valueText.contains("rate-limited"))
         clock.advance(899)
         _ = await client.fetchSections()
         counts = await transport.counts
@@ -181,7 +183,7 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertEqual(after, before.map { $0 + 2 })
     }
 
-    func testHTTPDateRetryAfterAndStaleDataOnBothFailures() async throws {
+    func testHTTPDateRetryAfterDropsWindowsOnNonTransientFailures() async throws {
         let clock = GrokClock(), transport = GrokTransport()
         let client = client(transport, clock)
         let good = try await grok(client)
@@ -194,9 +196,12 @@ final class GrokQuotaTests: XCTestCase {
             header: ["Retry-After": [formatter.string(from: clock.read().addingTimeInterval(1200))]])
         await transport.respond(weekly: false, status: 503)
         let stale = try await grok(client)
-        XCTAssertEqual(stale.windows, good.windows)
+        XCTAssertEqual(good.windows.count, 4)
+        XCTAssertFalse(stale.windows.contains { $0.accountIndex == 0 })
+        XCTAssertEqual(stale.windows.filter { $0.accountIndex == 1 }.count, 2)
         XCTAssertNotNil(stale.failureText)
-        XCTAssertTrue(stale.stats.allSatisfy { $0.valueText.contains("data from") })
+        XCTAssertTrue(stale.stats.contains { $0.valueText.contains("rate-limited") })
+        XCTAssertTrue(stale.stats.contains { $0.valueText.contains("request failed") })
         clock.advance(1199)
         _ = await client.fetchSections()
         var counts = await transport.counts

@@ -79,6 +79,9 @@ final class MultiUsageStoreTests: XCTestCase {
             if args[2] == "zai", state.shouldFail() {
                 return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
             }
+            if args[2] == "zai", state.isRecovered {
+                return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(Self.zai.replacingOccurrences(of: "\"usedPercent\":10", with: "\"usedPercent\":35").utf8), stderr: Data())
+            }
             return try Self.successRunner(args)
         }, cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [])
         store.refresh()
@@ -99,7 +102,8 @@ final class MultiUsageStoreTests: XCTestCase {
         store.refresh()
         try await waitUntil("recovery") { !store.isRefreshing }
         let recovered = try XCTUnwrap(CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .zai })
-        XCTAssertEqual(recovered.limit, before)
+        XCTAssertEqual(recovered.limit?.leftPercent, 65)
+        XCTAssertNotEqual(recovered.limit?.leftPercent, before?.leftPercent)
         XCTAssertFalse(recovered.isStale)
     }
 
@@ -137,11 +141,13 @@ final class MultiUsageStoreTests: XCTestCase {
     private final class RefreshState: @unchecked Sendable {
         private let lock = NSLock()
         private var failing = false
+        private var recovered = false
+        var isRecovered: Bool { lock.lock(); defer { lock.unlock() }; return recovered }
         private var attempts = 0
         var failedAttempts: Int { lock.lock(); defer { lock.unlock() }; return attempts }
         func shouldFail() -> Bool { lock.lock(); defer { lock.unlock() }; if failing { attempts += 1 }; return failing }
         func fail() { lock.lock(); defer { lock.unlock() }; failing = true }
-        func recover() { lock.lock(); defer { lock.unlock() }; failing = false }
+        func recover() { lock.lock(); defer { lock.unlock() }; failing = false; recovered = true }
     }
 
     private static let successRunner: CodexUsageService.CommandRunner = { arguments in
@@ -173,7 +179,7 @@ final class MultiUsageStoreTests: XCTestCase {
 
     private static let codex = #"[{"provider":"codex","usage":{"primary":{"usedPercent":null,"windowMinutes":null,"resetsAt":null},"secondary":{"usedPercent":19,"windowMinutes":10080,"resetsAt":"2026-10-22T06:38:56Z"}},"credits":{"remaining":61003.32,"balanceReadSucceeded":true}}]"#
 
-    private static let zai = #"[{"provider":"zai","usage":{"primary":{"usedPercent":10,"windowMinutes":300,"resetsAt":"2026-10-16T15:52:28Z"},"secondary":null,"tertiary":null,"extraRateWindows":[{"title":"MCP","window":{"usedPercent":0.4,"windowMinutes":43200,"resetsAt":"2026-11-04T05:08:05Z"}}]}}]"#
+    private static let zai = #"[{"provider":"zai","usage":{"primary":{"usedPercent":10,"windowMinutes":300,"resetsAt":"2099-10-16T15:52:28Z"},"secondary":null,"tertiary":null,"extraRateWindows":[{"title":"MCP","window":{"usedPercent":0.4,"windowMinutes":43200,"resetsAt":"2026-11-04T05:08:05Z"}}]}}]"#
 
     private static let claude = #"[{"provider":"claude","usage":{"primary":{"usedPercent":21,"windowMinutes":300,"resetsAt":"2026-10-16T14:39:59Z"},"secondary":{"usedPercent":36,"windowMinutes":10080,"resetsAt":"2026-10-21T16:59:59Z"}}}]"#
 

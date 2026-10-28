@@ -75,6 +75,7 @@ actor CLIProxyClient {
         var nextAttempt = Date.distantPast
         var backoff: TimeInterval = 0
         var failure: String?
+        var failureReason: UsageFailureReason?
         var rateLimited = false
 
         var notice: String? {
@@ -119,13 +120,20 @@ actor CLIProxyClient {
     }
 
     private enum Failure: Error {
-        case rejected, unverifiedPeer, request, payload, noCredentials, noQuota, missingProject, upstreamAuth
+        case rejected, unverifiedPeer, request, transport, payload, noCredentials, noQuota, missingProject, upstreamAuth
         case rateLimited(retryAfter: TimeInterval?)
+        var reason: UsageFailureReason {
+            switch self {
+            case .transport: .transport
+            case .upstreamAuth: .logout
+            default: .other
+            }
+        }
         var text: String {
             switch self {
             case .rejected: CLIProxyClient.rejectedKeyText
             case .unverifiedPeer: CLIProxyClient.unverifiedPeerText
-            case .request: "CLIProxyAPI request failed"
+            case .request, .transport: "CLIProxyAPI request failed"
             case .payload: "CLIProxyAPI returned an unreadable response"
             case .noCredentials: "No enabled CLIProxyAPI credentials"
             case .noQuota: "No quota data reported"
@@ -139,8 +147,8 @@ actor CLIProxyClient {
     private func fetchSerially(now: Date, skipping: Set<ProviderID> = []) async -> [ProviderSection] {
         let providers: [ProviderID] = [.claude, .antigravity, .grok].filter { !skipping.contains($0) }
         guard !providers.isEmpty else { return [] }
-        func failed(_ text: String) -> [ProviderSection] {
-            providers.map { ProviderSection(provider: $0, windows: [], stats: [], failureText: text) }
+        func failed(_ text: String, reason: UsageFailureReason = .other) -> [ProviderSection] {
+            providers.map { ProviderSection(provider: $0, windows: [], stats: [], failureText: text, failureReason: reason) }
         }
         guard peerVerifier.isTrustedListener() else { return failed(Self.unverifiedPeerText) }
         guard let key = keyProvider.managementKey(), !key.isEmpty else {
@@ -179,6 +187,7 @@ actor CLIProxyClient {
                                 section.stats.append(ProviderStat(title: account.maskedEmail, valueText: notice))
                                 section.failureText = usage.rateLimited ? "Some accounts rate limited" : "Some accounts unavailable"
                                 accountState.failureText = notice
+                                accountState.failureReason = usage.failureReason
                             }
                         } else if provider == .grok {
                             let usage = try await cachedGrokUsage(account, key: key, now: now)
@@ -188,6 +197,8 @@ actor CLIProxyClient {
                                 section.stats.append(contentsOf: period.stats)
                                 if let notice = period.notice {
                                     if !period.windows.isEmpty { accountState.isStale = true }
+                                    accountState.failureText = [accountState.failureText, notice].compactMap { $0 }.joined(separator: " · ")
+                                    accountState.failureReason = period.failureReason
                                     section.accountInventoryComplete = false
                                     section.stats.append(ProviderStat(title: "\(account.maskedEmail) · \(period.providerName)",
                                                                       valueText: notice))
@@ -196,7 +207,8 @@ actor CLIProxyClient {
                             }
                             if !usage.periods.isEmpty, unavailablePeriods == usage.periods.count {
                                 section.failureText = "Some accounts unavailable"
-                                accountState.failureText = "Usage unavailable"
+                                accountState.failureText = usage.periods.compactMap(\.notice).joined(separator: " · ")
+                                accountState.failureReason = usage.periods.first(where: { $0.failureReason != nil })?.failureReason
                             }
                         } else {
                             windows = try await quota(account, provider: provider, key: key, now: now)
@@ -218,6 +230,7 @@ actor CLIProxyClient {
                         section.stats.append(ProviderStat(title: account.maskedEmail, valueText: reason))
                         section.failureText = "Some accounts unavailable"
                         accountState.failureText = reason
+                        accountState.failureReason = (error as? Failure)?.reason ?? .other
                     }
                     section.accounts.append(accountState)
                     for index in statsStart..<section.stats.count {
@@ -234,6 +247,7 @@ actor CLIProxyClient {
                                             leftPercent: $0.leftPercent, resetText: $0.resetText)
                     window.accountIndex = $0.accountIndex
                     window.resetAt = $0.resetAt
+                    window.observedAt = $0.observedAt
                     return window
                 }
                 safe.stats = section.stats.map {
@@ -243,7 +257,7 @@ actor CLIProxyClient {
                 return safe
             }
         } catch {
-            return failed((error as? Failure)?.text ?? Failure.payload.text)
+            return failed((error as? Failure)?.text ?? Failure.payload.text, reason: (error as? Failure)?.reason ?? .other)
         }
     }
 
@@ -263,7 +277,7 @@ actor CLIProxyClient {
                 let (data, status) = try await transport.send(request)
                 try checkStatus(status, key: key)
                 return data
-            } catch let error as URLError where attempt == 0 &&
+            } catch let error as URLError where body == nil && attempt == 0 &&
                 [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(error.code) {
                 continue
             } catch let failure as Failure {
@@ -271,10 +285,10 @@ actor CLIProxyClient {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                throw Failure.request
+                throw Failure.transport
             }
         }
-        throw Failure.request
+        throw Failure.transport
     }
 
     private func checkStatus(_ status: Int, key: String) throws {
@@ -309,15 +323,19 @@ actor CLIProxyClient {
         let id = AccountID.cliProxy(account, provider: .claude)
         var cached = claudeUsage[id] ?? CachedUsage()
         let startedAt = clock()
-        guard startedAt >= cached.nextAttempt else { return cached }
+        guard startedAt >= cached.nextAttempt else {
+            if cached.failureReason?.isTransient == true { cached.windows = cached.windows.filter { $0.isRetainable(at: startedAt) } }
+            return cached
+        }
         cached.nextAttempt = startedAt.addingTimeInterval(Self.claudeMinimumInterval)
         do {
             let windows = try await quota(account, provider: .claude, key: key, now: now)
             guard !windows.isEmpty else { throw Failure.noQuota }
-            cached.windows = windows
             cached.fetchedAt = clock()
+            cached.windows = windows.map { var w = $0; w.observedAt = cached.fetchedAt; return w }
             cached.backoff = 0
             cached.failure = nil
+            cached.failureReason = nil
             cached.rateLimited = false
         } catch Failure.unverifiedPeer {
             throw Failure.unverifiedPeer
@@ -329,14 +347,20 @@ actor CLIProxyClient {
             cached.nextAttempt = max(cached.nextAttempt, clock().addingTimeInterval(retryAfter ?? cached.backoff))
             cached.rateLimited = true
             cached.failure = nil
+            cached.failureReason = .other
+            cached.windows = []
+            cached.fetchedAt = nil
         } catch {
             cached.failure = (error as? Failure)?.text ?? Failure.payload.text
+            cached.failureReason = (error as? Failure)?.reason ?? .other
             cached.rateLimited = false
-            if case Failure.upstreamAuth? = error as? Failure {
-                // A logged-out account has no current usage; never keep showing its old numbers.
+            if cached.failureReason?.isTransient != true {
                 cached.windows = []
                 cached.fetchedAt = nil
             }
+        }
+        if cached.failureReason?.isTransient == true {
+            cached.windows = cached.windows.filter { $0.isRetainable(at: clock()) }
         }
         claudeUsage[id] = cached
         return cached
@@ -345,7 +369,12 @@ actor CLIProxyClient {
     private func cachedGrokUsage(_ account: CLIProxyCredential, key: String, now: Date) async throws -> GrokUsage {
         let id = AccountID.cliProxy(account, provider: .grok)
         var cached = grokUsage[id] ?? GrokUsage()
-        guard clock() >= cached.nextAttempt else { return cached }
+        guard clock() >= cached.nextAttempt else {
+            for index in cached.periods.indices where cached.periods[index].failureReason?.isTransient == true {
+                cached.periods[index].windows = cached.periods[index].windows.filter { $0.isRetainable(at: clock()) }
+            }
+            return cached
+        }
         cached.nextAttempt = clock().addingTimeInterval(Self.claudeMinimumInterval)
         var headers = ["Authorization": "Bearer $TOKEN$", "x-xai-token-auth": "xai-grok-cli",
                        "x-grok-client-version": "1.0.46", "accept": "*/*",
@@ -360,7 +389,9 @@ actor CLIProxyClient {
                 let data = try await apiCall(account, method: "GET", url: url, headers: headers, key: key)
                 switch try CLIProxyParser.grok(data, label: account.maskedEmail, weekly: index == 0, now: now) {
                 case .quota(let window):
-                    period.windows = [window]
+                    var observed = window
+                    observed.observedAt = clock()
+                    period.windows = [observed]
                     period.stats = []
                 case .noMonthlyCap:
                     // SuperGrok-style plans report monthlyLimit 0 (no monthly window): show nothing.
@@ -373,6 +404,7 @@ actor CLIProxyClient {
                 }
                 period.fetchedAt = clock()
                 period.failure = nil
+                period.failureReason = nil
                 period.rateLimited = false
             } catch Failure.unverifiedPeer {
                 throw Failure.unverifiedPeer
@@ -383,10 +415,16 @@ actor CLIProxyClient {
                 cached.nextAttempt = max(cached.nextAttempt, clock().addingTimeInterval(retryAfter ?? backoff))
                 period.rateLimited = true
                 period.failure = nil
+                period.failureReason = .other
+                period.windows = []
+                period.fetchedAt = nil
             } catch {
                 period.failure = (error as? Failure)?.text ?? Failure.payload.text
+                period.failureReason = (error as? Failure)?.reason ?? .other
                 period.rateLimited = false
+                if period.failureReason?.isTransient != true { period.windows = []; period.fetchedAt = nil }
             }
+            if period.failureReason?.isTransient == true { period.windows = period.windows.filter { $0.isRetainable(at: clock()) } }
             cached.periods[index] = period
         }
         cached.backoff = rateLimited ? backoff : 0
@@ -427,16 +465,12 @@ actor CLIProxyClient {
         guard let project = account.projectID, !project.isEmpty else { throw Failure.missingProject }
         let body = String(decoding: try JSONSerialization.data(withJSONObject: ["project": project]), as: UTF8.self)
         for host in ["daily-cloudcode-pa.googleapis.com", "daily-cloudcode-pa.sandbox.googleapis.com", "cloudcode-pa.googleapis.com"] {
-            do {
-                let data = try await apiCall(account, method: "POST", url: "https://\(host)/v1internal:retrieveUserQuotaSummary", headers: [
-                    "Authorization": "Bearer $TOKEN$", "Content-Type": "application/json",
-                    "User-Agent": "antigravity/hub/2.23.0 darwin/arm64"
-                ], data: body, key: key)
-                let windows = try CLIProxyParser.antigravity(data, now: now)
-                if !windows.isEmpty { return windows }
-            } catch Failure.unverifiedPeer { throw Failure.unverifiedPeer }
-            catch Failure.rejected { throw Failure.rejected }
-            catch { continue }
+            let data = try await apiCall(account, method: "POST", url: "https://\(host)/v1internal:retrieveUserQuotaSummary", headers: [
+                "Authorization": "Bearer $TOKEN$", "Content-Type": "application/json",
+                "User-Agent": "antigravity/hub/2.23.0 darwin/arm64"
+            ], data: body, key: key)
+            let windows = try CLIProxyParser.antigravity(data, now: now)
+            if !windows.isEmpty { return windows }
         }
         throw Failure.noQuota
     }

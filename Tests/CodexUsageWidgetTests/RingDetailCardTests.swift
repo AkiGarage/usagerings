@@ -487,7 +487,7 @@ final class RingDetailCardTests: XCTestCase {
     func testSnapshotRefreshMarksHoveredCardStaleAfterFailure() async throws {
         var codexHasData = true
         let fixture = try await makeHoveredFixture {
-            codexHasData ? Self.codexWindow(usedPercent: 19) : Self.codexFailure
+            codexHasData ? Self.codexWindow(usedPercent: 19) : "fixture-timeout"
         }
         XCTAssertEqual(fixture.controller.highlight.barID, "codex")
 
@@ -565,6 +565,9 @@ final class RingDetailCardTests: XCTestCase {
             case "zai": json = Self.zaiWindow
             default: json = Self.claudeWindow
             }
+            if json == "fixture-timeout" {
+                return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
+            }
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
         }
         let store = MultiUsageStore(service: MultiUsageService(commandRunner: runner,
@@ -614,7 +617,7 @@ final class RingDetailCardTests: XCTestCase {
     }
 
     private static func codexWindow(usedPercent: Int) -> String {
-        #"[{"provider":"codex","usage":{"primary":null,"secondary":{"usedPercent":\#(usedPercent),"windowMinutes":10080,"resetsAt":"2026-10-22T06:38:56Z"}},"credits":{"remaining":61003.32,"balanceReadSucceeded":true}}]"#
+        #"[{"provider":"codex","usage":{"primary":null,"secondary":{"usedPercent":\#(usedPercent),"windowMinutes":10080,"resetsAt":"2099-10-22T06:38:56Z"}},"credits":{"remaining":61003.32,"balanceReadSucceeded":true}}]"#
     }
 
     private static let codexFailure = #"[{"provider":"codex","error":{"code":1,"kind":"provider","message":"synthetic-sensitive-message"}}]"#

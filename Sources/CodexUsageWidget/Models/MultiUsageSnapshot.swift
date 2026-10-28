@@ -42,6 +42,17 @@ struct ProviderStat: Equatable, Codable, Sendable {
     var accountIndex: Int? = nil
 }
 
+enum UsageFailureReason: Equatable, Sendable {
+    case timeout, launchFailure, transport, logout, other
+
+    var isTransient: Bool { self == .timeout || self == .launchFailure || self == .transport }
+}
+
+func staleFailureText(_ failure: String?) -> String {
+    if let failure, failure.hasPrefix("Stale · last successful reading") { return failure }
+    return ["Stale · last successful reading", failure].compactMap { $0 }.joined(separator: " · ")
+}
+
 /// Keeps accounts with missing quota visible without using masked labels as identity.
 struct ProviderAccount: Equatable, Sendable {
     let index: Int
@@ -49,6 +60,7 @@ struct ProviderAccount: Equatable, Sendable {
     var codexExtras: CodexExtrasParser.Extras? = nil
     var id: AccountID? = nil
     var isStale = false
+    var failureReason: UsageFailureReason? = nil
 }
 
 struct ClaudeProfileNotice: Equatable, Sendable, Identifiable {
@@ -76,6 +88,7 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
     /// Fetch evidence, independent of display messages such as "no configured accounts".
     var accountInventoryComplete: Bool? = nil
     var isStale = false
+    var failureReason: UsageFailureReason? = nil
 
     var claudeProfileNotices: [ClaudeProfileNotice] {
         let profiles = Set(claudeProfileBlocks.keys).union(claudeRemoteFailureText == nil ? [] : [1])
@@ -111,7 +124,8 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
         section.stats = stats.filter { ($0.accountIndex ?? 0) == index }
         let account = accounts.first { $0.index == index }
         section.isStale = isStale || (account?.isStale ?? false)
-        section.failureText = section.isStale ? "Stale · last successful reading" : account?.failureText
+        section.failureText = isStale ? failureText : (account == nil ? failureText : account?.failureText)
+        if section.isStale { section.failureText = staleFailureText(section.failureText) }
         section.codexExtras = accounts.isEmpty ? (index == 0 ? codexExtras : nil) : account?.codexExtras
         if index != 0 { section.zaiResetTickets = nil }
         section.accounts = account.map { [$0] } ?? []

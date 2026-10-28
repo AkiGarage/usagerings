@@ -30,6 +30,8 @@ struct UsageLimit: Equatable, Sendable {
     var accountIndex: Int? = nil
     /// Machine-readable reset time when the source reports one.
     var resetAt: Date? = nil
+    /// Original successful observation, retained across failed refreshes.
+    var observedAt: Date? = nil
 
     init(
         title: String,
@@ -45,6 +47,13 @@ struct UsageLimit: Equatable, Sendable {
         self.detailText = detailText
         self.projectionText = projectionText
         self.markerPercent = markerPercent
+    }
+
+    static let staleMaxAge: TimeInterval = 5 * 60 * 60
+
+    func isRetainable(at now: Date) -> Bool {
+        guard let observedAt, now.timeIntervalSince(observedAt) < Self.staleMaxAge else { return false }
+        return resetAt.map { $0 >= now } ?? true
     }
 
     var clampedLeftPercent: Double {

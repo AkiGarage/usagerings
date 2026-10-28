@@ -163,7 +163,8 @@ struct MultiUsageService: Sendable {
                     provider: provider,
                     windows: [],
                     stats: [],
-                    failureText: Self.failureText(for: error)
+                    failureText: Self.failureText(for: error),
+                    failureReason: Self.failureReason(for: error)
                 ),
                 codexSnapshot: nil
             )
@@ -172,8 +173,9 @@ struct MultiUsageService: Sendable {
 
     private func run(_ provider: ProviderID) async throws -> CodexUsageService.CommandResult {
         let arguments = ["usage", "--provider", provider.rawValue, "--format", "json", "--all-accounts"]
+        var retried = false
         func attempt(_ arguments: [String]) async throws -> CodexUsageService.CommandResult {
-            for attempt in 0...1 {
+            while true {
                 try Task.checkCancellation()
                 do {
                     let result: CodexUsageService.CommandResult
@@ -183,14 +185,13 @@ struct MultiUsageService: Sendable {
                         let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: 30)
                         result = try await runner.run(arguments)
                     }
-                    if result.timedOut && attempt == 0 { continue }
+                    if result.timedOut && !retried { retried = true; continue }
                     return result
                 } catch let error as CodexUsageError {
-                    if case .commandFailed(-1, _) = error, attempt == 0 { continue }
+                    if case .commandFailed(-1, _) = error, !retried { retried = true; continue }
                     throw error
                 }
             }
-            throw ProviderFailure.timedOut
         }
         let result = try await attempt(arguments)
         // A single API-key setup has no token accounts; try its single-account query.
@@ -269,7 +270,7 @@ struct MultiUsageService: Sendable {
                     return stat
                 }
             } catch {
-                section.accounts.append(ProviderAccount(index: index, failureText: Self.failureText(for: error), id: id))
+                section.accounts.append(ProviderAccount(index: index, failureText: Self.failureText(for: error), id: id, failureReason: Self.failureReason(for: error)))
                 section.failureText = "Some accounts unavailable"
             }
         }
@@ -344,6 +345,12 @@ struct MultiUsageService: Sendable {
 
     /// CodexUsageError descriptions are already sanitized and bounded; the
     /// parser errors carry their own fixed strings.
+    private static func failureReason(for error: Error) -> UsageFailureReason {
+        if case ProviderFailure.timedOut = error { return .timeout }
+        if case CodexUsageError.commandFailed(-1, _) = error { return .launchFailure }
+        return .other
+    }
+
     private static func failureText(for error: Error) -> String {
         error.localizedDescription
     }
@@ -351,7 +358,7 @@ struct MultiUsageService: Sendable {
 
 private extension UsageLimit {
     func retitled(_ title: String) -> UsageLimit {
-        UsageLimit(
+        var result = UsageLimit(
             title: title,
             leftPercent: leftPercent,
             resetText: resetText,
@@ -359,5 +366,8 @@ private extension UsageLimit {
             projectionText: projectionText,
             markerPercent: markerPercent
         )
+        result.resetAt = resetAt
+        result.observedAt = observedAt
+        return result
     }
 }

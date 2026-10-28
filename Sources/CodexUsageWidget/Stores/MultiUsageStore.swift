@@ -109,73 +109,93 @@ final class MultiUsageStore: ObservableObject {
         isRefreshing = false
         preferences?.reconcileAccounts(in: snapshot)
         preferences?.reconcileProviders(in: snapshot)
-        let displaySnapshot = retainingStaleValues(in: snapshot, previous: rawSnapshot)
+        let displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: Date())
         rawSnapshot = displaySnapshot
         updateClaudeChoice(from: snapshot, now: Date())
         self.snapshot = visible(displaySnapshot)
         expiryTask?.cancel()
         expiryTask = nil
-        let now = Date()
-        if let resetAt = snapshot.sections.flatMap({ $0.claudeProfileBlocks.values })
-            .filter({ $0.isActive(at: now) }).map(\.resetAt).min() {
-            expiryTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(max(0, resetAt.timeIntervalSinceNow + 1)))
-                guard !Task.isCancelled, let self else { return }
-                // Update both the rings and the hover-card snapshot subscription
-                // immediately, even if a provider fetch is already in flight.
-                let now = Date()
-                let sections = self.snapshot.sections.map { section in
-                    var section = section
-                    section.claudeProfileBlocks = section.claudeProfileBlocks.filter { $0.value.isActive(at: now) }
-                    return section
-                }
-                self.snapshot = MultiUsageSnapshot(sections: sections, codexSnapshot: self.snapshot.codexSnapshot,
-                                                   updatedAt: self.snapshot.updatedAt,
-                                                   hiddenProviders: self.snapshot.hiddenProviders)
-                self.refresh()
-            }
-        }
+        scheduleExpiry()
         if let codexSnapshot = snapshot.codexSnapshot {
             publish(codexSnapshot)
         }
     }
 
     /// Keep display data only; decisions and the published Codex snapshot use the fresh result.
-    private func retainingStaleValues(in fresh: MultiUsageSnapshot, previous: MultiUsageSnapshot?) -> MultiUsageSnapshot {
-        guard let previous else { return fresh }
+    static func retainingStaleValues(in fresh: MultiUsageSnapshot, previous: MultiUsageSnapshot?, now: Date) -> MultiUsageSnapshot {
         let sections = fresh.sections.map { section -> ProviderSection in
-            guard let old = previous.sections.first(where: { $0.provider == section.provider }) else { return section }
             var result = section
-            // An empty successful inventory or a disabled provider is authoritative.
-            if section.windows.isEmpty, section.accounts.isEmpty, let failure = section.failureText,
-               failure != MultiUsageService.hiddenText,
-               failure != "No enabled CLIProxyAPI credentials", !old.windows.isEmpty {
-                result.windows = old.windows
-                result.accounts = old.accounts
-                result.isStale = true
+            // Cache entries carry their own original observation time.
+            result.windows = result.windows.compactMap { window in
+                var window = window
+                let accountStale = section.accounts.first { $0.index == (window.accountIndex ?? 0) }?.isStale ?? false
+                if section.isStale || accountStale { return window.isRetainable(at: now) ? window : nil }
+                if window.observedAt == nil { window.observedAt = fresh.updatedAt }
+                return window
+            }
+            guard let old = previous?.sections.first(where: { $0.provider == section.provider }) else { return result }
+            if section.windows.isEmpty, section.accounts.isEmpty, section.failureReason?.isTransient == true {
+                result.windows = old.windows.filter { $0.isRetainable(at: now) }
+                if !result.windows.isEmpty {
+                    result.accounts = old.accounts
+                    result.isStale = true
+                }
                 return result
             }
-            // Match stable account identity, never a recycled account index.
             for i in result.accounts.indices {
                 let account = result.accounts[i]
-                guard let failure = account.failureText, !failure.contains("ログアウト"),
-                      let id = account.id, let oldAccount = old.accounts.first(where: { $0.id == id }) else { continue }
-                let current = result.windows.filter { ($0.accountIndex ?? 0) == account.index }
-                if current.isEmpty {
-                    result.windows += old.windows.filter { ($0.accountIndex ?? 0) == oldAccount.index }.map {
-                        var window = $0
-                        window.accountIndex = account.index
-                        return window
-                    }
+                guard account.failureReason?.isTransient == true, let id = account.id,
+                      let oldAccount = old.accounts.first(where: { $0.id == id }),
+                      !result.windows.contains(where: { ($0.accountIndex ?? 0) == account.index }) else { continue }
+                let retained = old.windows.filter { ($0.accountIndex ?? 0) == oldAccount.index && $0.isRetainable(at: now) }.map {
+                    var window = $0
+                    window.accountIndex = account.index
+                    return window
                 }
-                if result.windows.contains(where: { ($0.accountIndex ?? 0) == account.index }) {
-                    result.accounts[i].isStale = true
-                }
+                result.windows += retained
+                result.accounts[i].isStale = !retained.isEmpty
             }
             return result
         }
         return MultiUsageSnapshot(sections: sections, codexSnapshot: fresh.codexSnapshot,
                                   updatedAt: fresh.updatedAt, hiddenProviders: fresh.hiddenProviders)
+    }
+
+    private func scheduleExpiry() {
+        guard let rawSnapshot else { return }
+        let now = Date()
+        let staleDeadlines = rawSnapshot.sections.flatMap { section in
+            section.windows.compactMap { window -> Date? in
+                let stale = section.isStale || (section.accounts.first { $0.index == (window.accountIndex ?? 0) }?.isStale ?? false)
+                guard stale, let observed = window.observedAt else { return nil }
+                return min(observed.addingTimeInterval(UsageLimit.staleMaxAge), window.resetAt ?? .distantFuture)
+            }
+        }
+        let blockDeadlines = rawSnapshot.sections.flatMap { $0.claudeProfileBlocks.values }
+            .filter { $0.isActive(at: now) }.map(\.resetAt)
+        guard let deadline = (staleDeadlines + blockDeadlines).min() else { return }
+        expiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow + 0.01)))
+            guard !Task.isCancelled, let self, let current = self.rawSnapshot else { return }
+            let now = Date()
+            let blockExpired = current.sections.flatMap { $0.claudeProfileBlocks.values }
+                .contains { !$0.isActive(at: now) }
+            let sections = current.sections.map { section -> ProviderSection in
+                var section = section
+                section.claudeProfileBlocks = section.claudeProfileBlocks.filter { $0.value.isActive(at: now) }
+                section.windows.removeAll { window in
+                    let stale = section.isStale || (section.accounts.first { $0.index == (window.accountIndex ?? 0) }?.isStale ?? false)
+                    return stale && !window.isRetainable(at: now)
+                }
+                return section
+            }
+            let expired = MultiUsageSnapshot(sections: sections, codexSnapshot: current.codexSnapshot,
+                                              updatedAt: current.updatedAt, hiddenProviders: current.hiddenProviders)
+            self.rawSnapshot = expired
+            self.snapshot = self.visible(expired)
+            self.scheduleExpiry()
+            if blockExpired { self.refresh() }
+        }
     }
 
     /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.

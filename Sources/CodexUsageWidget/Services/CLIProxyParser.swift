@@ -85,12 +85,16 @@ enum CLIProxyParser {
         let percentage = amount(config["creditUsagePercent"] ?? config["credit_usage_percent"])
         let monthlyLimit = amount(config["monthlyLimit"] ?? config["monthly_limit"])
 
+        func quota(_ percent: Double) -> GrokBillingResult {
+            var limit = UsageLimit(title: title, leftPercent: max(0, 100 - percent), resetText: reset(end, now: now))
+            limit.resetAt = date(end)
+            return .quota(limit)
+        }
         guard !weekly else {
             guard let usedPercent = percentage, usedPercent.isFinite, usedPercent >= 0 else {
                 return .noData
             }
-            return .quota(UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
-                                     resetText: reset(end, now: now)))
+            return quota(usedPercent)
         }
 
         // An explicit zero monthly cap denotes an uncapped account. It wins even
@@ -100,8 +104,7 @@ enum CLIProxyParser {
         }
 
         if let usedPercent = percentage, usedPercent.isFinite, usedPercent >= 0 {
-            return .quota(UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
-                                     resetText: reset(end, now: now)))
+            return quota(usedPercent)
         }
 
         if let spent = amount(config["used"]),
@@ -109,8 +112,7 @@ enum CLIProxyParser {
            let monthlyLimit, monthlyLimit.isFinite, monthlyLimit > 0 {
             let usedPercent = spent / monthlyLimit * 100
             guard usedPercent.isFinite, usedPercent >= 0 else { return .noData }
-            return .quota(UsageLimit(title: title, leftPercent: max(0, 100 - usedPercent),
-                                     resetText: reset(end, now: now)))
+            return quota(usedPercent)
         }
         return .noData
     }
@@ -132,8 +134,11 @@ enum CLIProxyParser {
             return (group["buckets"] as? [[String: Any]] ?? []).compactMap { bucket in
                 guard let fraction = number(bucket["remainingFraction"]), (0...1).contains(fraction) else { return nil }
                 let window = (bucket["displayName"] ?? bucket["window"]) as? String
-                return UsageLimit(title: window.map { "\(name) · \($0)" } ?? name, leftPercent: fraction * 100,
-                                  resetText: reset(bucket["resetTime"] as? String, now: now))
+                let resetTime = bucket["resetTime"] as? String
+                var limit = UsageLimit(title: window.map { "\(name) · \($0)" } ?? name, leftPercent: fraction * 100,
+                                       resetText: reset(resetTime, now: now))
+                limit.resetAt = date(resetTime)
+                return limit
             }
         }
     }

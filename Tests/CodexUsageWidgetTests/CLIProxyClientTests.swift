@@ -108,7 +108,8 @@ final class CLIProxyClientTests: XCTestCase {
     func testPeerIsRecheckedAfterQuotaRequestsBeforeFallbackOrSecondPeriod() async {
         for provider in ["antigravity", "xai"] {
             let inventory = #"{"files":[{"provider":"\#(provider)","auth_index":"one","project_id":"fixture-project"}]}"#
-            let transport = ScriptedTransport([(Data(inventory.utf8), 200), (CLIProxyFixtures.envelope("{}", status: 503), 200)])
+            let response = provider == "antigravity" ? CLIProxyFixtures.envelope(#"{"groups":[]}"#) : CLIProxyFixtures.envelope("{}", status: 503)
+            let transport = ScriptedTransport([(Data(inventory.utf8), 200), (response, 200)])
             let verifier = ScriptedPeerVerifier([true, true, true, false])
             let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(),
                                                 peerVerifier: verifier).fetchSections()
@@ -216,7 +217,7 @@ final class CLIProxyClientTests: XCTestCase {
     }
 
     func testAntigravityFallbackAndExactRequestContract() async throws {
-        let transport = ScriptedTransport([credentials(), usage(), usage(), (CLIProxyFixtures.envelope("{}", status: 503), 200), (CLIProxyFixtures.envelope(#"{"groups":[]}"#), 200), antigravity()])
+        let transport = ScriptedTransport([credentials(), usage(), usage(), (CLIProxyFixtures.envelope(#"{"groups":[]}"#), 200), (CLIProxyFixtures.envelope(#"{"groups":[]}"#), 200), antigravity()])
         let sections = await CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier()).fetchSections(now: now)
         XCTAssertEqual(sections[1].windows.first?.leftPercent, 86)
         XCTAssertEqual(sections[0].windows.map(\.accountIndex), [0, 0, 1, 1])

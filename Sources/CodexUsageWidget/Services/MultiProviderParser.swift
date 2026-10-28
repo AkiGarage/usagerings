@@ -148,13 +148,10 @@ enum MultiProviderParser {
             } else {
                 title = windowTitle(windowMinutes: raw.windowMinutes, fallback: nil)
             }
-            limits.append(
-                UsageLimit(
-                    title: title,
-                    leftPercent: min(max(100 - usedPercent, 0), 100),
-                    resetText: resetText(for: raw, now: now)
-                )
-            )
+            var limit = UsageLimit(title: title, leftPercent: min(max(100 - usedPercent, 0), 100),
+                                   resetText: resetText(for: raw, now: now))
+            limit.resetAt = raw.resetsAt
+            limits.append(limit)
         }
 
         append(usage?.primary)

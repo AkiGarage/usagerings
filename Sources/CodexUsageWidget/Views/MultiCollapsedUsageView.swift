@@ -107,7 +107,7 @@ struct CollapsedUsageBar: Identifiable {
                 return [Self(id: provider.rawValue, label: label, title: provider.displayName,
                              providerColor: color, limit: preferFiveHour ? fiveHour(section.windows) : lowest(section.windows), windows: section.windows,
                              codexExtras: account.codexExtras, zaiResetTickets: section.zaiResetTickets,
-                             stats: section.stats, failureText: section.accounts.first?.failureText, provider: provider,
+                             stats: section.stats, failureText: section.accounts.first?.failureText ?? (section.isStale ? section.failureText : nil), provider: provider,
                              accountIndex: section.displayAccounts.first?.index ?? 0,
                              accountID: section.displayAccounts.first?.id)]
             }
@@ -183,9 +183,9 @@ struct CollapsedUsageBar: Identifiable {
             }
         }
         let antigravity = snapshot.sections.first(where: { $0.provider == .antigravity })
-        if splitAntigravityAccounts || accountPreferences.primaryAccounts[ProviderID.antigravity.rawValue] != nil,
-           let section = antigravity,
-           section.accountIndices.count > 1 {
+        if let section = antigravity, section.accountIndices.count > 1,
+           splitAntigravityAccounts || accountPreferences.primaryAccounts[ProviderID.antigravity.rawValue] != nil ||
+                section.isStale || section.accounts.contains(where: \.isStale) {
             bars += section.accountIndices.flatMap { index in
                 let account = section.forAccount(index)
                 return antigravityBars(account.windows, account: index, accountID: section.accountID(at: index),
@@ -217,10 +217,13 @@ struct CollapsedUsageBar: Identifiable {
         }.map { bar in
             var bar = bar
             if let provider = bar.provider, let section = snapshot.sections.first(where: { $0.provider == provider }) {
-                bar.isStale = section.isStale || section.accounts.contains {
-                    $0.isStale && (bar.accountID == nil || $0.id == bar.accountID)
+                let account = section.accounts.first { account in
+                    if let id = bar.accountID { return account.id == id }
+                    if let index = bar.accountIndex { return account.index == index }
+                    return section.accounts.count == 1
                 }
-                if bar.isStale { bar.failureText = "Stale · last successful reading" }
+                bar.isStale = section.isStale || (account?.isStale ?? false)
+                if bar.isStale { bar.failureText = staleFailureText(account?.failureText ?? section.failureText) }
             }
             if let label = accountPreferences.label(for: bar.accountID) { bar.title += " · \(label)" }
             return bar
@@ -363,7 +366,7 @@ struct MultiCollapsedUsageView: View {
     }
 
     static func accessibilitySummary(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> String {
-        if bar.isBlocked { return "\(bar.ringName): \(bar.isStale ? "Stale; " : "")\(CollapsedUsageBar.detailText(for: bar))" }
+        if bar.isBlocked { return "\(bar.ringName): \(bar.isStale ? "\(bar.failureText ?? "Stale"); " : "")\(CollapsedUsageBar.detailText(for: bar))" }
         let arcs = g1(for: bar, rows: rows)
         let windows = [arcs.outer, arcs.inner].compactMap { $0 }
         guard !windows.isEmpty else {
@@ -381,7 +384,7 @@ struct MultiCollapsedUsageView: View {
             }
             return "\(label): \(limit.leftText), \(limit.resetText)"
         }
-        return "\(bar.ringName): " + (bar.isStale ? "Stale; " : "") + values.joined(separator: "; ")
+        return "\(bar.ringName): " + (bar.isStale ? "\(bar.failureText ?? "Stale"); " : "") + values.joined(separator: "; ")
     }
 
     private static func scale(for value: Double) -> CGFloat {

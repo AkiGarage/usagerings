@@ -20,7 +20,7 @@ final class CLIProxyRateLimitTests: XCTestCase {
         XCTAssertEqual(counts, ["c1": 2, "c2": 2])
     }
 
-    func testRetryAfterRetainsLastGoodWindowsAndDoesNotBlockOtherAccount() async {
+    func testRetryAfterDropsOldWindowsAndDoesNotBlockOtherAccount() async {
         let clock = QuotaClock()
         let transport = QuotaTransport()
         let client = client(transport, clock)
@@ -28,12 +28,13 @@ final class CLIProxyRateLimitTests: XCTestCase {
         clock.advance(300)
         await transport.respond(status: 429, header: ["rEtRy-AfTeR": ["900"]])
         let limited = await client.fetchSections()
-        XCTAssertEqual(limited[0].windows, good[0].windows)
-        XCTAssertEqual(limited[0].stats.first?.valueText,
-                       "rate limited · data from \(time(clock.read().addingTimeInterval(-300)))")
+        XCTAssertTrue(good[0].windows.contains { $0.accountIndex == 0 })
+        XCTAssertFalse(limited[0].windows.contains { $0.accountIndex == 0 })
+        XCTAssertTrue(limited[0].windows.contains { $0.accountIndex == 1 })
+        XCTAssertTrue(limited[0].stats.first?.valueText.contains("rate-limited") == true)
         clock.advance(899)
         let stale = await client.fetchSections()
-        XCTAssertEqual(stale[0].windows, good[0].windows)
+        XCTAssertFalse(stale[0].windows.contains { $0.accountIndex == 0 })
         XCTAssertEqual(stale[0].stats, limited[0].stats)
         var counts = await transport.counts
         XCTAssertEqual(counts, ["c1": 2, "c2": 3])
@@ -59,6 +60,7 @@ final class CLIProxyRateLimitTests: XCTestCase {
         XCTAssertFalse(out[0].windows.contains { $0.accountIndex == 0 })
         XCTAssertTrue(out[0].windows.contains { $0.accountIndex == 1 })
         XCTAssertEqual(out[0].stats.first?.valueText, "取得失敗: ログアウト/認証切れ")
+        XCTAssertEqual(out[0].accounts.first?.failureReason, .logout)
     }
 
     func testHTTPDateRetryAfterAndNoPreviousDataMessage() async {

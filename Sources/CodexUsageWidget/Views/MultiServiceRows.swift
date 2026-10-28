@@ -106,7 +106,7 @@ struct ServiceRowModel: Identifiable {
                  notes: notice.block.map { [ClaudeRateLimitParser.cardLine(block: $0, now: Date())] } ?? [],
                  failureText: notice.failureText, hasUsageDetails: true)
         }
-        let splitAccounts = provider != .antigravity || splitAntigravityAccounts
+        let splitAccounts = provider != .antigravity || splitAntigravityAccounts || section.isStale || section.accounts.contains(where: \.isStale)
         if splitAccounts, section.accountIndices.count > 1 {
             return section.accountIndices.flatMap { index in
                 rows(for: section.forAccount(index), showAccounts: showAccounts,
@@ -203,8 +203,10 @@ struct ServiceRowModel: Identifiable {
         }
         rows[0].ticketExpiries.sort()
         rows[0].failureText = section.failureText
-        if section.isStale || section.accounts.contains(where: \.isStale) {
-            for index in rows.indices { rows[index].failureText = "Stale · last successful reading" }
+        if section.isStale || (section.accounts.count == 1 && section.accounts[0].isStale) {
+            for i in rows.indices {
+                rows[i].failureText = staleFailureText(section.failureText ?? section.accounts.first?.failureText)
+            }
         }
         rows[0].hasUsageDetails = provider == .deepseek && !section.stats.isEmpty
         if !showAccounts { for i in rows.indices { rows[i].account = nil } }
