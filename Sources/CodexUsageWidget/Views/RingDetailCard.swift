@@ -157,6 +157,7 @@ struct RingDetailCardModel: Equatable {
     var blockText: String? = nil
     var stats: [ProviderStat] = []
     var failureText: String? = nil
+    var paces: [WeeklyPace] = []
 
     static func visibleStats(for bar: CollapsedUsageBar) -> [ProviderStat] {
         switch bar.provider {
@@ -223,7 +224,8 @@ struct RingDetailCardModel: Equatable {
         return RingDetailCardModel(title: "\(bar.ringName) の詳細",
                                    resetText: reset?.text, resetLabel: reset?.label, rows: rows, extras: extras,
                                    ticketFailureText: ticketFailureText, blockText: blockText, stats: stats,
-                                   failureText: bar.failureText)
+                                   failureText: bar.failureText,
+                                   paces: WeeklyPace.all(bar.windows, now: now, label: windowLabel))
     }
 
     private static func sortedTicketRows(_ tickets: [CodexExtrasParser.Ticket], now: Date) -> [TicketRow] {
@@ -388,6 +390,10 @@ struct RingDetailCardView: View {
                     }
                     .frame(width: 52, height: 4)
                 }
+            }
+            if !model.paces.isEmpty {
+                Divider().opacity(0.35)
+                ForEach(Array(model.paces.enumerated()), id: \.offset) { _, pace in WeeklyPaceBar(pace: pace, compact: true) }
             }
             if let failure = model.ticketFailureText {
                 Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)

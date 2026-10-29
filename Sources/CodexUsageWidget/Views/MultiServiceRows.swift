@@ -40,6 +40,12 @@ struct ServiceRowModel: Identifiable {
     var inner: UsageLimit? { five != nil ? week : nil }
     var remainingExtras: [UsageLimit] { five == nil && week == nil ? Array(extras.dropFirst()) : extras }
 
+    /// Pace bars for the weekly window and any weekly extras (e.g. Antigravity groups).
+    func weeklyPaces(now: Date) -> [WeeklyPace] {
+        let weekly = ([week].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .week })
+        return weekly.map { WeeklyPace(label: $0 == week && extras.isEmpty ? "週の枠" : "週 " + ServiceRowModel.shortLabel($0.title), limit: $0, now: now) }
+    }
+
     enum Kind { case five, week, other }
     /// Real titles include "5h", "Session", "Weekly", and Antigravity's
     /// "Five Hour Limit Remaining" / "Weekly Limit Remaining" / "Gemini 4 Argon Weekly Limit".
@@ -343,6 +349,9 @@ struct ServiceRowView: View {
                     valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
                 }
                 ForEach(Array(row.remainingExtras.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                ForEach(Array(row.weeklyPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
+                    WeeklyPaceBar(pace: pace).padding(.top, 3)
+                }
                 if let message = row.emptyStateText {
                     Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
