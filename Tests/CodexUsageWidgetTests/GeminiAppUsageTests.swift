@@ -46,7 +46,10 @@ final class GeminiAppUsageParserTests: XCTestCase {
 
     func testStrictLabelAnchoredParsing() {
         // Unrelated percentages, bare numbers and non-percent "left" are ignored.
+        // A stray percentage ("40% off") next to the value makes it ambiguous.
         XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n40% off\n23%\nWeekly limit\n"), .unknown)
+        guard case let .reading(bare) = GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n23%\nWeekly limit\n") else { return XCTFail() }
+        XCTAssertEqual(bare.fiveHourUsed, 23)
         XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n40% used; 2 requests left\n"), .unknown)
         guard case let .reading(r) = GeminiAppUsageParser.parse("Current usage\n40% used\n2 requests left\n") else { return XCTFail() }
         XCTAssertEqual(r.fiveHourUsed, 40)
@@ -102,7 +105,66 @@ final class GeminiAppUsageParserTests: XCTestCase {
         XCTAssertEqual(LiveChromeBridge.usageText(fromJSON: "garbage"), .failure(.failed))
         XCTAssertNil(LiveChromeBridge.usageText(fromJSON: #"{"u":"https://gemini.google.com/app"}"#))
         XCTAssertTrue(LiveChromeBridge.pageScript.contains("https://gemini.google.com/usage"))
-        XCTAssertTrue(LiveChromeBridge.pageScript.contains("ok?"), "text is only returned from the usage page itself")
+        XCTAssertTrue(LiveChromeBridge.pageScript.contains("if(!ok)return JSON.stringify({u:u})"), "text is only returned from the usage page itself")
+    }
+
+    func testJapaneseVariantsFullWidthAndOrder() {
+        let ja = "使用量の上限\n現在の使用状況\n使用済み ２３％\n16:10 にリセット\n週ごとの上限\n６１％\n11月2日にリセット\n"
+        guard case let .reading(r) = GeminiAppUsageParser.parse(ja) else { return XCTFail() }
+        XCTAssertEqual(r.fiveHourUsed, 23); XCTAssertEqual(r.weeklyUsed, 61)
+        XCTAssertEqual(r.weeklyReset, "11月2日にリセット")
+    }
+
+    func testValueOnLabelLine() {
+        guard case let .reading(r) = GeminiAppUsageParser.parse("Current usage 23% used\nWeekly limit\u{00A0}61\u{00A0}% used\n") else { return XCTFail() }
+        XCTAssertEqual(r.fiveHourUsed, 23); XCTAssertEqual(r.weeklyUsed, 61)
+    }
+
+    func testProgressBarFallback() {
+        let t = "Usage limits\nCurrent usage\nResets at 4:10 PM\nWeekly limit\nResets Nov 2\n@@bar Current usage = 23\n@@bar Weekly limit = 61.5"
+        guard case let .reading(r) = GeminiAppUsageParser.parse(t) else { return XCTFail() }
+        XCTAssertEqual(r.fiveHourUsed, 23); XCTAssertEqual(r.weeklyUsed, 61.5)
+        // A bar with no clear label is never assigned.
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\n@@bar  = 40"), .unknown)
+    }
+
+    func testReviewEdgeCases() {
+        XCTAssertEqual(GeminiAppUsageParser.parse("@@bar = 40"), .unknown) // no crash
+        guard case let .reading(r) = GeminiAppUsageParser.parse("Current usage remaining 70%\n") else { return XCTFail() }
+        XCTAssertEqual(r.fiveHourUsed, 30)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\n@@bar Current usage remaining = 70"), .unknown)
+        // Repeated label with different values, or a conflicting body, never falls back to a bar.
+        XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\n23% used\nCurrent usage\n70% used\n"), .unknown)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\n20% used\n40% used\n@@bar Current usage = 5"), .unknown)
+        // Body text that imitates a bar line is neutralised by the bridge.
+        let json = #"{"u":"https://gemini.google.com/usage","t":"Current usage\n@@bar Current usage = 70","b":[{"c":"Weekly limit","v":12.5}]}"#
+        guard case let .success(text)? = LiveChromeBridge.usageText(fromJSON: json),
+              case let .reading(b) = GeminiAppUsageParser.parse(text) else { return XCTFail() }
+        XCTAssertNil(b.fiveHourUsed); XCTAssertEqual(b.weeklyUsed, 12.5)
+        XCTAssertFalse(GeminiAppUsageParser.redactedSample("Usage account 12345").contains("12345"))
+        XCTAssertFalse(GeminiAppUsageParser.redactedSample("Current usage account 1234567890: x").contains("1234567890"))
+        XCTAssertTrue(GeminiAppUsageParser.redactedSample("Resets at 4:10 PM, 23% used").contains("4:10"))
+        let fw = #"{"u":"https://gemini.google.com/usage","t":"Current usage\n＠＠bar Current usage = 70","b":[]}"#
+        if case let .success(ft)? = LiveChromeBridge.usageText(fromJSON: fw) { XCTAssertEqual(GeminiAppUsageParser.parse(ft), .unknown) } else { XCTFail() }
+        guard case let .reading(a) = GeminiAppUsageParser.parse("Current usage available 70%\nWeekly limit\nRemaining\n70%\n") else { return XCTFail() }
+        XCTAssertEqual(a.fiveHourUsed, 30); XCTAssertEqual(a.weeklyUsed, 30)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\n20%\n40%\n@@bar Current usage = 5"), .unknown)
+        guard case let .reading(h) = GeminiAppUsageParser.parse("Current usage remaining\n70%\n") else { return XCTFail() }
+        XCTAssertEqual(h.fiveHourUsed, 30)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\n23% of 80% used\n"), .unknown)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage\n@@bar Current usage Remaining = 70"), .unknown)
+        let red = GeminiAppUsageParser.redactedSample("Current usage for Sample Person\nCurrent usage account ①②③\n現在の使用量\n23% used")
+        XCTAssertFalse(red.contains("Sample")); XCTAssertFalse(red.contains("①"))
+        XCTAssertFalse(GeminiAppUsageParser.redactedSample("Current usage for Inon").contains("Inon"))
+        guard case let .reading(tr) = GeminiAppUsageParser.parse("Current usage\n23%\nTime remaining\n2 hours\n") else { return XCTFail() }
+        XCTAssertEqual(tr.fiveHourUsed, 23)
+        XCTAssertTrue(red.contains("現在の使用量")); XCTAssertTrue(red.contains("23% used"))
+    }
+
+    func testRedactedSampleDropsEmailAndChatter() {
+        let s = GeminiAppUsageParser.redactedSample("aki@example.com\nHello there friend\nCurrent usage\n23% used")
+        XCTAssertFalse(s.contains("aki@example.com")); XCTAssertFalse(s.contains("Hello"))
+        XCTAssertTrue(s.contains("23% used"))
     }
 
     func testOversizedPageIsUnknownNotTruncated() {

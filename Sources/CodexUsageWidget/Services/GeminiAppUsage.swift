@@ -31,58 +31,130 @@ enum GeminiAppUsageParser {
         "something went wrong", "try again later", "ロボットではありません", "不審なトラフィック", "本人確認",
         "ログイン", "問題が発生しました", "しばらくしてから",
     ]
-    /// Section labels must be a whole line (case-insensitive), not a substring of other text.
-    static let fiveLabels: Set<String> = ["current usage", "5-hour limit", "5 hour limit", "現在の使用量", "現在の使用状況",
-                                          "5 時間の上限", "5時間の上限"]
-    static let weekLabels: Set<String> = ["weekly limit", "weekly usage", "週間の上限", "週の上限", "1 週間の上限", "1週間の上限"]
+    /// A section label is a short line that STARTS with one of these (case-insensitive, after
+    /// full-width → half-width folding). A value may follow on the same line ("Current usage 23% used").
+    static let fivePrefixes = ["current usage", "5-hour", "5 hour", "five-hour", "現在の使用", "現在の利用",
+                               "5時間", "5 時間", "5時間ごと"]
+    static let weekPrefixes = ["weekly", "week ", "週", "1週間", "1 週間", "毎週の", "今週の"]
     private static let sectionLines = 4
+    private static let maxLabelLength = 40
 
-    static func parse(_ text: String) -> Outcome {
+    /// Full-width digits, ％ and spaces become ASCII; NBSP becomes a space.
+    static func normalize(_ text: String) -> String {
+        // Only the full-width ASCII block (U+FF01–FF5E) and the ideographic space; kana stay as they are.
+        var scalars = String.UnicodeScalarView()
+        for u in text.unicodeScalars {
+            if (0xFF01...0xFF5E).contains(u.value), let a = Unicode.Scalar(u.value - 0xFEE0) { scalars.append(a) }
+            else if u.value == 0x3000 { scalars.append(" ") } else { scalars.append(u) }
+        }
+        return String(scalars).replacingOccurrences(of: "\u{00A0}", with: " ").replacingOccurrences(of: "\u{202F}", with: " ")
+    }
+
+    static func parse(_ raw: String) -> Outcome {
+        let text = normalize(raw)
         let lower = text.lowercased()
         // The whole page is checked for verification text first, never a truncated prefix.
         if blockMarkers.contains(where: { lower.contains($0) }) { return .blocked }
         guard text.count <= maxTextLength else { return .unknown }
         let lines = text.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let five = section(lines, labels: fiveLabels)
-        let week = section(lines, labels: weekLabels)
-        let reading = Reading(fiveHourUsed: five.flatMap(usedPercent), weeklyUsed: week.flatMap(usedPercent),
-                              fiveHourReset: five.flatMap(resetLine), weeklyReset: week.flatMap(resetLine))
+        let five = sections(lines, prefixes: fivePrefixes)
+        let week = sections(lines, prefixes: weekPrefixes)
+        let bars = progressBars(lines)
+        // Body text first; progress bars (reported separately by the page script) only when the
+        // body has no value at all. Conflicting body values stay unknown, never overridden.
+        func pick(_ secs: [[String]], _ prefixes: [String]) -> Double? {
+            let vals = Set(secs.compactMap(usedPercent))
+            let conflict = secs.contains { usedPercent($0) == nil && hasPercent($0) }
+            if vals.count > 1 || conflict { return nil }
+            return vals.first ?? barValue(bars, prefixes: prefixes)
+        }
+        let reading = Reading(fiveHourUsed: pick(five, fivePrefixes), weeklyUsed: pick(week, weekPrefixes),
+                              fiveHourReset: five.lazy.compactMap(resetLine).first, weeklyReset: week.lazy.compactMap(resetLine).first)
         guard reading.fiveHourUsed != nil || reading.weeklyUsed != nil else { return .unknown }
         return .reading(reading)
     }
 
-    private static func isLabel(_ line: String) -> Bool {
+    static let barMarker = "@@bar "
+    static let leftWords = ["remaining", "left", "available", "残り", "残量", "利用可能"]
+
+    private static func progressBars(_ lines: [String]) -> [(context: String, value: Double)] {
+        lines.compactMap { line in
+            guard line.hasPrefix(barMarker), let eq = line.range(of: " = ", options: .backwards),
+                  eq.lowerBound >= line.index(line.startIndex, offsetBy: barMarker.count), let v = Double(line[eq.upperBound...]), (0...100).contains(v) else { return nil }
+            return (String(line[line.index(line.startIndex, offsetBy: barMarker.count)..<eq.lowerBound]).lowercased(), v)
+        }
+    }
+
+    private static func barValue(_ bars: [(context: String, value: Double)], prefixes: [String]) -> Double? {
+        let other = prefixes == fivePrefixes ? weekPrefixes : fivePrefixes
+        func has(_ c: String, _ ps: [String]) -> Bool { ps.contains { c.hasPrefix($0) || c.contains(" " + $0) || c.contains("\n" + $0) } }
+        // A bar whose label speaks of "remaining/left" has an unclear direction: never used.
+        let values = Set(bars.filter { b in has(b.context, prefixes) && !has(b.context, other) && !leftWords.contains { b.context.contains($0) } }.map(\.value))
+        return values.count == 1 ? values.first : nil
+    }
+
+    /// Returns the label prefix if this line is a section label of that kind.
+    private static func labelRest(_ line: String, _ prefixes: [String]) -> String? {
+        guard !line.hasPrefix(barMarker), line.count <= maxLabelLength else { return nil }
         let l = line.lowercased()
-        return fiveLabels.contains(l) || weekLabels.contains(l)
+        guard !l.contains("reset"), !l.contains("リセット"), let p = prefixes.first(where: { l.hasPrefix($0) }) else { return nil }
+        // The rest of the line after the label words (e.g. "Current usage 23% used" -> "23% used").
+        let rest = String(line.dropFirst(p.count)).trimmingCharacters(in: .whitespaces)
+        guard let pctStart = rest.firstIndex(where: \.isNumber) else {
+            // "Current usage remaining" + value on the next line: keep the direction word as a line.
+            return leftWords.contains { rest.lowercased().contains($0) } ? rest : ""
+        }
+        // Keep the direction word between label and number ("Current usage remaining 70%").
+        let lead = rest[..<pctStart].lowercased()
+        let value = String(rest[pctStart...])
+        if leftWords.contains(where: { lead.contains($0) }) { return "残り " + value }
+        return value
+    }
+
+    private static func isLabel(_ line: String) -> Bool {
+        labelRest(line, fivePrefixes) != nil || labelRest(line, weekPrefixes) != nil
     }
 
     /// Any other heading-like line ("Monthly limit", "Daily usage") ends a section.
     private static func isHeading(_ line: String) -> Bool {
         let l = line.lowercased()
-        guard !l.contains("%"), !l.contains("％") else { return false } // a value line, not a heading
+        guard !l.contains("%") else { return false } // a value line, not a heading
         return ["limit", "usage", "quota", "上限", "使用量", "利用枠"].contains { l.contains($0) }
     }
 
-    /// Lines after the exact label line, up to the next label line (max 4).
-    private static func section(_ lines: [String], labels: Set<String>) -> [String]? {
-        let hits = lines.indices.filter { labels.contains(lines[$0].lowercased()) }
-        guard hits.count == 1, let start = hits.first else { return nil } // missing or repeated label = unknown
-        var out: [String] = []
-        var i = start + 1
-        while i < lines.count, out.count < sectionLines, !isLabel(lines[i]), !isHeading(lines[i]) { out.append(lines[i]); i += 1 }
-        return out
+    /// For every label line: the lines after it, up to the next label/heading line (max 4).
+    private static func sections(_ lines: [String], prefixes: [String]) -> [[String]] {
+        lines.indices.compactMap { start in
+            guard let rest = labelRest(lines[start], prefixes) else { return nil }
+            var out: [String] = rest.isEmpty ? [] : [rest]
+            var i = start + 1
+            while i < lines.count, out.count < sectionLines, !isLabel(lines[i]), !isHeading(lines[i]), !lines[i].hasPrefix(barMarker) {
+                out.append(lines[i]); i += 1
+            }
+            return out
+        }
     }
 
-    private static let usedRegex = try! NSRegularExpression(
-        pattern: #"^(\d{1,3}(?:\.\d+)?)\s*[%％]\s*(?:used|使用済み|使用)$"#, options: [.caseInsensitive])
+    /// Any percentage at all in the section: if none parses cleanly, the section is ambiguous.
+    private static func hasPercent(_ lines: [String]) -> Bool {
+        lines.contains { $0.range(of: #"\d\s*%"#, options: .regularExpression) != nil }
+    }
+
+    private static let num = #"(\d{1,3}(?:\.\d+)?)\s*%"#
+    private static func rx(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p, options: [.caseInsensitive]) }
+    private static let usedRegexes = [
+        rx("^" + num + #"$"#), // the bar's own figure, shown as used
+        rx("^" + num + #"\s*(?:used|使用済み|使用|を使用|を使用済み|使用中)$"#),
+        rx(#"^(?:used|usage|使用済み|使用率|使用量|使用)\s*[:：]?\s*"# + num + "$"),
+    ]
     private static let leftRegexes = [
-        try! NSRegularExpression(pattern: #"^(\d{1,3}(?:\.\d+)?)\s*[%％]\s*(?:left|remaining|残り)$"#, options: [.caseInsensitive]),
-        try! NSRegularExpression(pattern: #"^残り\s*(\d{1,3}(?:\.\d+)?)\s*[%％]$"#),
+        rx("^" + num + #"\s*(?:left|remaining|available|残り|残っています)$"#),
+        rx(#"^(?:残り|left|remaining)\s*[:：]?\s*"# + num + "$"),
     ]
 
-    /// Only whole lines like "23% used" / "70% left" / "残り 70%" count. Anything else
-    /// ("40% off", "2 requests left", bare "23%") is ignored; two different values = unknown.
+    /// Only whole lines like "23% used" / "23%" / "70% left" / "残り 70%" / "使用率 23%" count.
+    /// Anything else ("40% off", "2 requests left", "20% 40%") is ignored; two different values = unknown.
     static func usedPercent(_ lines: [String]) -> Double? {
         func value(_ regex: NSRegularExpression, _ line: String) -> Double? {
             let ns = line as NSString
@@ -91,12 +163,66 @@ enum GeminiAppUsageParser {
             return v
         }
         var values: [Double] = []
+        // A bare "70%" under a separate "Remaining" line is a remaining value.
+        let directionLines: Set<String> = ["remaining", "left", "available", "remaining usage", "usage remaining", "残り", "残量", "利用可能", "残りの使用量"]
+        let leftContext = lines.contains { directionLines.contains($0.lowercased()) }
+        // Any other percentage on a line ("40% off") makes the section ambiguous.
+        var stray = false
         for line in lines {
-            if let v = value(usedRegex, line) { values.append(v) }
-            for r in leftRegexes { if let v = value(r, line) { values.append(100 - v) } }
+            if leftContext, let v = value(usedRegexes[0], line) { values.append(100 - v) }
+            else if let v = usedRegexes.lazy.compactMap({ value($0, line) }).first { values.append(v) }
+            else if let v = leftRegexes.lazy.compactMap({ value($0, line) }).first { values.append(100 - v) }
+            else if line.range(of: #"\d\s*%"#, options: .regularExpression) != nil { stray = true }
         }
+        if stray { return nil }
         let distinct = Set(values)
         return distinct.count == 1 ? distinct.first : nil
+    }
+
+    /// Short, redacted lines for diagnosing an unreadable page: only lines with a digit, % or a
+    /// usage word, never e-mail addresses, max 40 lines of 80 chars. Kept only on this Mac.
+    /// Only usage words, percentages, times and dates survive; every other word becomes "…".
+    static func shapeOnly(_ line: String) -> String {
+        let words = (fivePrefixes + weekPrefixes + leftWords + ["usage", "limits", "limit", "used", "resets", "reset", "at", "in", "on",
+            "上限", "使用済み", "使用率", "使用量", "使用", "利用状況", "リセット", "時間", "ごと", "週間", "現在", "毎週", "に", "の", "まで", "で", "され", "ます", "量", "状況", "率", "済み"])
+            .sorted { $0.count > $1.count }
+            .map { w in w.unicodeScalars.allSatisfy(\.isASCII) ? #"\b"# + NSRegularExpression.escapedPattern(for: w.trimmingCharacters(in: .whitespaces)) + #"\b"#
+                                                               : NSRegularExpression.escapedPattern(for: w) }
+            .joined(separator: "|")
+        let rx = try! NSRegularExpression(pattern: #"\d{1,3}(?:\.\d+)?\s*%|\b\d{1,2}:\d{2}\b|\d{1,2}(?:月|日|時|分)|(?i:"# + words + ")")
+        let ns = line as NSString
+        var out = "", last = 0
+        for m in rx.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+            let gap = ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            out += gap.trimmingCharacters(in: .whitespaces).isEmpty ? gap : (gap.hasPrefix(" ") ? " … " : "…")
+            out += ns.substring(with: m.range); last = m.range.location + m.range.length
+        }
+        if last < ns.length { out += "…" }
+        return out
+    }
+
+    /// Every digit becomes "#" except percentages, hh:mm times and 月/日/時/分 dates.
+    static func maskNumbers(_ line: String) -> String {
+        let keep = try! NSRegularExpression(pattern: #"\d{1,3}(?:\.\d+)?\s*%|\b\d{1,2}:\d{2}\b|\d{1,2}(?:月|日|時|分)"#)
+        let ns = line as NSString
+        var out = "", last = 0
+        for m in keep.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+                .replacingOccurrences(of: #"\p{N}"#, with: "#", options: .regularExpression)
+            out += ns.substring(with: m.range); last = m.range.location + m.range.length
+        }
+        return out + ns.substring(from: last).replacingOccurrences(of: #"\p{N}"#, with: "#", options: .regularExpression)
+    }
+
+    static func redactedSample(_ raw: String) -> String {
+        let keep = ["%", "limit", "usage", "reset", "used", "left", "上限", "使用", "利用", "リセット", "残り", "週", "時間", "@@bar"]
+        let lines = normalize(raw).components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { l in !l.isEmpty && l.count <= 80 && (l.contains(where: \.isNumber) || keep.contains { l.lowercased().contains($0) }) }
+            .filter { l in keep.contains { l.lowercased().contains($0) } }
+            .map { $0.replacingOccurrences(of: #"\S+@\S+"#, with: "<email>", options: .regularExpression) }
+            // Only percentages, times and dates keep their digits; any other number becomes "#".
+            .map(maskNumbers).map(shapeOnly)
+        return lines.prefix(40).joined(separator: "\n")
     }
 
     private static func resetLine(_ lines: [String]) -> String? {
@@ -300,7 +426,14 @@ struct LiveChromeBridge: ChromeUsageBridge {
     static let pageScript = """
     (function(){var b='\(GeminiUsageURL.base)',u=location.href;\
     var ok=u===b||u.indexOf(b+'?')===0||u.indexOf(b+'#')===0;\
-    return JSON.stringify(ok?{u:u,t:(document.body&&document.body.innerText)||''}:{u:u});})()
+    if(!ok)return JSON.stringify({u:u});var t=(document.body&&document.body.innerText)||'',bars=[];\
+    document.querySelectorAll('[role=progressbar],progress[value]').forEach(function(e){\
+    var pr=e.tagName==='PROGRESS',v=parseFloat(pr?e.getAttribute('value'):e.getAttribute('aria-valuenow'));\
+    var mn=pr?0:parseFloat(e.getAttribute('aria-valuemin')||'0'),mx=parseFloat(pr?(e.getAttribute('max')||'1'):(e.getAttribute('aria-valuemax')||'100'));\
+    if(!isFinite(v)||!isFinite(mn)||!isFinite(mx)||mx<=mn||v<mn||v>mx)return;var c=e.getAttribute('aria-label')||'',p=e.parentElement,n=0;\
+    for(var i=0;i<4&&p&&!n;i++,p=p.parentElement){var x=(p.innerText||'').trim();if(x){c=c+' '+x.slice(0,80);n=1;}}\
+    bars.push({c:c.replace(/\\s+/g,' ').slice(0,60),v:Math.round((v-mn)/(mx-mn)*1000)/10});});\
+    return JSON.stringify({u:u,t:t,b:bars});})()
     """
 
     /// Text only when the page itself says it is exactly the usage page.
@@ -309,7 +442,13 @@ struct LiveChromeBridge: ChromeUsageBridge {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let url = obj["u"] as? String else { return .failure(.failed) }
         guard GeminiUsageURL.isUsagePage(url) else { return nil }
-        guard let text = obj["t"] as? String else { return .failure(.failed) }
+        guard let body = obj["t"] as? String else { return .failure(.failed) }
+        // Page text can never pose as a progress bar: the marker is only added for real bars.
+        var text = GeminiAppUsageParser.normalize(body).replacingOccurrences(of: GeminiAppUsageParser.barMarker.trimmingCharacters(in: .whitespaces), with: "@ @bar")
+        for bar in obj["b"] as? [[String: Any]] ?? [] {
+            guard let c = bar["c"] as? String, let v = (bar["v"] as? NSNumber)?.doubleValue else { continue }
+            text += "\n" + GeminiAppUsageParser.barMarker + c.replacingOccurrences(of: "\n", with: " ") + " = " + String(v)
+        }
         return .success(text)
     }
 
@@ -499,6 +638,7 @@ final class GeminiAppUsageMonitor {
                 setHalted(true)
                 publish(cachedOrUnknown("不明（確認ページかエラー表示のため停止。メニューで再開）"))
             case .unknown:
+                Self.saveDiagnostic(GeminiAppUsageParser.redactedSample(text))
                 publish(cachedOrUnknown("不明（使用量の数字を読み取れませんでした）"))
             case let outcome:
                 if let fresh = GeminiAppUsageParser.section(from: outcome, observedAt: now) {
@@ -514,6 +654,14 @@ final class GeminiAppUsageMonitor {
         guard !section.isStale, let observed = section.windows.first?.observedAt,
               now.timeIntervalSince(observed) > GeminiReadPolicy.staleAfter else { return }
         publish(cachedOrUnknown("使用中でないため更新停止"))
+    }
+
+    /// Redacted lines of the last unreadable page, local only (~/Library/Application Support/UsageRings).
+    static func saveDiagnostic(_ sample: String) {
+        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("UsageRings", isDirectory: true) else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? sample.write(to: dir.appendingPathComponent("gemini-unreadable-sample.txt"), atomically: true, encoding: .utf8)
     }
 
     private func setHalted(_ on: Bool) { state.halted = on; defaults.set(on, forKey: Self.haltedKey) }
