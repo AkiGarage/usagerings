@@ -43,7 +43,7 @@ struct ServiceRowModel: Identifiable {
     /// Pace bars for the weekly window and any weekly extras (e.g. Antigravity groups).
     func weeklyPaces(now: Date) -> [WeeklyPace] {
         let weekly = ([week].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .week })
-        return weekly.map { WeeklyPace(label: $0 == week && extras.isEmpty ? "週の枠" : "週 " + ServiceRowModel.shortLabel($0.title), limit: $0, now: now) }
+        return weekly.map { WeeklyPace(label: weekly.count == 1 ? "週の枠" : "週 " + ServiceRowModel.shortLabel($0.title), limit: $0, now: now) }
     }
 
     enum Kind { case five, week, other }

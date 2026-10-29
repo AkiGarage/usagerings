@@ -9,6 +9,8 @@ struct WeeklyPace: Equatable {
     let elapsedPercent: Double?
     let start: Date?
     let reset: Date?
+    /// Why there is no marker: reset unknown, already passed, or farther than a week away.
+    let unknownReason: String?
 
     init(label: String, limit: UsageLimit, now: Date) {
         self.label = label
@@ -19,17 +21,19 @@ struct WeeklyPace: Equatable {
             self.reset = reset
             self.start = start
             elapsedPercent = min(max(now.timeIntervalSince(start) / Self.week * 100, 0), 100)
+            unknownReason = nil
         } else {
             self.reset = nil; start = nil; elapsedPercent = nil
+            unknownReason = reset == nil ? "リセット 不明" : reset! <= now ? "リセット 不明/要更新（時刻を過ぎました）" : "リセット 不明（1週間より先）"
         }
     }
 
     /// used - even share, in percentage points; positive means ahead of pace.
-    var delta: Double? { elapsedPercent.map { usedPercent - $0 } }
+    var delta: Int? { elapsedPercent.map { Int((usedPercent - $0).rounded()) } }
 
     var paceText: String {
         guard let delta else { return "リセット不明・均等ペース不明" }
-        let d = Int(delta.rounded())
+        let d = delta
         if d >= 3 { return "均等より+\(d)%使いすぎ" }
         if d <= -3 { return "余裕 \(d)%" }
         return "ほぼ均等ペース"
@@ -45,7 +49,7 @@ struct WeeklyPace: Equatable {
         let c = RingResetFormat.tokyoCalendar.dateComponents([.month, .day, .hour, .minute], from: date)
         return String(format: "%d/%d %02d:%02d", c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0)
     }
-    var rangeText: String { start == nil ? "リセット 不明" : "\(Self.day(start)) → \(Self.day(reset))" }
+    var rangeText: String { start == nil ? (unknownReason ?? "リセット 不明") : "\(Self.day(start)) → \(Self.day(reset))" }
 
     /// Every weekly window of a list.
     static func all(_ windows: [UsageLimit], now: Date, label: (UsageLimit) -> String) -> [WeeklyPace] {

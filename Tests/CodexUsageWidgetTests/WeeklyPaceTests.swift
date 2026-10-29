@@ -32,7 +32,17 @@ final class WeeklyPaceTests: XCTestCase {
     }
 
     func testPassedResetIsUnknown() {
-        XCTAssertNil(WeeklyPace(label: "週", limit: weekly(left: 40, resetIn: -60), now: now).elapsedPercent)
+        let p = WeeklyPace(label: "週", limit: weekly(left: 40, resetIn: -60), now: now)
+        XCTAssertNil(p.elapsedPercent)
+        XCTAssertTrue(p.rangeText.contains("要更新"))
+    }
+
+    func testToneMatchesRoundedText() {
+        // 2.6 points ahead rounds to +3: text and colour agree.
+        let left = 100 - (200.0 / 7 + 2.6)
+        let p = WeeklyPace(label: "週", limit: weekly(left: left, resetIn: 5 * 86_400), now: now)
+        XCTAssertEqual(p.paceText, "均等より+3%使いすぎ")
+        XCTAssertEqual(p.tone, .over)
     }
 
     func testCardShowsOnlyWeeklyPaces() {
