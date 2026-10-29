@@ -396,4 +396,46 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         let merged = MultiUsageStore.withGemini(g, in: MultiUsageStore.withGemini(g, in: base))
         XCTAssertEqual(merged.sections.map(\.provider), [.codex, .gemini])
     }
+
+    // Structure of the real ja page (2026-10-29); numbers, times and chat titles replaced.
+    func testRealJapaneseUsagePage20261029() {
+        let raw = """
+        Gemini
+        チャットを新規作成
+        Pro
+        使用量上限
+        PRO
+
+        Gemini を使用できる時間は、プランの上限によって決まります。高度なモデルや機能を使用すると、さらに使用量が多くなる可能性があります。詳細
+
+        更新: 7 分前
+
+        現在の使用量
+        info
+        3% 使用中
+        2:15にリセット
+        1 週間の上限
+        1月9日の6:05にリセットされます
+        27% 使用中
+        AI Ultra なら使用量が 5 倍に
+        月額 ￥14,500
+        アップグレード
+        """
+        guard case let .reading(r) = GeminiAppUsageParser.parse(raw) else { return XCTFail("unreadable") }
+        XCTAssertEqual(r.fiveHourUsed, 3)
+        XCTAssertEqual(r.weeklyUsed, 27)
+    }
+
+    func testPicksAkisChromeNotHeadlessOrphan() {
+        let headless = ChromeInstance(pid: 2847, regular: false, terminated: false, active: false, launched: Date(timeIntervalSince1970: 10))
+        let real = ChromeInstance(pid: 411, regular: true, terminated: false, active: false, launched: Date(timeIntervalSince1970: 20))
+        XCTAssertEqual(ChromeInstance.pick([headless, real]), 411)
+        XCTAssertNil(ChromeInstance.pick([headless]))
+        let other = ChromeInstance(pid: 9, regular: true, terminated: false, active: true, launched: Date(timeIntervalSince1970: 30))
+        XCTAssertEqual(ChromeInstance.pick([real, other]), 9)
+        let dead = ChromeInstance(pid: 5, regular: true, terminated: true, active: true, launched: nil)
+        XCTAssertEqual(ChromeInstance.pick([dead, real]), 411)
+        let noDate = ChromeInstance(pid: 7, regular: true, terminated: false, active: false, launched: nil)
+        XCTAssertEqual(ChromeInstance.pick([noDate, real]), 411)
+    }
 }

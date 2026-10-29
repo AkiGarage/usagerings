@@ -321,8 +321,15 @@ struct LiveChromeBridge: ChromeUsageBridge {
     var chromeRunning: Bool { Self.pid() != nil }
     var chromeFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID }
 
+    /// Skips background instances of the same bundle id (e.g. an orphaned `--headless` test Chrome
+    /// with its own empty profile), which otherwise received our Apple Events. A visible GUI
+    /// automation Chrome is still `.regular`; reads only run while Chrome is frontmost, so the
+    /// frontmost regular instance wins, then the oldest.
     static func pid() -> pid_t? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first { !$0.isTerminated }?.processIdentifier
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .map { ChromeInstance(pid: $0.processIdentifier, regular: $0.activationPolicy == .regular,
+                                  terminated: $0.isTerminated, active: $0.isActive, launched: $0.launchDate) }
+        return ChromeInstance.pick(apps)
     }
 
     private static let epoch = OSAllocatedUnfairLock(initialState: 0)
@@ -691,5 +698,20 @@ final class GeminiAppUsageMonitor {
                                 failureText: "\(reason) · 最後に読んだ値 \(f.string(from: observed))")
         s.isStale = true
         return s
+    }
+}
+
+/// One running process with Chrome's bundle id. Pure, so the choice can be tested.
+struct ChromeInstance: Equatable {
+    var pid: pid_t
+    var regular: Bool
+    var terminated: Bool
+    var active: Bool
+    var launched: Date?
+
+    static func pick(_ all: [ChromeInstance]) -> pid_t? {
+        let real = all.filter { $0.regular && !$0.terminated }
+        if let front = real.first(where: \.active) { return front.pid }
+        return real.min { ($0.launched ?? .distantFuture) < ($1.launched ?? .distantFuture) }?.pid
     }
 }
