@@ -111,6 +111,10 @@ enum UsageRingsDemoFixture {
                                       accountLimit("Gemini Models · Weekly", 81, resetIn: 110, account: 1),
                                       accountLimit("Claude and GPT models · 5h", 57, resetIn: 2.5, account: 1),
                                       accountLimit("Claude and GPT models · Weekly", 62, resetIn: 132, account: 1)],
+                            stats: [], failureText: nil),
+            ProviderSection(provider: .gemini,
+                            windows: [limit("Gemini · 5h", 64, resetIn: 2),
+                                      limit("Gemini · Weekly", 81, resetIn: 90)],
                             stats: [], failureText: nil)
         ]
 

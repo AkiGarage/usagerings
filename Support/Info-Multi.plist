@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>UsageRings</string>
 	<key>CFBundleExecutable</key>
 	<string>UsageRings</string>
 	<key>CFBundleIconFile</key>
@@ -11,8 +13,6 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.akigarage.usagerings</string>
 	<key>CFBundleName</key>
-	<string>UsageRings</string>
-	<key>CFBundleDisplayName</key>
 	<string>UsageRings</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
@@ -24,6 +24,8 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>UsageRings は、あなたが開いている gemini.google.com/usage タブの表示内容だけを読みます。タブの移動・再読み込み・操作はしません。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>

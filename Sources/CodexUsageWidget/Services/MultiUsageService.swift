@@ -147,7 +147,7 @@ struct MultiUsageService: Sendable {
             switch provider {
             case .codex:
                 return try codexResult(from: result.stdout, now: now, timeZone: timeZone, calendar: calendar)
-            case .zai, .grok, .claude, .antigravity, .minimax, .kimi, .deepseek:
+            case .zai, .grok, .claude, .antigravity, .minimax, .kimi, .deepseek, .gemini:
                 let section = try MultiProviderParser.parse(
                     result.stdout,
                     provider: provider,

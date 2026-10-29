@@ -48,6 +48,7 @@ struct CollapsedUsageBar: Identifiable {
     static let claudeBColor = Color(red: 0xC4 / 255, green: 0x62 / 255, blue: 0x3F / 255)
     static let codexColor = Color(red: 0x19 / 255, green: 0xB6 / 255, blue: 0xE6 / 255)
     static let antigravityColor = Color(red: 0x34 / 255, green: 0xA8 / 255, blue: 0x53 / 255)
+    static let geminiColor = Color(red: 0x42 / 255, green: 0x85 / 255, blue: 0xF4 / 255)
     static let criticalColor = Color(red: 0xFF / 255, green: 0x45 / 255, blue: 0x3A / 255)
     static let warningColor = Color(red: 0xFF / 255, green: 0xB0 / 255, blue: 0x20 / 255)
 
@@ -206,6 +207,9 @@ struct CollapsedUsageBar: Identifiable {
                     bars += grouped
                 }
             } else { bars += antigravityBars([]) }
+        }
+        if snapshot.sections.contains(where: { $0.provider == .gemini }) {
+            bars += accountBars(.gemini, label: "G", color: geminiColor)
         }
         return bars.filter { bar in
             if let provider = bar.provider, snapshot.hiddenProviders.contains(provider) { return false }

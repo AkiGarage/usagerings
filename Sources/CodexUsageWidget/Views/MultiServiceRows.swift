@@ -78,6 +78,7 @@ struct ServiceRowModel: Identifiable {
         case .minimax: .orange
         case .kimi: .teal
         case .deepseek: .blue
+        case .gemini: CollapsedUsageBar.geminiColor
         }
     }
 

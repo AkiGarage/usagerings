@@ -9,6 +9,8 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
     case kimi
     case deepseek
     case antigravity
+    /// Gemini app (gemini.google.com) quota, read from Aki's open usage tab only.
+    case gemini
 
     var id: String { rawValue }
 
@@ -30,6 +32,8 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
             "Kimi"
         case .deepseek:
             "DeepSeek"
+        case .gemini:
+            "Gemini"
         }
     }
 }
@@ -151,7 +155,7 @@ struct MultiUsageSnapshot: Equatable, Sendable {
     var hiddenProviders: Set<ProviderID> = []
 
     /// Display order shared by the tablet (left to right) and the window (top to bottom).
-    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity]
+    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity, .gemini]
 
     static func ordered(_ sections: [ProviderSection]) -> [ProviderSection] {
         sections.enumerated().sorted { lhs, rhs in

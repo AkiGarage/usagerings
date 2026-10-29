@@ -108,6 +108,9 @@ final class MultiUsageStore: ObservableObject {
     private var wakeObservers: [NSObjectProtocol] = []
     /// Injected for tests.
     var resetClock: () -> Date = { Date() }
+    /// Gemini app quota: read from Aki's open Chrome usage tab on its own activity schedule,
+    /// never by the regular or reset refresh (those make no Gemini request at all).
+    private(set) var geminiMonitor: GeminiAppUsageMonitor?
 
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
          preferences: PanelPreferences? = nil) {
@@ -138,6 +141,10 @@ final class MultiUsageStore: ObservableObject {
 
     func start() {
         resetSchedulingEnabled = true
+        if geminiMonitor == nil, case .live = dataSource, preferences != nil, NSClassFromString("XCTestCase") == nil {
+            attachGeminiMonitor(GeminiAppUsageMonitor())
+        }
+        geminiMonitor?.start()
         refresh()
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
@@ -162,7 +169,28 @@ final class MultiUsageStore: ObservableObject {
         ]
     }
 
+    func attachGeminiMonitor(_ monitor: GeminiAppUsageMonitor) {
+        geminiMonitor = monitor
+        monitor.onChange = { [weak self] section in self?.applyGemini(section) }
+    }
+
+    /// Swap in the Gemini section without touching any other provider.
+    func applyGemini(_ section: ProviderSection) {
+        guard let raw = rawSnapshot else { return }
+        let merged = Self.withGemini(section, in: raw)
+        rawSnapshot = merged
+        snapshot = visible(merged)
+    }
+
+    static func withGemini(_ section: ProviderSection?, in snapshot: MultiUsageSnapshot) -> MultiUsageSnapshot {
+        guard let section else { return snapshot }
+        let sections = snapshot.sections.filter { $0.provider != .gemini } + [section]
+        return MultiUsageSnapshot(sections: MultiUsageSnapshot.ordered(sections), codexSnapshot: snapshot.codexSnapshot,
+                                  updatedAt: snapshot.updatedAt, hiddenProviders: snapshot.hiddenProviders)
+    }
+
     func stop() {
+        geminiMonitor?.stop()
         refreshTask?.cancel()
         refreshTask = nil
         opacityHUDTask?.cancel()
@@ -249,9 +277,12 @@ final class MultiUsageStore: ObservableObject {
                                           codexSnapshot: targets.contains(.codex) ? fetched.codexSnapshot : previous.codexSnapshot,
                                           updatedAt: fetched.updatedAt, hiddenProviders: previous.hiddenProviders)
         }
+        snapshot = Self.withGemini(geminiMonitor?.section ?? rawSnapshot?.sections.first { $0.provider == .gemini }, in: snapshot)
         preferences?.reconcileAccounts(in: snapshot)
         preferences?.reconcileProviders(in: snapshot)
-        let displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: Date())
+        var displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: Date())
+        // Gemini keeps its own observation times and stale marking.
+        displaySnapshot = Self.withGemini(snapshot.sections.first { $0.provider == .gemini }, in: displaySnapshot)
         rawSnapshot = displaySnapshot
         if targets.contains(.claude) { updateClaudeChoice(from: snapshot, now: Date()) }
         self.snapshot = visible(displaySnapshot)
@@ -262,7 +293,7 @@ final class MultiUsageStore: ObservableObject {
             publish(codexSnapshot)
         }
         resetAttempts = ResetRefreshPlanner.track(resetAttempts, sections: fetched.sections, fetched: targets,
-                                                  skipped: preferences?.providersToSkip() ?? [], now: resetClock())
+                                                  skipped: (preferences?.providersToSkip() ?? []).union([.gemini]), now: resetClock())
         scheduleResetRefresh()
     }
 

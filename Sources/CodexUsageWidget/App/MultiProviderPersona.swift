@@ -44,6 +44,12 @@ final class MultiProviderPersona: AppPersona {
     }
 
     func start() { store.start() }
+    /// nil when there is no live Gemini reader (demo mode or before start).
+    var geminiReadingEnabled: Bool? { store.geminiMonitor?.isEnabled }
+    func setGeminiReading(_ on: Bool) {
+        if on { preferences.setProviderVisible(true, for: .gemini) }
+        store.geminiMonitor?.setEnabled(on)
+    }
     func stop() { store.stop() }
     func refresh() { store.refresh() }
     func showOpacityHUD(percent: Int) { store.showOpacityHUD(percent: percent) }

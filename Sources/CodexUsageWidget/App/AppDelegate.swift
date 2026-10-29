@@ -423,6 +423,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             sub.addItem(splitAntigravity)
             view.submenu = sub
             menu.addItem(view)
+            if let multi = persona as? MultiProviderPersona, let on = multi.geminiReadingEnabled {
+                // Only this explicit click may show the macOS Automation dialog (once).
+                let gemini = NSMenuItem(title: "Gemini の使用量を読む（開いている Chrome タブから）",
+                                        action: #selector(toggleGeminiReading), keyEquivalent: "")
+                gemini.target = self
+                gemini.state = on ? .on : .off
+                menu.addItem(gemini)
+            }
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: persona.quitMenuItemTitle, action: #selector(quitApp), keyEquivalent: "q"))
@@ -444,6 +452,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func toggleAccountNames() {
         guard let preferences = persona.panelPreferences else { return }
         preferences.showAccountNames.toggle()
+    }
+    @objc private func toggleGeminiReading() {
+        guard let multi = persona as? MultiProviderPersona, let on = multi.geminiReadingEnabled else { return }
+        multi.setGeminiReading(!on)
     }
     @objc private func toggleAntigravityAccounts() {
         persona.panelPreferences?.splitAntigravityAccounts.toggle()
