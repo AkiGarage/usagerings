@@ -438,4 +438,30 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         let noDate = ChromeInstance(pid: 7, regular: true, terminated: false, active: false, launched: nil)
         XCTAssertEqual(ChromeInstance.pick([noDate, real]), 411)
     }
+
+    func testSessionPinsOneChromeForWholeRead() {
+        let a = ChromeIdentity(pid: 411, launched: Date(timeIntervalSince1970: 20), bundleID: "com.google.Chrome", regular: true, terminated: false)
+        let session = ChromeSession()
+        XCTAssertNil(session.target)
+        let seen: [pid_t?] = session.run(pinning: a) { [session.target?.pid, session.target?.pid] }
+        XCTAssertEqual(seen, [411, 411])
+        XCTAssertNil(session.target, "no target outside a read slot")
+        XCTAssertNil(session.run(pinning: nil) { session.target })
+    }
+
+    func testPinnedChromeFailsClosedOnReuseOrChange() {
+        let a = ChromeIdentity(pid: 411, launched: Date(timeIntervalSince1970: 20), bundleID: "com.google.Chrome", regular: true, terminated: false)
+        XCTAssertTrue(a.stillSame(as: a))
+        var reused = a; reused.launched = Date(timeIntervalSince1970: 99)
+        XCTAssertFalse(a.stillSame(as: reused), "same pid, new process")
+        var headless = a; headless.regular = false
+        XCTAssertFalse(a.stillSame(as: headless))
+        var gone = a; gone.terminated = true
+        XCTAssertFalse(a.stillSame(as: gone))
+        var other = a; other.bundleID = "com.example.Other"
+        XCTAssertFalse(a.stillSame(as: other))
+        XCTAssertFalse(a.stillSame(as: nil))
+        var noDate = a; noDate.launched = nil
+        XCTAssertFalse(noDate.stillSame(as: noDate), "no launch date = cannot prove identity")
+    }
 }
