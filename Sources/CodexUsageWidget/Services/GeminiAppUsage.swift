@@ -203,10 +203,22 @@ struct LiveChromeBridge: ChromeUsageBridge {
 
     /// Runs on the serial queue; returns `cancelled` if invalidated while waiting in line.
     private static func onQueue<T: Sendable>(cancelled: T, _ work: @escaping @Sendable () -> T) async -> T {
+        await onQueue(cancelled: cancelled) { (_: () -> Bool) in work() }
+    }
+
+    /// Variant whose work gets an `alive()` check, so long steps can re-check invalidation mid-way.
+    private static func onQueue<T: Sendable>(cancelled: T, _ work: @escaping @Sendable (() -> Bool) -> T) async -> T {
         let started = epoch.withLock { $0 }
+        let alive = { epoch.withLock { $0 } == started }
         return await withCheckedContinuation { c in
-            queue.async { c.resume(returning: epoch.withLock { $0 } == started ? work() : cancelled) }
+            queue.async { c.resume(returning: alive() ? work(alive) : cancelled) }
         }
+    }
+
+    private static func geminiInFront() -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID,
+              case let .success(front) = send("core", "getd", direct: property("URL ", of: property("acTa", of: window(1)))) else { return false }
+        return GeminiUsageURL.isGemini(front.stringValue ?? "")
     }
 
     func invalidatePending() { Self.epoch.withLock { $0 += 1 } }
@@ -307,12 +319,10 @@ struct LiveChromeBridge: ChromeUsageBridge {
     }
 
     func usageTabText() async -> Result<String, ChromeReadError>? {
-        await Self.onQueue(cancelled: nil) {
+        await Self.onQueue(cancelled: nil) { (alive: () -> Bool) -> Result<String, ChromeReadError>? in
             guard Self.status(ask: false) == .granted else { return .failure(.notAllowed) }
             // Same queue slot: Gemini must still be the front app and front tab right now.
-            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID,
-                  case let .success(front) = Self.send("core", "getd", direct: Self.property("URL ", of: Self.property("acTa", of: Self.window(1)))),
-                  GeminiUsageURL.isGemini(front.stringValue ?? "") else { return nil }
+            guard Self.geminiInFront() else { return nil }
             let tabs = Self.spec("CrTb", form: "indx", Self.every, in: Self.window(nil))
             guard case let .success(urlDesc) = Self.send("core", "getd", direct: Self.property("URL ", of: tabs)),
                   case let .success(idDesc) = Self.send("core", "getd", direct: Self.property("ID  ", of: tabs)) else { return .failure(.failed) }
@@ -326,6 +336,8 @@ struct LiveChromeBridge: ChromeUsageBridge {
                 // The page reports its own URL in the same call, so a tab that moved or navigated is never read.
                 let js = NSAppleEventDescriptor(string:
                     Self.pageScript)
+                // Listing tabs can take seconds: re-check toggle and front tab right before executing.
+                guard alive(), Self.geminiInFront() else { return nil }
                 switch Self.send("CrSu", "ExJa", direct: tab, params: ["JvSc": js]) {
                 case let .success(d): return Self.usageText(fromJSON: d.stringValue)
                 case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
@@ -456,6 +468,8 @@ final class GeminiAppUsageMonitor {
         defaults.set(readAt.timeIntervalSince1970, forKey: Self.lastReadKey)
         readCount += 1
         let result = await bridge.usageTabText()
+        let doneAt = clock() // stamp again after the read so spacing never shrinks below 5 minutes
+        if doneAt > readAt { state.lastRead = doneAt; defaults.set(doneAt.timeIntervalSince1970, forKey: Self.lastReadKey) }
         guard current() else { return } // toggled, hidden or halted during the read: discard
         switch result {
         case nil:
