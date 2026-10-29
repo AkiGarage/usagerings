@@ -308,6 +308,10 @@ protocol ChromeUsageBridge: Sendable {
 
 /// UsageRings' own hidden Chrome window holding only the usage tab. Found by its window name,
 /// so it survives Chrome restarts; recreated at most once per hour if Aki closes it.
+import os
+let geminiLog = Logger(subsystem: "com.akigarage.usagerings", category: "gemini")
+func frontName() -> String { NSWorkspace.shared.frontmostApplication?.localizedName ?? "?" }
+
 enum GeminiDedicatedWindow {
     static let name = "UsageRings Gemini（自動・閉じても可）"
     static let reopenInterval: TimeInterval = 3600
@@ -429,6 +433,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
                 front.activate()
             }
         }
+        geminiLog.notice("dedicated open: front before=\(front?.localizedName ?? "?", privacy: .public) after-make=\(frontName(), privacy: .public)")
         guard case let .success(w) = made, w.descriptorType != code("null") else { return }
         set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
         set("GNam", of: w, NSAppleEventDescriptor(string: GeminiDedicatedWindow.name))
@@ -445,7 +450,15 @@ struct LiveChromeBridge: ChromeUsageBridge {
 
     /// Reload + read our own window's tab. nil: no own window (caller falls back to a read-only scan).
     private static func readDedicated(alive: () -> Bool) -> Result<String, ChromeReadError>? {
+        let before = frontName()
+        let r = readDedicatedInner(alive: alive)
+        let outcome: String = switch r { case nil: "none"; case .success: "ok"; case let .failure(e): "\(e)" }
+        geminiLog.notice("dedicated read: \(outcome, privacy: .public) front before=\(before, privacy: .public) after=\(frontName(), privacy: .public)")
+        return r
+    }
+    private static func readDedicatedInner(alive: () -> Bool) -> Result<String, ChromeReadError>? {
         guard let (_, id) = findDedicated() else {
+            geminiLog.notice("dedicated window not found")
             let last = UserDefaults.standard.object(forKey: GeminiDedicatedWindow.lastOpenKey) as? Date
             if GeminiDedicatedWindow.mayOpen(lastOpen: last, now: Date()) {
                 UserDefaults.standard.set(Date(), forKey: GeminiDedicatedWindow.lastOpenKey)
