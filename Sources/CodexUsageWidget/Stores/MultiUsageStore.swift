@@ -142,7 +142,10 @@ final class MultiUsageStore: ObservableObject {
     func start() {
         resetSchedulingEnabled = true
         if geminiMonitor == nil, case .live = dataSource, preferences != nil, NSClassFromString("XCTestCase") == nil {
-            attachGeminiMonitor(GeminiAppUsageMonitor())
+            let monitor = GeminiAppUsageMonitor()
+            // Hidden in "サービス表示" = not fetched, same as every other provider.
+            monitor.isVisible = { [weak preferences] in preferences?.isProviderVisible(.gemini) ?? false }
+            attachGeminiMonitor(monitor)
         }
         geminiMonitor?.start()
         refresh()

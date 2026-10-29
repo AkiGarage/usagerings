@@ -37,10 +37,10 @@ enum GeminiAppUsageParser {
     private static let sectionLines = 4
 
     static func parse(_ text: String) -> Outcome {
-        // Never scan a truncated page: a verification notice past the cut could be missed.
-        guard text.count <= maxTextLength else { return .unknown }
         let lower = text.lowercased()
+        // The whole page is checked for verification text first, never a truncated prefix.
         if blockMarkers.contains(where: { lower.contains($0) }) { return .blocked }
+        guard text.count <= maxTextLength else { return .unknown }
         let lines = text.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let five = section(lines, labels: fiveLabels)
@@ -59,7 +59,7 @@ enum GeminiAppUsageParser {
     /// Any other heading-like line ("Monthly limit", "Daily usage") ends a section.
     private static func isHeading(_ line: String) -> Bool {
         let l = line.lowercased()
-        guard !l.contains(where: \.isNumber) else { return false }
+        guard !l.contains("%"), !l.contains("％") else { return false } // a value line, not a heading
         return ["limit", "usage", "quota", "上限", "使用量", "利用枠"].contains { l.contains($0) }
     }
 
@@ -149,7 +149,7 @@ enum GeminiReadPolicy {
               !quietHours.contains(s.hour) else { return false }
         guard let last = state.lastRead else { return true }
         let since = s.now.timeIntervalSince(last)
-        return since >= interval || since < -3600 // clock moved back over an hour: allow once
+        return since >= interval // clock moved back (since < 0): the monitor rebases lastRead
     }
 }
 
@@ -269,6 +269,14 @@ struct LiveChromeBridge: ChromeUsageBridge {
         }
     }
 
+    /// Text only when the page itself says it is exactly the usage page.
+    static func usageText(fromJSON json: String?) -> Result<String, ChromeReadError>? {
+        guard let data = json?.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let url = obj["u"] as? String, let text = obj["t"] as? String else { return .failure(.failed) }
+        return GeminiUsageURL.isUsagePage(url) ? .success(text) : nil
+    }
+
     func activeTabURL() async -> String? {
         await Self.onQueue {
             guard Self.status(ask: false) == .granted,
@@ -291,9 +299,11 @@ struct LiveChromeBridge: ChromeUsageBridge {
                       let t = row.firstIndex(where: GeminiUsageURL.isUsagePage) else { continue }
                 // Address the tab by its unique ID so a reordered window cannot redirect the read.
                 let tab = Self.spec("CrTb", form: "ID  ", NSAppleEventDescriptor(string: ids[w][t]), in: Self.window(Int32(w + 1)))
-                let js = NSAppleEventDescriptor(string: "(document.body && document.body.innerText) || ''")
+                // The page reports its own URL in the same call, so a tab that moved or navigated is never read.
+                let js = NSAppleEventDescriptor(string:
+                    "JSON.stringify({u: location.href, t: (document.body && document.body.innerText) || ''})")
                 switch Self.send("CrSu", "ExJa", direct: tab, params: ["JvSc": js]) {
-                case let .success(d): return .success(d.stringValue ?? "")
+                case let .success(d): return Self.usageText(fromJSON: d.stringValue)
                 case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
                 case .failure(.code(-1712)): return .failure(.timedOut)
                 case .failure(.code(-600)): return nil
@@ -317,6 +327,9 @@ final class GeminiAppUsageMonitor {
     private let defaults: UserDefaults
     private var timer: Task<Void, Never>?
     private var inFlight = false
+    /// Bumped on every menu toggle; work started under an older generation is discarded.
+    private var generation = 0
+    var isVisible: () -> Bool = { true }
     private(set) var state = GeminiReadPolicy.State()
     private(set) var section: ProviderSection
     var onChange: ((ProviderSection) -> Void)?
@@ -335,17 +348,20 @@ final class GeminiAppUsageMonitor {
         state.lastRead = at > 0 ? Date(timeIntervalSince1970: at) : nil
         state.halted = defaults.bool(forKey: Self.haltedKey)
         section = ProviderSection(provider: .gemini, windows: [], stats: [], failureText: "不明")
-        section = cachedOrUnknown(Self.startText(enabled: isEnabled))
+        section = cachedOrUnknown(startText)
     }
 
     var isEnabled: Bool { defaults.bool(forKey: Self.enabledKey) }
+    private var active: Bool { isEnabled && isVisible() }
 
-    static func startText(enabled: Bool) -> String {
-        enabled ? "不明（Gemini を使うと読みます）" : "オフ（メニューで「Gemini の使用量を読む」をオン）"
+    var startText: String {
+        if !isEnabled { return "オフ（メニューで「Gemini の使用量を読む」をオン）" }
+        if state.halted { return "不明（確認ページかエラーのため停止中。メニューでオフ→オンで再開）" }
+        return "不明（Gemini を使うと読みます）"
     }
 
     func start() {
-        publish(cachedOrUnknown(Self.startText(enabled: isEnabled)))
+        publish(cachedOrUnknown(startText))
         timer?.cancel()
         timer = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -361,12 +377,16 @@ final class GeminiAppUsageMonitor {
     /// The last-read time is kept, so toggling never causes an extra read.
     func setEnabled(_ on: Bool) async {
         defaults.set(on, forKey: Self.enabledKey)
+        generation += 1
+        let gen = generation
         setHalted(false)
         guard on else { publish(cachedOrUnknown("オフ")); return }
         let current = await bridge.automationStatus(ask: false)
+        guard gen == generation, isEnabled else { return } // toggled again meanwhile: never ask
         let status = current == .notDetermined ? await bridge.automationStatus(ask: true) : current
+        guard gen == generation, isEnabled else { return }
         if status != .granted { publish(cachedOrUnknown(Self.text(for: status))); return }
-        publish(cachedOrUnknown(Self.startText(enabled: true)))
+        publish(cachedOrUnknown(startText))
         await tick()
     }
 
@@ -381,10 +401,15 @@ final class GeminiAppUsageMonitor {
     }
 
     func tick() async {
-        guard isEnabled, !inFlight else { return }
+        guard active, !inFlight else { return }
         inFlight = true
         defer { inFlight = false }
+        let gen = generation
+        func current() -> Bool { gen == generation && active && !state.halted }
         let now = clock()
+        if let last = state.lastRead, now < last { // clock moved back: rebase, read again 5 min from now
+            state.lastRead = now; defaults.set(now.timeIntervalSince1970, forKey: Self.lastReadKey)
+        }
         markStaleIfOld(now)
         guard bridge.chromeRunning else { return }
         let hour = Calendar.current.component(.hour, from: now)
@@ -392,17 +417,19 @@ final class GeminiAppUsageMonitor {
         let base = GeminiReadPolicy.Signals(now: now, geminiFrontmost: true, idleSeconds: idle, screenAsleep: asleep, hour: hour)
         // Cheap local checks first; only then ask Chrome for its front tab URL.
         guard bridge.chromeFrontmost, GeminiReadPolicy.shouldRead(state, base) else { return }
-        guard await bridge.automationStatus(ask: false) == .granted else { return }
+        guard await bridge.automationStatus(ask: false) == .granted, current() else { return }
         let front = await bridge.activeTabURL().map(GeminiUsageURL.isGemini) ?? false
+        guard current() else { return }
         var signals = base; signals.geminiFrontmost = front && bridge.chromeFrontmost
         guard GeminiReadPolicy.shouldRead(state, signals) else { return }
         state.lastRead = now
         defaults.set(now.timeIntervalSince1970, forKey: Self.lastReadKey)
-        // Re-check right before reading the body: Aki may have switched away meanwhile.
-        guard isEnabled, bridge.chromeFrontmost else { return }
+        // Re-check right before reading the body: Aki may have switched app or tab meanwhile.
+        guard bridge.chromeFrontmost, await bridge.activeTabURL().map(GeminiUsageURL.isGemini) ?? false,
+              bridge.chromeFrontmost, current() else { return }
         readCount += 1
         let result = await bridge.usageTabText()
-        guard isEnabled, !state.halted else { return } // turned off during the read: discard
+        guard current() else { return } // toggled, hidden or halted during the read: discard
         switch result {
         case nil:
             publish(cachedOrUnknown("不明（gemini.google.com/usage のタブが開いていません）"))

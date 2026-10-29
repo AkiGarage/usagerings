@@ -88,6 +88,18 @@ final class GeminiAppUsageParserTests: XCTestCase {
 
     func testUnknownHeadingEndsSection() {
         XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\nMonthly limit\n23% used\n"), .unknown)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\n2-hour limit\n23% used\n"), .unknown)
+    }
+
+    func testOversizedVerificationPageStillBlocks() {
+        let big = String(repeating: "x", count: GeminiAppUsageParser.maxTextLength) + "unusual traffic"
+        XCTAssertEqual(GeminiAppUsageParser.parse(big), .blocked)
+    }
+
+    func testPageMustReportExactUsageURL() {
+        XCTAssertEqual(LiveChromeBridge.usageText(fromJSON: #"{"u":"https://gemini.google.com/usage","t":"hi"}"#), .success("hi"))
+        XCTAssertNil(LiveChromeBridge.usageText(fromJSON: #"{"u":"https://gemini.google.com/app","t":"hi"}"#))
+        XCTAssertEqual(LiveChromeBridge.usageText(fromJSON: "garbage"), .failure(.failed))
     }
 
     func testOversizedPageIsUnknownNotTruncated() {
@@ -251,6 +263,24 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         await restarted.tick()
         XCTAssertEqual(b.textReads, 1)
         await restarted.setEnabled(true)
+        XCTAssertEqual(b.textReads, 2)
+    }
+
+    func testHiddenProviderNeverReads() async {
+        let b = FakeGeminiBridge(); let m = make(b, now: noon)
+        m.isVisible = { false }
+        await m.setEnabled(true); await m.tick()
+        XCTAssertEqual(b.textReads + b.urlReads, 0)
+    }
+
+    func testClockMovedBackRebasesInsteadOfReading() async {
+        let b = FakeGeminiBridge(); var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        now = now.addingTimeInterval(-7200); await m.tick()
+        XCTAssertEqual(b.textReads, 1)
+        now = now.addingTimeInterval(301); await m.tick()
         XCTAssertEqual(b.textReads, 2)
     }
 
