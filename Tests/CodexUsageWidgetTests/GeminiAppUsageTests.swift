@@ -100,6 +100,9 @@ final class GeminiAppUsageParserTests: XCTestCase {
         XCTAssertEqual(LiveChromeBridge.usageText(fromJSON: #"{"u":"https://gemini.google.com/usage","t":"hi"}"#), .success("hi"))
         XCTAssertNil(LiveChromeBridge.usageText(fromJSON: #"{"u":"https://gemini.google.com/app","t":"hi"}"#))
         XCTAssertEqual(LiveChromeBridge.usageText(fromJSON: "garbage"), .failure(.failed))
+        XCTAssertNil(LiveChromeBridge.usageText(fromJSON: #"{"u":"https://gemini.google.com/app"}"#))
+        XCTAssertTrue(LiveChromeBridge.pageScript.contains("https://gemini.google.com/usage"))
+        XCTAssertTrue(LiveChromeBridge.pageScript.contains("ok?"), "text is only returned from the usage page itself")
     }
 
     func testOversizedPageIsUnknownNotTruncated() {
@@ -156,6 +159,8 @@ final class FakeGeminiBridge: ChromeUsageBridge, @unchecked Sendable {
     }
     func activeTabURL() -> String? { urlReads += 1; return url }
     func usageTabText() -> Result<String, ChromeReadError>? { textReads += 1; return text }
+    var invalidated = 0
+    func invalidatePending() { invalidated += 1 }
 }
 
 @MainActor
@@ -264,6 +269,12 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(b.textReads, 1)
         await restarted.setEnabled(true)
         XCTAssertEqual(b.textReads, 2)
+    }
+
+    func testToggleOffDropsQueuedChromeWork() async {
+        let b = FakeGeminiBridge(); let m = make(b, now: noon)
+        await m.setEnabled(true); await m.setEnabled(false)
+        XCTAssertEqual(b.invalidated, 1)
     }
 
     func testHiddenProviderNeverReads() async {

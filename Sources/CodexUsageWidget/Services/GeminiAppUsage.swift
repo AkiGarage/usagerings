@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import os
 
 /// Reads the Gemini app quota only from a gemini.google.com/usage tab Aki already has open
 /// in his signed-in Chrome. It never opens, reloads, focuses or navigates a tab, never
@@ -164,6 +165,8 @@ protocol ChromeUsageBridge: Sendable {
     func activeTabURL() async -> String?
     /// innerText of an already-open https://gemini.google.com/usage tab, nil if none.
     func usageTabText() async -> Result<String, ChromeReadError>?
+    /// Drop every queued, not yet started Chrome request (menu toggle-off).
+    func invalidatePending()
 }
 
 enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, timedOut, failed }
@@ -196,9 +199,17 @@ struct LiveChromeBridge: ChromeUsageBridge {
         NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first { !$0.isTerminated }?.processIdentifier
     }
 
-    private static func onQueue<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { c in queue.async { c.resume(returning: work()) } }
+    private static let epoch = OSAllocatedUnfairLock(initialState: 0)
+
+    /// Runs on the serial queue; returns `cancelled` if invalidated while waiting in line.
+    private static func onQueue<T: Sendable>(cancelled: T, _ work: @escaping @Sendable () -> T) async -> T {
+        let started = epoch.withLock { $0 }
+        return await withCheckedContinuation { c in
+            queue.async { c.resume(returning: epoch.withLock { $0 } == started ? work() : cancelled) }
+        }
     }
+
+    func invalidatePending() { Self.epoch.withLock { $0 += 1 } }
 
     private static func status(ask: Bool) -> ChromeAutomationStatus {
         guard pid() != nil else { return .chromeNotRunning }
@@ -215,7 +226,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
     }
 
     func automationStatus(ask: Bool) async -> ChromeAutomationStatus {
-        await Self.onQueue { Self.status(ask: ask) }
+        await Self.onQueue(cancelled: .unavailable) { Self.status(ask: ask) }
     }
 
     static func code(_ s: String) -> FourCharCode { s.utf8.reduce(0) { $0 << 8 | FourCharCode($1) } }
@@ -269,16 +280,25 @@ struct LiveChromeBridge: ChromeUsageBridge {
         }
     }
 
+    /// The page checks its own URL; any other page returns only its URL, never its text.
+    static let pageScript = """
+    (function(){var b='\(GeminiUsageURL.base)',u=location.href;\
+    var ok=u===b||u.indexOf(b+'?')===0||u.indexOf(b+'#')===0;\
+    return JSON.stringify(ok?{u:u,t:(document.body&&document.body.innerText)||''}:{u:u});})()
+    """
+
     /// Text only when the page itself says it is exactly the usage page.
     static func usageText(fromJSON json: String?) -> Result<String, ChromeReadError>? {
         guard let data = json?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let url = obj["u"] as? String, let text = obj["t"] as? String else { return .failure(.failed) }
-        return GeminiUsageURL.isUsagePage(url) ? .success(text) : nil
+              let url = obj["u"] as? String else { return .failure(.failed) }
+        guard GeminiUsageURL.isUsagePage(url) else { return nil }
+        guard let text = obj["t"] as? String else { return .failure(.failed) }
+        return .success(text)
     }
 
     func activeTabURL() async -> String? {
-        await Self.onQueue {
+        await Self.onQueue(cancelled: nil) {
             guard Self.status(ask: false) == .granted,
                   case let .success(d) = Self.send("core", "getd", direct: Self.property("URL ", of: Self.property("acTa", of: Self.window(1))))
             else { return nil }
@@ -287,8 +307,12 @@ struct LiveChromeBridge: ChromeUsageBridge {
     }
 
     func usageTabText() async -> Result<String, ChromeReadError>? {
-        await Self.onQueue {
+        await Self.onQueue(cancelled: nil) {
             guard Self.status(ask: false) == .granted else { return .failure(.notAllowed) }
+            // Same queue slot: Gemini must still be the front app and front tab right now.
+            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID,
+                  case let .success(front) = Self.send("core", "getd", direct: Self.property("URL ", of: Self.property("acTa", of: Self.window(1)))),
+                  GeminiUsageURL.isGemini(front.stringValue ?? "") else { return nil }
             let tabs = Self.spec("CrTb", form: "indx", Self.every, in: Self.window(nil))
             guard case let .success(urlDesc) = Self.send("core", "getd", direct: Self.property("URL ", of: tabs)),
                   case let .success(idDesc) = Self.send("core", "getd", direct: Self.property("ID  ", of: tabs)) else { return .failure(.failed) }
@@ -301,7 +325,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
                 let tab = Self.spec("CrTb", form: "ID  ", NSAppleEventDescriptor(string: ids[w][t]), in: Self.window(Int32(w + 1)))
                 // The page reports its own URL in the same call, so a tab that moved or navigated is never read.
                 let js = NSAppleEventDescriptor(string:
-                    "JSON.stringify({u: location.href, t: (document.body && document.body.innerText) || ''})")
+                    Self.pageScript)
                 switch Self.send("CrSu", "ExJa", direct: tab, params: ["JvSc": js]) {
                 case let .success(d): return Self.usageText(fromJSON: d.stringValue)
                 case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
@@ -380,7 +404,7 @@ final class GeminiAppUsageMonitor {
         generation += 1
         let gen = generation
         setHalted(false)
-        guard on else { publish(cachedOrUnknown("オフ")); return }
+        guard on else { bridge.invalidatePending(); publish(cachedOrUnknown("オフ")); return }
         let current = await bridge.automationStatus(ask: false)
         guard gen == generation, isEnabled else { return } // toggled again meanwhile: never ask
         let status = current == .notDetermined ? await bridge.automationStatus(ask: true) : current
@@ -427,6 +451,9 @@ final class GeminiAppUsageMonitor {
         // Re-check right before reading the body: Aki may have switched app or tab meanwhile.
         guard bridge.chromeFrontmost, await bridge.activeTabURL().map(GeminiUsageURL.isGemini) ?? false,
               bridge.chromeFrontmost, current() else { return }
+        let readAt = clock() // spacing counts from the actual read, not the tick start
+        state.lastRead = readAt
+        defaults.set(readAt.timeIntervalSince1970, forKey: Self.lastReadKey)
         readCount += 1
         let result = await bridge.usageTabText()
         guard current() else { return } // toggled, hidden or halted during the read: discard
