@@ -216,7 +216,11 @@ struct LiveChromeBridge: ChromeUsageBridge {
     }
 
     private static func geminiInFront() -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID,
+        // In use right now: awake screen and recent input, not just the front app.
+        let anyInput = CGEventType(rawValue: ~0)!
+        guard CGDisplayIsAsleep(CGMainDisplayID()) == 0,
+              CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput) < GeminiReadPolicy.idleLimit,
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID,
               case let .success(front) = send("core", "getd", direct: property("URL ", of: property("acTa", of: window(1)))) else { return false }
         return GeminiUsageURL.isGemini(front.stringValue ?? "")
     }
@@ -354,6 +358,8 @@ struct LiveChromeBridge: ChromeUsageBridge {
 
 @MainActor
 final class GeminiAppUsageMonitor {
+    var uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    private var lastReadUptime: TimeInterval?
     static let enabledKey = "geminiAppReadingEnabled"
     static let cacheKey = "geminiAppLastReading"
     static let lastReadKey = "geminiAppLastReadAt"
@@ -463,11 +469,16 @@ final class GeminiAppUsageMonitor {
         // Re-check right before reading the body: Aki may have switched app or tab meanwhile.
         guard bridge.chromeFrontmost, await bridge.activeTabURL().map(GeminiUsageURL.isGemini) ?? false,
               bridge.chromeFrontmost, current() else { return }
+        // Monotonic guard: a wall-clock jump forward can never shorten spacing within this run.
+        let up = uptime()
+        if let last = lastReadUptime, up - last < GeminiReadPolicy.interval { return }
+        lastReadUptime = up
         let readAt = clock() // spacing counts from the actual read, not the tick start
         state.lastRead = readAt
         defaults.set(readAt.timeIntervalSince1970, forKey: Self.lastReadKey)
         readCount += 1
         let result = await bridge.usageTabText()
+        lastReadUptime = uptime()
         let doneAt = clock() // stamp again after the read so spacing never shrinks below 5 minutes
         if doneAt > readAt { state.lastRead = doneAt; defaults.set(doneAt.timeIntervalSince1970, forKey: Self.lastReadKey) }
         guard current() else { return } // toggled, hidden or halted during the read: discard

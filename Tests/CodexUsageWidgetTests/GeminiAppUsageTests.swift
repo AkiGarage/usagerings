@@ -172,7 +172,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
 
     func make(_ b: FakeGeminiBridge, now: Date) -> GeminiAppUsageMonitor {
         let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
-        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
         return m
     }
     var noon: Date { Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())! }
@@ -214,7 +214,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
     func testVerificationPageHaltsAndKeepsLastValueAsStale() async {
         let b = FakeGeminiBridge(); var now = noon
         let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
-        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
         await m.setEnabled(true)
         XCTAssertFalse(m.section.isStale)
         b.text = .success("Our systems have detected unusual traffic")
@@ -259,12 +259,12 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         let b = FakeGeminiBridge(); b.text = .success("unusual traffic")
         var now = noon
         let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
-        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
         await m.setEnabled(true)
         b.text = .success("Current usage\n40% used")
         now = now.addingTimeInterval(3600)
         let restarted = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
-        restarted.clock = { now }; restarted.idleSeconds = { 1 }; restarted.screenAsleep = { false }
+        var uprestarted = 0.0; restarted.uptime = { uprestarted += 1000; return uprestarted }; restarted.clock = { now }; restarted.idleSeconds = { 1 }; restarted.screenAsleep = { false }
         await restarted.tick()
         XCTAssertEqual(b.textReads, 1)
         await restarted.setEnabled(true)
@@ -287,7 +287,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
     func testClockMovedBackRebasesInsteadOfReading() async {
         let b = FakeGeminiBridge(); var now = noon
         let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
-        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
         await m.setEnabled(true)
         now = now.addingTimeInterval(-7200); await m.tick()
         XCTAssertEqual(b.textReads, 1)
@@ -307,7 +307,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
     func testOldValueBecomesStaleWhenNotInUse() async {
         let b = FakeGeminiBridge(); var now = noon
         let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
-        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
         await m.setEnabled(true)
         XCTAssertFalse(m.section.isStale)
         b.chromeFrontmost = false
@@ -315,6 +315,16 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertTrue(m.section.isStale)
         XCTAssertEqual(m.section.windows.map(\.leftPercent), [60, 90])
         XCTAssertEqual(b.textReads, 1)
+    }
+
+    func testWallClockJumpForwardDoesNotShortenSpacing() async {
+        let b = FakeGeminiBridge(); var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        m.uptime = { 500 }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1)
+        now = now.addingTimeInterval(GeminiReadPolicy.interval + 60); await m.tick()
+        XCTAssertEqual(b.textReads, 1) // only 0 s of real time passed
     }
 
     func testStoreMergeKeepsOtherProviders() async {
