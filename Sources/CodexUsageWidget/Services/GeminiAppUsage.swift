@@ -304,7 +304,7 @@ protocol ChromeUsageBridge: Sendable {
     func invalidatePending()
 }
 
-enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, timedOut, failed }
+enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, timedOut, failed, tabAsleep }
 
 enum GeminiUsageURL {
     static let base = "https://gemini.google.com/usage"
@@ -328,20 +328,39 @@ struct LiveChromeBridge: ChromeUsageBridge {
     static let sendOptions: NSAppleEventDescriptor.SendOptions = [.waitForReply, .neverInteract, doNotPrompt]
 
     var chromeRunning: Bool { Self.pid() != nil }
-    var chromeFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID }
+    /// Frontmost app is the very Chrome process we would talk to (not just any Chrome bundle).
+    var chromeFrontmost: Bool {
+        guard let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier == Self.bundleID else { return false }
+        return front.processIdentifier == Self.pid()
+    }
 
     /// Skips background instances of the same bundle id (e.g. an orphaned `--headless` test Chrome
     /// with its own empty profile), which otherwise received our Apple Events. A visible GUI
     /// automation Chrome is still `.regular`; reads only run while Chrome is frontmost, so the
     /// frontmost regular instance wins, then the oldest.
-    static func pid() -> pid_t? {
+    static func pid() -> pid_t? { pickApp()?.processIdentifier }
+
+    /// Selection and identity come from the same NSRunningApplication snapshot (no re-lookup by pid).
+    private static func pickApp() -> NSRunningApplication? {
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .map { ChromeInstance(pid: $0.processIdentifier, regular: $0.activationPolicy == .regular,
-                                  terminated: $0.isTerminated, active: $0.isActive, launched: $0.launchDate) }
-        return ChromeInstance.pick(apps)
+        let chosen = ChromeInstance.pick(apps.map { ChromeInstance(pid: $0.processIdentifier, regular: $0.activationPolicy == .regular,
+                                                                   terminated: $0.isTerminated, active: $0.isActive, launched: $0.launchDate) })
+        return apps.first { $0.processIdentifier == chosen }
     }
 
     private static let epoch = OSAllocatedUnfairLock(initialState: 0)
+
+    /// pid + launch date: a reused pid has a different launch date, so it is never mistaken for the pinned one.
+    static func identity(_ pid: pid_t) -> ChromeIdentity? { NSRunningApplication(processIdentifier: pid).map(identity(of:)) }
+    static func identity(of app: NSRunningApplication) -> ChromeIdentity {
+        ChromeIdentity(pid: app.processIdentifier, launched: app.launchDate, bundleID: app.bundleIdentifier,
+                       regular: app.activationPolicy == .regular, terminated: app.isTerminated)
+    }
+    private static func pinnedTarget() -> ChromeIdentity? { pickApp().map(identity(of:)) }
+    /// The one Chrome process a queue slot talks to. Chosen once at the start of the slot, so
+    /// every Apple event of one read (front check, tab list, execute javascript) hits the same
+    /// process even if another Chrome starts or quits mid-read.
+    private static let session = ChromeSession()
 
     /// Runs on the serial queue; returns `cancelled` if invalidated while waiting in line.
     private static func onQueue<T: Sendable>(cancelled: T, _ work: @escaping @Sendable () -> T) async -> T {
@@ -353,7 +372,10 @@ struct LiveChromeBridge: ChromeUsageBridge {
         let started = epoch.withLock { $0 }
         let alive = { epoch.withLock { $0 } == started }
         return await withCheckedContinuation { c in
-            queue.async { c.resume(returning: alive() ? work(alive) : cancelled) }
+            queue.async {
+                guard alive() else { return c.resume(returning: cancelled) }
+                c.resume(returning: session.run(pinning: pinnedTarget()) { work(alive) })
+            }
         }
     }
 
@@ -367,7 +389,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
     func invalidatePending() { Self.epoch.withLock { $0 += 1 } }
 
     private static func status(ask: Bool) -> ChromeAutomationStatus {
-        guard pid() != nil else { return .chromeNotRunning }
+        guard session.target != nil else { return .chromeNotRunning }
         var target = AEAddressDesc()
         let made = bundleID.withCString { AECreateDesc(typeApplicationBundleID, $0, bundleID.utf8.count, &target) }
         guard made == noErr else { return .unavailable }
@@ -411,7 +433,9 @@ struct LiveChromeBridge: ChromeUsageBridge {
     /// Synchronous; call only on `queue`.
     private static func send(_ cls: String, _ id: String, direct: NSAppleEventDescriptor?,
                              params: [String: NSAppleEventDescriptor] = [:]) -> Result<NSAppleEventDescriptor, SendFailure> {
-        guard let pid = pid() else { return .failure(.code(-600)) }
+        // Never re-pick mid-read: if the pinned process is gone the event fails (procNotFound).
+        guard let pinned = session.target, pinned.stillSame(as: identity(pinned.pid)) else { return .failure(.code(-600)) }
+        let pid = pinned.pid
         guard let direct else { return .failure(.code(-1)) }
         let event = NSAppleEventDescriptor.appleEvent(
             withEventClass: code(cls), eventID: code(id), targetDescriptor: NSAppleEventDescriptor(processIdentifier: pid),
@@ -420,6 +444,8 @@ struct LiveChromeBridge: ChromeUsageBridge {
         for (k, v) in params { event.setParam(v, forKeyword: code(k)) }
         do {
             let reply = try event.sendEvent(options: sendOptions, timeout: timeoutSeconds)
+            // Re-check after the round trip too: if the pid now names another process, drop the reply.
+            guard pinned.stillSame(as: identity(pinned.pid)) else { return .failure(.code(-600)) }
             if let err = reply.paramDescriptor(forKeyword: keyErrorNumber)?.int32Value, err != 0 { return .failure(.code(Int(err))) }
             return .success(reply.paramDescriptor(forKeyword: keyDirectObject) ?? .null())
         } catch {
@@ -499,8 +525,16 @@ struct LiveChromeBridge: ChromeUsageBridge {
                     Self.pageScript)
                 // Listing tabs can take seconds: re-check toggle and front tab right before executing.
                 guard alive(), Self.userPresent() else { return nil }
+                // A loading tab (or one Chrome is restoring) is skipped, never scripted mid-load.
+                // Chrome's scripting has no "discarded" property; a discarded tab has no live page,
+                // so its reply comes back empty and is shown as 不明 below, without retrying.
+                if case let .success(l) = Self.send("core", "getd", direct: Self.property("ldng", of: tab)), l.booleanValue {
+                    return .failure(.tabAsleep)
+                }
                 switch Self.send("CrSu", "ExJa", direct: tab, params: ["JvSc": js]) {
-                case let .success(d): return Self.usageText(fromJSON: d.stringValue)
+                case let .success(d):
+                    guard let json = d.stringValue, !json.isEmpty else { return .failure(.tabAsleep) }
+                    return Self.usageText(fromJSON: json)
                 case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
                 case .failure(.code(-1712)): return .failure(.timedOut)
                 case .failure(.code(-600)): return nil
@@ -638,6 +672,8 @@ final class GeminiAppUsageMonitor {
             publish(cachedOrUnknown("不明（Chrome の「Apple Events からの JavaScript を許可」がオフ）"))
         case .failure(.timedOut):
             publish(cachedOrUnknown("不明（Chrome の応答がありません）"))
+        case .failure(.tabAsleep):
+            publish(cachedOrUnknown("不明（usage タブがスリープ中か読み込み中。タブを一度開くと読めます）"))
         case .failure:
             setHalted(true)
             publish(cachedOrUnknown("不明（Chrome から読めませんでした。読み取りを停止）"))
@@ -742,7 +778,9 @@ final class GeminiAppUsageMonitor {
     private func publish(_ s: ProviderSection) { section = s; onChange?(s) }
 
     private func save(_ s: ProviderSection, at date: Date) {
-        let rows = s.windows.map { ["title": $0.title, "left": $0.leftPercent, "reset": $0.resetText] as [String: Any] }
+        let rows = s.windows.map { var r: [String: Any] = ["title": $0.title, "left": $0.leftPercent, "reset": $0.resetText]
+            if let at = $0.resetAt { r["resetAt"] = at.timeIntervalSince1970 }
+            return r }
         defaults.set(["at": date.timeIntervalSince1970, "windows": rows], forKey: Self.cacheKey)
     }
 
@@ -757,7 +795,14 @@ final class GeminiAppUsageMonitor {
             guard let title = row["title"] as? String, let left = row["left"] as? Double else { return nil }
             var w = UsageLimit(title: title, leftPercent: left, resetText: row["reset"] as? String ?? "")
             w.observedAt = observed
+            if let at = row["resetAt"] as? Double { w.resetAt = Date(timeIntervalSince1970: at) }
+            // The page's reset has passed since we read it (also checked at launch): the old % is meaningless.
+            if let at = w.resetAt, at <= clock() { return nil }
             return w
+        }
+        if windows.isEmpty {
+            return ProviderSection(provider: .gemini, windows: [], stats: [],
+                                   failureText: "不明/要更新（前回読んだ値はリセット時刻を過ぎました。タブを再読込すると最新）")
         }
         let f = DateFormatter(); f.locale = Locale(identifier: "ja_JP"); f.dateFormat = "M/d HH:mm"
         var s = ProviderSection(provider: .gemini, windows: windows, stats: [],
@@ -779,5 +824,32 @@ struct ChromeInstance: Equatable {
         let real = all.filter { $0.regular && !$0.terminated }
         if let front = real.first(where: \.active) { return front.pid }
         return real.min { ($0.launched ?? .distantFuture) < ($1.launched ?? .distantFuture) }?.pid
+    }
+}
+
+/// Holds the Chrome pid pinned for one serial-queue slot. `target` is nil outside a slot,
+/// so no Apple event can be sent to a freshly re-picked process.
+struct ChromeIdentity: Equatable, Sendable {
+    var pid: pid_t
+    var launched: Date?
+    var bundleID: String?
+    var regular: Bool
+    var terminated: Bool
+    /// The process we pinned is still the same live, regular Chrome (fail closed otherwise).
+    func stillSame(as now: ChromeIdentity?) -> Bool {
+        guard let now, launched != nil, now.pid == pid, now.launched == launched,
+              now.bundleID == LiveChromeBridge.bundleID, now.regular, !now.terminated else { return false }
+        return true
+    }
+}
+
+final class ChromeSession: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pinned: ChromeIdentity?
+    var target: ChromeIdentity? { lock.lock(); defer { lock.unlock() }; return pinned }
+    func run<T>(pinning pid: ChromeIdentity?, _ work: () -> T) -> T {
+        lock.lock(); pinned = pid; lock.unlock()
+        defer { lock.lock(); pinned = nil; lock.unlock() }
+        return work()
     }
 }

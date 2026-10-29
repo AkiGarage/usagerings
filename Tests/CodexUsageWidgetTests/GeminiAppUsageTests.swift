@@ -238,6 +238,33 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
     }
     var noon: Date { Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())! }
 
+    func testStoredValueWhoseResetPassedIsUnknownAtLaunch() {
+        let past = Date().addingTimeInterval(-60).timeIntervalSince1970
+        defaults.set(["at": past - 3600, "windows": [["title": "Gemini · 5h", "left": 0.0, "reset": "Resets at 4:10 PM", "resetAt": past]]],
+                     forKey: GeminiAppUsageMonitor.cacheKey)
+        let m = GeminiAppUsageMonitor(bridge: FakeGeminiBridge(), defaults: defaults)
+        XCTAssertTrue(m.section.windows.isEmpty, "no old % (and no lock) once the stored reset has passed")
+        XCTAssertTrue(m.section.failureText?.contains("要更新") == true)
+    }
+
+    func testStoredValueWithFutureResetIsKeptAsStale() {
+        let future = Date().addingTimeInterval(3600).timeIntervalSince1970
+        defaults.set(["at": Date().timeIntervalSince1970 - 60, "windows": [["title": "Gemini · 5h", "left": 0.0, "reset": "x", "resetAt": future]]],
+                     forKey: GeminiAppUsageMonitor.cacheKey)
+        let m = GeminiAppUsageMonitor(bridge: FakeGeminiBridge(), defaults: defaults)
+        XCTAssertEqual(m.section.windows.first?.resetAt?.timeIntervalSince1970 ?? 0, future, accuracy: 1)
+        XCTAssertTrue(m.section.isStale)
+    }
+
+    func testAsleepTabShowsUnknownWithoutHalting() async {
+        let b = FakeGeminiBridge(); b.text = .failure(.tabAsleep)
+        let m = make(b, now: noon)
+        await m.setEnabled(true)
+        XCTAssertTrue(m.section.windows.isEmpty)
+        XCTAssertTrue(m.section.failureText?.contains("スリープ") == true)
+        XCTAssertFalse(m.state.halted, "a sleeping tab must not stop future reads")
+    }
+
     func testDisabledByDefaultTouchesNothing() async {
         let b = FakeGeminiBridge(); let m = make(b, now: noon)
         await m.tick()
@@ -472,6 +499,32 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(ChromeInstance.pick([dead, real]), 411)
         let noDate = ChromeInstance(pid: 7, regular: true, terminated: false, active: false, launched: nil)
         XCTAssertEqual(ChromeInstance.pick([noDate, real]), 411)
+    }
+
+    func testSessionPinsOneChromeForWholeRead() {
+        let a = ChromeIdentity(pid: 411, launched: Date(timeIntervalSince1970: 20), bundleID: "com.google.Chrome", regular: true, terminated: false)
+        let session = ChromeSession()
+        XCTAssertNil(session.target)
+        let seen: [pid_t?] = session.run(pinning: a) { [session.target?.pid, session.target?.pid] }
+        XCTAssertEqual(seen, [411, 411])
+        XCTAssertNil(session.target, "no target outside a read slot")
+        XCTAssertNil(session.run(pinning: nil) { session.target })
+    }
+
+    func testPinnedChromeFailsClosedOnReuseOrChange() {
+        let a = ChromeIdentity(pid: 411, launched: Date(timeIntervalSince1970: 20), bundleID: "com.google.Chrome", regular: true, terminated: false)
+        XCTAssertTrue(a.stillSame(as: a))
+        var reused = a; reused.launched = Date(timeIntervalSince1970: 99)
+        XCTAssertFalse(a.stillSame(as: reused), "same pid, new process")
+        var headless = a; headless.regular = false
+        XCTAssertFalse(a.stillSame(as: headless))
+        var gone = a; gone.terminated = true
+        XCTAssertFalse(a.stillSame(as: gone))
+        var other = a; other.bundleID = "com.example.Other"
+        XCTAssertFalse(a.stillSame(as: other))
+        XCTAssertFalse(a.stillSame(as: nil))
+        var noDate = a; noDate.launched = nil
+        XCTAssertFalse(noDate.stillSame(as: noDate), "no launch date = cannot prove identity")
     }
 }
 
