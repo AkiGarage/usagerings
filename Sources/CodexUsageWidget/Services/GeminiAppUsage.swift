@@ -22,7 +22,7 @@ enum GeminiAppUsageParser {
         case unknown
     }
 
-    static let maxTextLength = 40_000
+    static let maxTextLength = 300_000
 
     /// Any of these anywhere on the page means "not the plain usage page": stop, show 不明, save nothing.
     static let blockMarkers = [
@@ -37,7 +37,8 @@ enum GeminiAppUsageParser {
     private static let sectionLines = 4
 
     static func parse(_ text: String) -> Outcome {
-        let text = String(text.prefix(maxTextLength))
+        // Never scan a truncated page: a verification notice past the cut could be missed.
+        guard text.count <= maxTextLength else { return .unknown }
         let lower = text.lowercased()
         if blockMarkers.contains(where: { lower.contains($0) }) { return .blocked }
         let lines = text.components(separatedBy: .newlines)
@@ -55,13 +56,20 @@ enum GeminiAppUsageParser {
         return fiveLabels.contains(l) || weekLabels.contains(l)
     }
 
+    /// Any other heading-like line ("Monthly limit", "Daily usage") ends a section.
+    private static func isHeading(_ line: String) -> Bool {
+        let l = line.lowercased()
+        guard !l.contains(where: \.isNumber) else { return false }
+        return ["limit", "usage", "quota", "上限", "使用量", "利用枠"].contains { l.contains($0) }
+    }
+
     /// Lines after the exact label line, up to the next label line (max 4).
     private static func section(_ lines: [String], labels: Set<String>) -> [String]? {
         let hits = lines.indices.filter { labels.contains(lines[$0].lowercased()) }
         guard hits.count == 1, let start = hits.first else { return nil } // missing or repeated label = unknown
         var out: [String] = []
         var i = start + 1
-        while i < lines.count, out.count < sectionLines, !isLabel(lines[i]) { out.append(lines[i]); i += 1 }
+        while i < lines.count, out.count < sectionLines, !isLabel(lines[i]), !isHeading(lines[i]) { out.append(lines[i]); i += 1 }
         return out
     }
 
@@ -141,7 +149,7 @@ enum GeminiReadPolicy {
               !quietHours.contains(s.hour) else { return false }
         guard let last = state.lastRead else { return true }
         let since = s.now.timeIntervalSince(last)
-        return since >= interval || since < -60 // clock moved backwards: allow once
+        return since >= interval || since < -3600 // clock moved back over an hour: allow once
     }
 }
 
@@ -169,21 +177,31 @@ enum GeminiUsageURL {
     static func isGemini(_ url: String) -> Bool { url.hasPrefix("https://gemini.google.com/") }
 }
 
+/// Talks to Chrome with raw Apple events addressed to the running Chrome *process ID*, not
+/// its bundle ID: if Chrome has quit, the event fails (procNotFound) instead of launching it.
+/// Events are sent with "never interact" + "do not prompt for user consent", so a tick can
+/// never raise the macOS Automation dialog, and with an 8 s timeout on a background queue.
 struct LiveChromeBridge: ChromeUsageBridge {
     static let bundleID = "com.google.Chrome"
-    /// NSAppleScript runs on one serial background queue, never on the main thread.
-    private static let queue = DispatchQueue(label: "usagerings.gemini.applescript", qos: .utility)
-    static let timeoutSeconds = 8
+    private static let queue = DispatchQueue(label: "usagerings.gemini.appleevents", qos: .utility)
+    static let timeoutSeconds: TimeInterval = 8
+    /// kAEDoNotPromptForUserConsent (AE/AppleEvents.h, macOS 10.14+).
+    static let doNotPrompt = NSAppleEventDescriptor.SendOptions(rawValue: 0x0002_0000)
+    static let sendOptions: NSAppleEventDescriptor.SendOptions = [.waitForReply, .neverInteract, doNotPrompt]
 
-    var chromeRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).isEmpty }
+    var chromeRunning: Bool { Self.pid() != nil }
     var chromeFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID }
+
+    static func pid() -> pid_t? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first { !$0.isTerminated }?.processIdentifier
+    }
 
     private static func onQueue<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { c in queue.async { c.resume(returning: work()) } }
     }
 
     private static func status(ask: Bool) -> ChromeAutomationStatus {
-        guard !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty else { return .chromeNotRunning }
+        guard pid() != nil else { return .chromeNotRunning }
         var target = AEAddressDesc()
         let made = bundleID.withCString { AECreateDesc(typeApplicationBundleID, $0, bundleID.utf8.count, &target) }
         guard made == noErr else { return .unavailable }
@@ -200,60 +218,91 @@ struct LiveChromeBridge: ChromeUsageBridge {
         await Self.onQueue { Self.status(ask: ask) }
     }
 
-    /// Wraps the body so the script itself checks Chrome is running (never launches it)
-    /// and every Apple event gives up after `timeoutSeconds`.
-    static func wrapped(_ body: String) -> String {
-        """
-        if application id "\(bundleID)" is running then
-          with timeout of \(timeoutSeconds) seconds
-            tell application id "\(bundleID)"
-        \(body)
-            end tell
-          end timeout
-        end if
-        return "__NOT_RUNNING__"
-        """
+    static func code(_ s: String) -> FourCharCode { s.utf8.reduce(0) { $0 << 8 | FourCharCode($1) } }
+
+    private static func spec(_ want: String, form: String, _ data: NSAppleEventDescriptor,
+                             in container: NSAppleEventDescriptor?) -> NSAppleEventDescriptor? {
+        let r = NSAppleEventDescriptor.record()
+        r.setDescriptor(NSAppleEventDescriptor(typeCode: code(want)), forKeyword: code("want"))
+        r.setDescriptor(NSAppleEventDescriptor(enumCode: code(form)), forKeyword: code("form"))
+        r.setDescriptor(data, forKeyword: code("seld"))
+        r.setDescriptor(container ?? NSAppleEventDescriptor.null(), forKeyword: code("from"))
+        return r.coerce(toDescriptorType: code("obj "))
+    }
+    private static func property(_ p: String, of c: NSAppleEventDescriptor?) -> NSAppleEventDescriptor? {
+        spec("prop", form: "prop", NSAppleEventDescriptor(typeCode: code(p)), in: c)
+    }
+    private static var every: NSAppleEventDescriptor {
+        var all = code("all ")
+        return NSAppleEventDescriptor(descriptorType: code("abso"), bytes: &all, length: 4)!
+    }
+    private static func window(_ i: Int32?) -> NSAppleEventDescriptor? {
+        spec("cwin", form: "indx", i.map { NSAppleEventDescriptor(int32: $0) } ?? every, in: nil)
     }
 
-    private static func run(_ body: String) async -> (String?, Int?) {
-        await onQueue {
-            guard status(ask: false) == .granted else { return (nil, -1743) }
-            var error: NSDictionary?
-            let result = NSAppleScript(source: wrapped(body))?.executeAndReturnError(&error)
-            if let error { return (nil, error[NSAppleScript.errorNumber] as? Int ?? -1) }
-            let text = result?.stringValue
-            return text == "__NOT_RUNNING__" ? (nil, nil) : (text, nil)
+    enum SendFailure: Error { case code(Int) }
+
+    /// Synchronous; call only on `queue`.
+    private static func send(_ cls: String, _ id: String, direct: NSAppleEventDescriptor?,
+                             params: [String: NSAppleEventDescriptor] = [:]) -> Result<NSAppleEventDescriptor, SendFailure> {
+        guard let pid = pid() else { return .failure(.code(-600)) }
+        guard let direct else { return .failure(.code(-1)) }
+        let event = NSAppleEventDescriptor.appleEvent(
+            withEventClass: code(cls), eventID: code(id), targetDescriptor: NSAppleEventDescriptor(processIdentifier: pid),
+            returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(direct, forKeyword: keyDirectObject)
+        for (k, v) in params { event.setParam(v, forKeyword: code(k)) }
+        do {
+            let reply = try event.sendEvent(options: sendOptions, timeout: timeoutSeconds)
+            if let err = reply.paramDescriptor(forKeyword: keyErrorNumber)?.int32Value, err != 0 { return .failure(.code(Int(err))) }
+            return .success(reply.paramDescriptor(forKeyword: keyDirectObject) ?? .null())
+        } catch {
+            return .failure(.code((error as NSError).code))
+        }
+    }
+
+    private static func strings(_ d: NSAppleEventDescriptor) -> [[String]] {
+        guard d.numberOfItems > 0 else { return [] }
+        return (1...d.numberOfItems).map { i in
+            guard let w = d.atIndex(i), w.numberOfItems > 0 else { return [] }
+            return (1...w.numberOfItems).map { w.atIndex($0)?.stringValue ?? "" }
         }
     }
 
     func activeTabURL() async -> String? {
-        await Self.run(#"if (count of windows) > 0 then return URL of active tab of front window"#).0
+        await Self.onQueue {
+            guard Self.status(ask: false) == .granted,
+                  case let .success(d) = Self.send("core", "getd", direct: Self.property("URL ", of: Self.property("acTa", of: Self.window(1))))
+            else { return nil }
+            return d.stringValue
+        }
     }
 
     func usageTabText() async -> Result<String, ChromeReadError>? {
-        // Look for an existing usage tab without touching window order, selection or URL.
-        let body = #"""
-        repeat with w in windows
-          repeat with t in tabs of w
-            set u to URL of t
-            if u is "\#(GeminiUsageURL.base)" or u starts with "\#(GeminiUsageURL.base)?" or u starts with "\#(GeminiUsageURL.base)#" then
-              return execute t javascript "(document.body && document.body.innerText || '').slice(0, 40000)"
-            end if
-          end repeat
-        end repeat
-        return "__NO_USAGE_TAB__"
-        """#
-        let (text, error) = await Self.run(body)
-        if let error {
-            switch error {
-            case -1743: return .failure(.notAllowed)
-            case -1712: return .failure(.timedOut)
-            case 12: return .failure(.javascriptDisabled) // "Executing JavaScript through AppleScript is turned off"
-            default: return .failure(.failed)
+        await Self.onQueue {
+            guard Self.status(ask: false) == .granted else { return .failure(.notAllowed) }
+            let tabs = Self.spec("CrTb", form: "indx", Self.every, in: Self.window(nil))
+            guard case let .success(urlDesc) = Self.send("core", "getd", direct: Self.property("URL ", of: tabs)),
+                  case let .success(idDesc) = Self.send("core", "getd", direct: Self.property("ID  ", of: tabs)) else { return .failure(.failed) }
+            let urls = Self.strings(urlDesc), ids = Self.strings(idDesc)
+            guard urls.count == ids.count else { return .failure(.failed) }
+            for (w, row) in urls.enumerated() {
+                guard row.count == ids[w].count,
+                      let t = row.firstIndex(where: GeminiUsageURL.isUsagePage) else { continue }
+                // Address the tab by its unique ID so a reordered window cannot redirect the read.
+                let tab = Self.spec("CrTb", form: "ID  ", NSAppleEventDescriptor(string: ids[w][t]), in: Self.window(Int32(w + 1)))
+                let js = NSAppleEventDescriptor(string: "(document.body && document.body.innerText) || ''")
+                switch Self.send("CrSu", "ExJa", direct: tab, params: ["JvSc": js]) {
+                case let .success(d): return .success(d.stringValue ?? "")
+                case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
+                case .failure(.code(-1712)): return .failure(.timedOut)
+                case .failure(.code(-600)): return nil
+                case .failure(.code(12)): return .failure(.javascriptDisabled)
+                case .failure: return .failure(.failed)
+                }
             }
+            return nil
         }
-        guard let text, text != "__NO_USAGE_TAB__" else { return nil }
-        return .success(text)
     }
 }
 
@@ -262,6 +311,7 @@ final class GeminiAppUsageMonitor {
     static let enabledKey = "geminiAppReadingEnabled"
     static let cacheKey = "geminiAppLastReading"
     static let lastReadKey = "geminiAppLastReadAt"
+    static let haltedKey = "geminiAppHalted"
 
     private let bridge: ChromeUsageBridge
     private let defaults: UserDefaults
@@ -283,6 +333,7 @@ final class GeminiAppUsageMonitor {
         self.defaults = defaults
         let at = defaults.double(forKey: Self.lastReadKey)
         state.lastRead = at > 0 ? Date(timeIntervalSince1970: at) : nil
+        state.halted = defaults.bool(forKey: Self.haltedKey)
         section = ProviderSection(provider: .gemini, windows: [], stats: [], failureText: "不明")
         section = cachedOrUnknown(Self.startText(enabled: isEnabled))
     }
@@ -310,7 +361,7 @@ final class GeminiAppUsageMonitor {
     /// The last-read time is kept, so toggling never causes an extra read.
     func setEnabled(_ on: Bool) async {
         defaults.set(on, forKey: Self.enabledKey)
-        state.halted = false
+        setHalted(false)
         guard on else { publish(cachedOrUnknown("オフ")); return }
         let current = await bridge.automationStatus(ask: false)
         let status = current == .notDetermined ? await bridge.automationStatus(ask: true) : current
@@ -347,22 +398,26 @@ final class GeminiAppUsageMonitor {
         guard GeminiReadPolicy.shouldRead(state, signals) else { return }
         state.lastRead = now
         defaults.set(now.timeIntervalSince1970, forKey: Self.lastReadKey)
+        // Re-check right before reading the body: Aki may have switched away meanwhile.
+        guard isEnabled, bridge.chromeFrontmost else { return }
         readCount += 1
-        switch await bridge.usageTabText() {
+        let result = await bridge.usageTabText()
+        guard isEnabled, !state.halted else { return } // turned off during the read: discard
+        switch result {
         case nil:
             publish(cachedOrUnknown("不明（gemini.google.com/usage のタブが開いていません）"))
         case .failure(.javascriptDisabled):
-            state.halted = true
+            setHalted(true)
             publish(cachedOrUnknown("不明（Chrome の「Apple Events からの JavaScript を許可」がオフ）"))
         case .failure(.timedOut):
             publish(cachedOrUnknown("不明（Chrome の応答がありません）"))
         case .failure:
-            state.halted = true
+            setHalted(true)
             publish(cachedOrUnknown("不明（Chrome から読めませんでした。読み取りを停止）"))
         case let .success(text):
             switch GeminiAppUsageParser.parse(text) {
             case .blocked:
-                state.halted = true
+                setHalted(true)
                 publish(cachedOrUnknown("不明（確認ページかエラー表示のため停止。メニューで再開）"))
             case .unknown:
                 publish(cachedOrUnknown("不明（使用量の数字を読み取れませんでした）"))
@@ -381,6 +436,8 @@ final class GeminiAppUsageMonitor {
               now.timeIntervalSince(observed) > GeminiReadPolicy.staleAfter else { return }
         publish(cachedOrUnknown("使用中でないため更新停止"))
     }
+
+    private func setHalted(_ on: Bool) { state.halted = on; defaults.set(on, forKey: Self.haltedKey) }
 
     private func publish(_ s: ProviderSection) { section = s; onChange?(s) }
 

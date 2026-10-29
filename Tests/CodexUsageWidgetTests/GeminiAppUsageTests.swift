@@ -79,12 +79,20 @@ final class GeminiAppUsageParserTests: XCTestCase {
         XCTAssertFalse(GeminiUsageURL.isUsagePage("http://gemini.google.com/usage"))
     }
 
-    func testScriptChecksRunningAndTimesOut() {
-        let script = LiveChromeBridge.wrapped("return 1")
-        XCTAssertTrue(script.hasPrefix("if application id \"com.google.Chrome\" is running then"))
-        XCTAssertTrue(script.contains("with timeout of \(LiveChromeBridge.timeoutSeconds) seconds"))
-        XCTAssertFalse(script.lowercased().contains("activate"))
-        XCTAssertFalse(script.lowercased().contains("reload"))
+    func testRawEventsNeverPromptAndTimeOut() {
+        XCTAssertEqual(LiveChromeBridge.code("getd"), 0x6765_7464)
+        XCTAssertTrue(LiveChromeBridge.sendOptions.contains(.neverInteract))
+        XCTAssertTrue(LiveChromeBridge.sendOptions.contains(LiveChromeBridge.doNotPrompt))
+        XCTAssertEqual(LiveChromeBridge.timeoutSeconds, 8)
+    }
+
+    func testUnknownHeadingEndsSection() {
+        XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\nMonthly limit\n23% used\n"), .unknown)
+    }
+
+    func testOversizedPageIsUnknownNotTruncated() {
+        let big = "Current usage\n23% used\n" + String(repeating: "x", count: GeminiAppUsageParser.maxTextLength)
+        XCTAssertEqual(GeminiAppUsageParser.parse(big), .unknown)
     }
 }
 
@@ -228,6 +236,22 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         await restarted.tick()
         XCTAssertEqual(b.textReads, 1, "restart keeps the 5-minute spacing")
         XCTAssertEqual(restarted.state.lastRead, now)
+    }
+
+    func testHaltSurvivesRestartUntilMenuToggle() async {
+        let b = FakeGeminiBridge(); b.text = .success("unusual traffic")
+        var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        b.text = .success("Current usage\n40% used")
+        now = now.addingTimeInterval(3600)
+        let restarted = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        restarted.clock = { now }; restarted.idleSeconds = { 1 }; restarted.screenAsleep = { false }
+        await restarted.tick()
+        XCTAssertEqual(b.textReads, 1)
+        await restarted.setEnabled(true)
+        XCTAssertEqual(b.textReads, 2)
     }
 
     func testVerificationTextSavesNothing() async {
