@@ -542,6 +542,8 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(GeminiAppUsageMonitor.resetDate("Resets Nov 2", after: loaded), d(2026, 11, 2, 0, 0))
         XCTAssertEqual(GeminiAppUsageMonitor.resetDate("11月2日にリセット", after: loaded), d(2026, 11, 2, 0, 0))
         XCTAssertNil(GeminiAppUsageMonitor.resetDate("", after: loaded))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("11月4日の7:39にリセットされます", after: loaded), d(2026, 11, 4, 7, 39))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("0:39にリセット", after: loaded), d(2026, 10, 30, 0, 39))
     }
 
     func testPassedResetDropsOldPercentAndAsksForReload() {

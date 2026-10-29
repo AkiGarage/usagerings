@@ -731,11 +731,12 @@ final class GeminiAppUsageMonitor {
                 Range(m.range(at: i), in: text).map { String(text[$0]) } ?? ""
             }
         }
+        var hour: Int?, minute: Int?
         if let g = firstMatch(#"(\d{1,2}):(\d{2})\s*([AP]M)?"#), var h = Int(g[0]), let mi = Int(g[1]) {
             let ap = g[2].uppercased()
             if ap == "PM", h < 12 { h += 12 }
             if ap == "AM", h == 12 { h = 0 }
-            return calendar.nextDate(after: base, matching: DateComponents(hour: h, minute: mi), matchingPolicy: .nextTime)
+            hour = h; minute = mi
         }
         let months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
         var mo: Int?, d: Int?
@@ -744,9 +745,14 @@ final class GeminiAppUsageMonitor {
         } else if let g = firstMatch(#"(\d{1,2})月(\d{1,2})日"#) {
             mo = Int(g[0]); d = Int(g[1])
         }
-        guard let mo, let d else { return nil }
-        return calendar.nextDate(after: base.addingTimeInterval(-86_400), matching: DateComponents(month: mo, day: d, hour: 0, minute: 0),
-                                 matchingPolicy: .nextTime)
+        // Date and time together ("11月4日の7:39", "Nov 4, 7:39 AM"), date only, or time only.
+        if let mo, let d {
+            return calendar.nextDate(after: base.addingTimeInterval(-86_400),
+                                     matching: DateComponents(month: mo, day: d, hour: hour ?? 0, minute: minute ?? 0),
+                                     matchingPolicy: .nextTime)
+        }
+        guard let hour, let minute else { return nil }
+        return calendar.nextDate(after: base, matching: DateComponents(hour: hour, minute: minute), matchingPolicy: .nextTime)
     }
 
     /// The tab is never reloaded by us, so a page loaded long ago may show old numbers.
@@ -795,7 +801,9 @@ final class GeminiAppUsageMonitor {
             guard let title = row["title"] as? String, let left = row["left"] as? Double else { return nil }
             var w = UsageLimit(title: title, leftPercent: left, resetText: row["reset"] as? String ?? "")
             w.observedAt = observed
-            if let at = row["resetAt"] as? Double { w.resetAt = Date(timeIntervalSince1970: at) }
+            // Older caches have no resetAt: resolve the page text against when it was read.
+            w.resetAt = (row["resetAt"] as? Double).map(Date.init(timeIntervalSince1970:))
+                ?? Self.resetDate(w.resetText, after: observed)
             // The page's reset has passed since we read it (also checked at launch): the old % is meaningless.
             if let at = w.resetAt, at <= clock() { return nil }
             return w
