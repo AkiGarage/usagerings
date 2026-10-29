@@ -73,12 +73,19 @@ struct CollapsedUsageBar: Identifiable {
             ? NSColor(white: 0.88, alpha: 1) : NSColor(white: 0.18, alpha: 1)
     })
 
-    /// Lock a Claude account ring when its own quota window is exhausted (0% left, reset still ahead).
+    /// Lock any provider ring when one of its quota windows is exhausted (0% left).
+    /// The ring unlocks at the latest reset among exhausted windows; a window without a
+    /// machine-readable reset locks with an unknown unlock time. A reset already in the past
+    /// means the 0% is old data, so it does not lock.
     static func quotaBlock(_ windows: [UsageLimit], now: Date) -> ClaudeBlock? {
-        let exhausted = windows.filter { $0.leftPercent <= 0 && ($0.resetAt ?? .distantPast) > now }
-        guard let window = exhausted.max(by: { $0.resetAt! < $1.resetAt! }) else { return nil }
+        // Machine-readable reset first, then the shown reset text ("Resets 10/30 14:00"), else unknown.
+        func unlock(_ w: UsageLimit) -> Date {
+            w.resetAt ?? RingResetFormat.date(fromResetText: w.resetText, now: now) ?? .distantFuture
+        }
+        let exhausted = windows.filter { $0.leftPercent < 0.5 && unlock($0) > now }
+        guard let window = exhausted.max(by: { unlock($0) < unlock($1) }) else { return nil }
         let kind: ClaudeBlock.Kind = ServiceRowModel.kind(window.title) == .week ? .weekly : .session
-        return ClaudeBlock(kind: kind, resetAt: window.resetAt!, timeZoneKnown: true)
+        return ClaudeBlock(kind: kind, resetAt: unlock(window), timeZoneKnown: true)
     }
 
     static func bars(for snapshot: MultiUsageSnapshot,
@@ -220,6 +227,10 @@ struct CollapsedUsageBar: Identifiable {
             return bar.accountIndex == nil || bar.accountIndex == accountPreferences.primaryIndex(in: section)
         }.map { bar in
             var bar = bar
+            // Same lock as Claude for every other provider (Codex, GLM, Grok, DeepSeek, Antigravity, Gemini…).
+            if bar.block == nil, bar.provider != .claude {
+                bar.block = Self.quotaBlock(bar.windows, now: snapshot.updatedAt)
+            }
             if let provider = bar.provider, let section = snapshot.sections.first(where: { $0.provider == provider }) {
                 let account = section.accounts.first { account in
                     if let id = bar.accountID { return account.id == id }

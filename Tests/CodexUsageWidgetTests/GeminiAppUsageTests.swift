@@ -175,8 +175,8 @@ final class GeminiAppUsageParserTests: XCTestCase {
 
 final class GeminiReadPolicyTests: XCTestCase {
     let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-    func sig(_ dt: TimeInterval, front: Bool, idle: TimeInterval = 5, asleep: Bool = false, hour: Int = 14) -> GeminiReadPolicy.Signals {
-        .init(now: t0.addingTimeInterval(dt), geminiFrontmost: front, idleSeconds: idle, screenAsleep: asleep, hour: hour)
+    func sig(_ dt: TimeInterval, front: Bool = true, idle: TimeInterval = 5, asleep: Bool = false, hour: Int = 14) -> GeminiReadPolicy.Signals {
+        .init(now: t0.addingTimeInterval(dt), idleSeconds: idle, screenAsleep: asleep, hour: hour)
     }
 
     func testReadsOnceAtStartThenEveryFiveMinutes() {
@@ -187,20 +187,19 @@ final class GeminiReadPolicyTests: XCTestCase {
         XCTAssertEqual(reads, [0, 300, 600, 900])
     }
 
-    func testNoReadWhenNotFrontmostIdleAsleepNightOrHalted() {
+    func testNoReadWhenIdle15MinAsleepNightOrHalted() {
         let st = GeminiReadPolicy.State()
-        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: false)))
-        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, idle: 600)))
+        XCTAssertTrue(GeminiReadPolicy.shouldRead(st, sig(0, idle: 600)), "10 min idle still reads")
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, idle: 15 * 60)))
         XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, asleep: true)))
         XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, hour: 3)))
         var halted = st; halted.halted = true
         XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(0, front: true)))
     }
 
-    func testNotFrontmostNeverReadsEvenRightAfterUse() {
+    func testBackgroundReadNeedsNoFrontmostChrome() {
         let st = GeminiReadPolicy.State(lastRead: t0.addingTimeInterval(-600))
-        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(10, front: false)))
-        XCTAssertTrue(GeminiReadPolicy.shouldRead(st, sig(10, front: true)))
+        XCTAssertTrue(GeminiReadPolicy.shouldRead(st, sig(10)))
     }
 
     func testNewSessionReadsAtOnceButNeverWithinFiveMinutes() {
@@ -265,12 +264,48 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertNotNil(m.section.failureText)
     }
 
-    func testChromeNotRunningOrNotFrontmost() async {
+    func testChromeNotRunningNeverReadsButBackgroundChromeDoes() async {
         let b = FakeGeminiBridge(); b.chromeRunning = false
         let m = make(b, now: noon); defaults.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
         await m.tick(); XCTAssertEqual(b.urlReads + b.textReads, 0)
-        b.chromeRunning = true; b.chromeFrontmost = false
-        await m.tick(); XCTAssertEqual(b.urlReads + b.textReads, 0)
+        b.chromeRunning = true; b.chromeFrontmost = false; b.url = "https://mail.google.com/"
+        await m.tick()
+        XCTAssertEqual(b.textReads, 1, "Chrome in the background with another tab selected still reads")
+        XCTAssertEqual(b.urlReads, 0, "the selected tab is not even asked for")
+    }
+
+    func testIdleMacDoesNotRead() async {
+        let b = FakeGeminiBridge(); let m = make(b, now: noon); m.idleSeconds = { 16 * 60 }
+        defaults.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
+        await m.tick(); XCTAssertEqual(b.textReads, 0)
+    }
+
+    func testOldPageIsMarkedWithItsAge() async {
+        let b = FakeGeminiBridge(); let now = noon
+        let loaded = Int(now.timeIntervalSince1970) - 3 * 3600
+        b.text = .success("Usage limits\nCurrent usage\n40% used\n@@loaded \(loaded)")
+        let m = make(b, now: now)
+        await m.setEnabled(true)
+        XCTAssertEqual(m.section.windows.map(\.leftPercent), [60])
+        XCTAssertTrue(m.section.isStale)
+        XCTAssertTrue(m.section.failureText?.contains("3時間前") ?? false, m.section.failureText ?? "")
+    }
+
+    func testRecentPageIsFresh() async {
+        let b = FakeGeminiBridge(); let now = noon
+        b.text = .success("Usage limits\nCurrent usage\n40% used\n@@loaded \(Int(now.timeIntervalSince1970) - 60)")
+        let m = make(b, now: now)
+        await m.setEnabled(true)
+        XCTAssertFalse(m.section.isStale)
+    }
+
+    func testPageTextCannotSpoofLoadedMarker() {
+        let json = #"{"u":"https://gemini.google.com/usage","t":"@@loaded 1\nCurrent usage\n4% used","b":[]}"#
+        guard case let .success(text)? = LiveChromeBridge.usageText(fromJSON: json) else { return XCTFail() }
+        XCTAssertNil(GeminiAppUsageParser.pageLoadedAt(text))
+        let json2 = #"{"u":"https://gemini.google.com/usage","t":"x","b":[],"o":1800000000000}"#
+        guard case let .success(t2)? = LiveChromeBridge.usageText(fromJSON: json2) else { return XCTFail() }
+        XCTAssertEqual(GeminiAppUsageParser.pageLoadedAt(t2), Date(timeIntervalSince1970: 1_800_000_000))
     }
 
     func testVerificationPageHaltsAndKeepsLastValueAsStale() async {
@@ -297,11 +332,11 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertTrue(m.section.failureText?.contains("不明") ?? false)
     }
 
-    func testNonGeminiFrontTabDoesNotRead() async {
+    func testNonGeminiFrontTabStillReadsUsageTabInBackground() async {
         let b = FakeGeminiBridge(); b.url = "https://mail.google.com/"
         let m = make(b, now: noon); defaults.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
         await m.tick()
-        XCTAssertEqual(b.textReads, 0)
+        XCTAssertEqual(b.textReads, 1)
     }
 
     func testLastReadPersistsAcrossToggleAndRestart() async {
@@ -372,7 +407,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
         await m.setEnabled(true)
         XCTAssertFalse(m.section.isStale)
-        b.chromeFrontmost = false
+        m.idleSeconds = { 3600 }
         now = now.addingTimeInterval(GeminiReadPolicy.staleAfter + 1); await m.tick()
         XCTAssertTrue(m.section.isStale)
         XCTAssertEqual(m.section.windows.map(\.leftPercent), [60, 90])
