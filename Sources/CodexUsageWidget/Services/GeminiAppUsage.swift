@@ -412,7 +412,14 @@ struct LiveChromeBridge: ChromeUsageBridge {
               case let .success(ids) = send("core", "getd", direct: property("ID  ", of: window(nil))),
               names.numberOfItems == ids.numberOfItems, names.numberOfItems > 0 else { return nil }
         for i in 1...names.numberOfItems where names.atIndex(i)?.stringValue == GeminiDedicatedWindow.name {
-            if let id = ids.atIndex(i)?.stringValue { return (Int32(i), id) }
+            guard let id = ids.atIndex(i)?.stringValue else { continue }
+            // Re-check by ID (indexes can shift between events) and require exactly one tab.
+            let w = windowByID(id)
+            guard case let .success(n) = send("core", "getd", direct: property("GNam", of: w)),
+                  n.stringValue == GeminiDedicatedWindow.name,
+                  case let .success(tabs) = send("core", "getd", direct: property("ID  ", of: spec("CrTb", form: "indx", every, in: w))),
+                  tabs.numberOfItems == 1 else { continue }
+            return (Int32(i), id)
         }
         return nil
     }
@@ -437,6 +444,10 @@ struct LiveChromeBridge: ChromeUsageBridge {
         guard case let .success(w) = made, w.descriptorType != code("null") else { return }
         set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
         set("GNam", of: w, NSAppleEventDescriptor(string: GeminiDedicatedWindow.name))
+        // Unnamed it could never be found again: close this window we just made instead of leaking it.
+        guard case let .success(n) = send("core", "getd", direct: property("GNam", of: w)), n.stringValue == GeminiDedicatedWindow.name else {
+            _ = send("core", "clos", direct: w); return
+        }
         set("URL ", of: property("acTa", of: w), NSAppleEventDescriptor(string: GeminiUsageURL.base))
         set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
     }
@@ -472,10 +483,12 @@ struct LiveChromeBridge: ChromeUsageBridge {
             set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
         }
         let tab = property("acTa", of: w)
-        if case let .success(u) = send("core", "getd", direct: property("URL ", of: tab)),
-           let url = u.stringValue, !GeminiUsageURL.isUsagePage(url) {
-            // Our own tab drifted (e.g. a sign-in page): show 不明, never auto-login.
-            return GeminiUsageURL.isGemini(url) ? nil : .failure(.failed)
+        // Reload only when the tab is confirmed to be exactly the usage page.
+        guard case let .success(u) = send("core", "getd", direct: property("URL ", of: tab)), let url = u.stringValue else { return .failure(.failed) }
+        guard GeminiUsageURL.isUsagePage(url) else {
+            // Drifted to another Gemini page: put our own tab back. A sign-in/verification page: 不明, never auto-login.
+            if GeminiUsageURL.isGemini(url) { set("URL ", of: tab, NSAppleEventDescriptor(string: GeminiUsageURL.base)); return .failure(.tabAsleep) }
+            return .failure(.failed)
         }
         // Only this tab of our own window is ever reloaded.
         _ = send("CrSu", "Rlod", direct: tab)
@@ -726,7 +739,8 @@ final class GeminiAppUsageMonitor {
         setHalted(false)
         guard on else {
             bridge.invalidatePending(); publish(cachedOrUnknown("オフ"))
-            await bridge.closeDedicatedWindow(); return
+            if !isEnabled { await bridge.closeDedicatedWindow() }
+            return
         }
         let current = await bridge.automationStatus(ask: false)
         guard gen == generation, isEnabled else { return } // toggled again meanwhile: never ask
