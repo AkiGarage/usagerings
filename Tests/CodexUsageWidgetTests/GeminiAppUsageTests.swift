@@ -222,6 +222,8 @@ final class FakeGeminiBridge: ChromeUsageBridge, @unchecked Sendable {
     func usageTabText() -> Result<String, ChromeReadError>? { textReads += 1; return text }
     var invalidated = 0
     func invalidatePending() { invalidated += 1 }
+    var closed = 0
+    func closeDedicatedWindow() { closed += 1 }
 }
 
 @MainActor
@@ -399,6 +401,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         let b = FakeGeminiBridge(); let m = make(b, now: noon)
         await m.setEnabled(true); await m.setEnabled(false)
         XCTAssertEqual(b.invalidated, 1)
+        XCTAssertEqual(b.closed, 1, "toggle-off closes only our own hidden window")
     }
 
     func testHiddenProviderNeverReads() async {
@@ -560,5 +563,15 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(before.windows.count, 2)
         XCTAssertEqual(before.windows.first?.resetAt, d(2026, 10, 29, 16, 10))
         XCTAssertFalse(before.isStale)
+    }
+}
+
+
+final class GeminiDedicatedWindowTests: XCTestCase {
+    func testReopensAtMostHourly() {
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: nil, now: t))
+        XCTAssertFalse(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(3599)))
+        XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(3600)))
     }
 }

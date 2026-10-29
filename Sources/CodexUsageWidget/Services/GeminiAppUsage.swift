@@ -302,6 +302,20 @@ protocol ChromeUsageBridge: Sendable {
     func usageTabText() async -> Result<String, ChromeReadError>?
     /// Drop every queued, not yet started Chrome request (menu toggle-off).
     func invalidatePending()
+    /// Close only UsageRings' own hidden Chrome window (menu toggle-off). Never any other window.
+    func closeDedicatedWindow() async
+}
+
+/// UsageRings' own hidden Chrome window holding only the usage tab. Found by its window name,
+/// so it survives Chrome restarts; recreated at most once per hour if Aki closes it.
+enum GeminiDedicatedWindow {
+    static let name = "UsageRings Gemini（自動・閉じても可）"
+    static let reopenInterval: TimeInterval = 3600
+    static let lastOpenKey = "geminiDedicatedWindowOpenedAt"
+    static func mayOpen(lastOpen: Date?, now: Date) -> Bool {
+        guard let lastOpen else { return true }
+        return now.timeIntervalSince(lastOpen) >= reopenInterval || now < lastOpen
+    }
 }
 
 enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, timedOut, failed, tabAsleep }
@@ -388,6 +402,88 @@ struct LiveChromeBridge: ChromeUsageBridge {
 
     func invalidatePending() { Self.epoch.withLock { $0 += 1 } }
 
+    /// (window index, window id) of our own window, by its given name only.
+    private static func findDedicated() -> (Int32, String)? {
+        guard case let .success(names) = send("core", "getd", direct: property("GNam", of: window(nil))),
+              case let .success(ids) = send("core", "getd", direct: property("ID  ", of: window(nil))),
+              names.numberOfItems == ids.numberOfItems, names.numberOfItems > 0 else { return nil }
+        for i in 1...names.numberOfItems where names.atIndex(i)?.stringValue == GeminiDedicatedWindow.name {
+            if let id = ids.atIndex(i)?.stringValue { return (Int32(i), id) }
+        }
+        return nil
+    }
+    private static func windowByID(_ id: String) -> NSAppleEventDescriptor? {
+        spec("cwin", form: "ID  ", NSAppleEventDescriptor(string: id), in: nil)
+    }
+    private static func set(_ p: String, of c: NSAppleEventDescriptor?, _ v: NSAppleEventDescriptor) {
+        _ = send("core", "setd", direct: property(p, of: c), params: ["data": v])
+    }
+
+    /// Creates the hidden window once. Chrome is never activated by us; if it takes the front
+    /// anyway, the previous frontmost app is given the front back immediately.
+    private static func openDedicated() {
+        let front = NSWorkspace.shared.frontmostApplication
+        let made = send("core", "crel", direct: .null(), params: ["kocl": NSAppleEventDescriptor(typeCode: code("cwin"))])
+        defer {
+            if let front, front.bundleIdentifier != bundleID, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID {
+                front.activate()
+            }
+        }
+        guard case let .success(w) = made, w.descriptorType != code("null") else { return }
+        set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        set("GNam", of: w, NSAppleEventDescriptor(string: GeminiDedicatedWindow.name))
+        set("URL ", of: property("acTa", of: w), NSAppleEventDescriptor(string: GeminiUsageURL.base))
+        set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+    }
+
+    func closeDedicatedWindow() async {
+        await Self.onQueue(cancelled: ()) {
+            guard Self.status(ask: false) == .granted, let (_, id) = Self.findDedicated() else { return }
+            _ = Self.send("core", "clos", direct: Self.windowByID(id))
+        }
+    }
+
+    /// Reload + read our own window's tab. nil: no own window (caller falls back to a read-only scan).
+    private static func readDedicated(alive: () -> Bool) -> Result<String, ChromeReadError>? {
+        guard let (_, id) = findDedicated() else {
+            let last = UserDefaults.standard.object(forKey: GeminiDedicatedWindow.lastOpenKey) as? Date
+            if GeminiDedicatedWindow.mayOpen(lastOpen: last, now: Date()) {
+                UserDefaults.standard.set(Date(), forKey: GeminiDedicatedWindow.lastOpenKey)
+                openDedicated()
+            }
+            return nil
+        }
+        let w = windowByID(id)
+        // A Chrome restart can restore it visible: hide our own window again (only ours).
+        if case let .success(v) = send("core", "getd", direct: property("pvis", of: w)), v.booleanValue {
+            set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        }
+        let tab = property("acTa", of: w)
+        if case let .success(u) = send("core", "getd", direct: property("URL ", of: tab)),
+           let url = u.stringValue, !GeminiUsageURL.isUsagePage(url) {
+            // Our own tab drifted (e.g. a sign-in page): show 不明, never auto-login.
+            return GeminiUsageURL.isGemini(url) ? nil : .failure(.failed)
+        }
+        // Only this tab of our own window is ever reloaded.
+        _ = send("CrSu", "Rlod", direct: tab)
+        for _ in 0..<40 {
+            guard alive() else { return nil }
+            Thread.sleep(forTimeInterval: 0.5)
+            if case let .success(l) = send("core", "getd", direct: property("ldng", of: tab)), !l.booleanValue { break }
+        }
+        Thread.sleep(forTimeInterval: 3) // the usage numbers render after load
+        guard alive() else { return nil }
+        switch send("CrSu", "ExJa", direct: tab, params: ["JvSc": NSAppleEventDescriptor(string: pageScript)]) {
+        case let .success(d):
+            guard let json = d.stringValue, !json.isEmpty else { return .failure(.tabAsleep) }
+            return usageText(fromJSON: json) ?? .failure(.failed)
+        case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
+        case .failure(.code(12)): return .failure(.javascriptDisabled)
+        case .failure(.code(-1712)): return .failure(.timedOut)
+        case .failure: return nil
+        }
+    }
+
     private static func status(ask: Bool) -> ChromeAutomationStatus {
         guard session.target != nil else { return .chromeNotRunning }
         var target = AEAddressDesc()
@@ -440,7 +536,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
         let event = NSAppleEventDescriptor.appleEvent(
             withEventClass: code(cls), eventID: code(id), targetDescriptor: NSAppleEventDescriptor(processIdentifier: pid),
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
-        event.setParam(direct, forKeyword: keyDirectObject)
+        if direct.descriptorType != code("null") { event.setParam(direct, forKeyword: keyDirectObject) }
         for (k, v) in params { event.setParam(v, forKeyword: code(k)) }
         do {
             let reply = try event.sendEvent(options: sendOptions, timeout: timeoutSeconds)
@@ -510,6 +606,8 @@ struct LiveChromeBridge: ChromeUsageBridge {
             // Same queue slot: Aki must still be at the Mac. The usage tab is read where it is,
             // in the background: nothing is activated, focused, selected, reloaded or reordered.
             guard Self.userPresent() else { return nil }
+            if let own = Self.readDedicated(alive: alive) { return own }
+            guard alive() else { return nil }
             let tabs = Self.spec("CrTb", form: "indx", Self.every, in: Self.window(nil))
             guard case let .success(urlDesc) = Self.send("core", "getd", direct: Self.property("URL ", of: tabs)),
                   case let .success(idDesc) = Self.send("core", "getd", direct: Self.property("ID  ", of: tabs)) else { return .failure(.failed) }
@@ -613,7 +711,10 @@ final class GeminiAppUsageMonitor {
         generation += 1
         let gen = generation
         setHalted(false)
-        guard on else { bridge.invalidatePending(); publish(cachedOrUnknown("オフ")); return }
+        guard on else {
+            bridge.invalidatePending(); publish(cachedOrUnknown("オフ"))
+            await bridge.closeDedicatedWindow(); return
+        }
         let current = await bridge.automationStatus(ask: false)
         guard gen == generation, isEnabled else { return } // toggled again meanwhile: never ask
         let status = current == .notDetermined ? await bridge.automationStatus(ask: true) : current
