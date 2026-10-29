@@ -474,3 +474,36 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(ChromeInstance.pick([noDate, real]), 411)
     }
 }
+
+@MainActor final class GeminiResetResolutionTests: XCTestCase {
+    private let cal = Calendar.current
+    private func d(_ y: Int, _ mo: Int, _ day: Int, _ h: Int, _ mi: Int) -> Date {
+        cal.date(from: DateComponents(year: y, month: mo, day: day, hour: h, minute: mi))!
+    }
+
+    func testResetTextParsesRelativeToPageLoad() {
+        let loaded = d(2026, 10, 29, 15, 0)
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("Resets at 4:10 PM", after: loaded), d(2026, 10, 29, 16, 10))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("Resets at 2:10 PM", after: loaded), d(2026, 10, 30, 14, 10))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("16:10にリセット", after: loaded), d(2026, 10, 29, 16, 10))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("Resets Nov 2", after: loaded), d(2026, 11, 2, 0, 0))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("11月2日にリセット", after: loaded), d(2026, 11, 2, 0, 0))
+        XCTAssertNil(GeminiAppUsageMonitor.resetDate("", after: loaded))
+    }
+
+    func testPassedResetDropsOldPercentAndAsksForReload() {
+        let loaded = d(2026, 10, 29, 15, 0)
+        let s = ProviderSection(provider: .gemini, windows: [
+            UsageLimit(title: "Gemini · 5h", leftPercent: 0, resetText: "Resets at 4:10 PM"),
+            UsageLimit(title: "Gemini · Weekly", leftPercent: 40, resetText: "Resets Nov 2")
+        ], stats: [], failureText: nil)
+        let later = GeminiAppUsageMonitor.resolvingResets(s, pageLoaded: loaded, now: d(2026, 10, 29, 17, 0))
+        XCTAssertEqual(later.windows.map(\.title), ["Gemini · Weekly"])
+        XCTAssertTrue(later.isStale)
+        XCTAssertTrue(later.failureText?.contains("要更新") == true)
+        let before = GeminiAppUsageMonitor.resolvingResets(s, pageLoaded: loaded, now: d(2026, 10, 29, 15, 30))
+        XCTAssertEqual(before.windows.count, 2)
+        XCTAssertEqual(before.windows.first?.resetAt, d(2026, 10, 29, 16, 10))
+        XCTAssertFalse(before.isStale)
+    }
+}

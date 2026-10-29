@@ -651,8 +651,14 @@ final class GeminiAppUsageMonitor {
                 publish(cachedOrUnknown("不明（使用量の数字を読み取れませんでした）"))
             case let outcome:
                 if var fresh = GeminiAppUsageParser.section(from: outcome, observedAt: now) {
+                    let loaded = GeminiAppUsageParser.pageLoadedAt(text)
+                    fresh = Self.resolvingResets(fresh, pageLoaded: loaded ?? now, now: now)
                     save(fresh, at: now)
-                    if let note = Self.pageAgeNote(loaded: GeminiAppUsageParser.pageLoadedAt(text), now: now) {
+                    if fresh.windows.isEmpty {
+                        publish(fresh)
+                        return
+                    }
+                    if let note = Self.pageAgeNote(loaded: loaded, now: now) {
                         fresh.isStale = true
                         fresh.failureText = note
                     }
@@ -660,6 +666,51 @@ final class GeminiAppUsageMonitor {
                 }
             }
         }
+    }
+
+    /// Turns the page's reset text into a date (relative to when the tab was loaded). The page never
+    /// updates by itself, so once a shown reset time has passed the old % is meaningless: drop it.
+    static func resolvingResets(_ section: ProviderSection, pageLoaded: Date, now: Date,
+                                calendar: Calendar = .current) -> ProviderSection {
+        var out = section
+        var passed: [String] = []
+        out.windows = section.windows.compactMap { w in
+            guard let at = resetDate(w.resetText, after: pageLoaded, calendar: calendar) else { return w }
+            if at <= now { passed.append(w.title); return nil }
+            var r = w; r.resetAt = at; return r
+        }
+        if !passed.isEmpty {
+            out.isStale = true
+            out.failureText = "不明/要更新（タブ表示のリセット時刻を過ぎました。タブを再読込すると最新）"
+        }
+        return out
+    }
+
+    /// "Resets at 4:10 PM", "Resets Nov 2", "16:10にリセット", "11月2日にリセット" → next such moment after `base`.
+    static func resetDate(_ text: String, after base: Date, calendar: Calendar = .current) -> Date? {
+        func firstMatch(_ pattern: String) -> [String]? {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+            return (1..<m.numberOfRanges).map { i in
+                Range(m.range(at: i), in: text).map { String(text[$0]) } ?? ""
+            }
+        }
+        if let g = firstMatch(#"(\d{1,2}):(\d{2})\s*([AP]M)?"#), var h = Int(g[0]), let mi = Int(g[1]) {
+            let ap = g[2].uppercased()
+            if ap == "PM", h < 12 { h += 12 }
+            if ap == "AM", h == 12 { h = 0 }
+            return calendar.nextDate(after: base, matching: DateComponents(hour: h, minute: mi), matchingPolicy: .nextTime)
+        }
+        let months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
+        var mo: Int?, d: Int?
+        if let g = firstMatch(#"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b"#) {
+            mo = months.firstIndex(of: g[0].lowercased()).map { $0 + 1 }; d = Int(g[1])
+        } else if let g = firstMatch(#"(\d{1,2})月(\d{1,2})日"#) {
+            mo = Int(g[0]); d = Int(g[1])
+        }
+        guard let mo, let d else { return nil }
+        return calendar.nextDate(after: base.addingTimeInterval(-86_400), matching: DateComponents(month: mo, day: d, hour: 0, minute: 0),
+                                 matchingPolicy: .nextTime)
     }
 
     /// The tab is never reloaded by us, so a page loaded long ago may show old numbers.
