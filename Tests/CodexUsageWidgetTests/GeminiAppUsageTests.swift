@@ -41,7 +41,50 @@ final class GeminiAppUsageParserTests: XCTestCase {
     }
 
     func testPercentOver100Ignored() {
-        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n150%\n"), .unknown)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n150% used\n"), .unknown)
+    }
+
+    func testStrictLabelAnchoredParsing() {
+        // Unrelated percentages, bare numbers and non-percent "left" are ignored.
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n40% off\n23%\nWeekly limit\n"), .unknown)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n40% used; 2 requests left\n"), .unknown)
+        guard case let .reading(r) = GeminiAppUsageParser.parse("Current usage\n40% used\n2 requests left\n") else { return XCTFail() }
+        XCTAssertEqual(r.fiveHourUsed, 40)
+        // A label inside a sentence is not a section label.
+        XCTAssertEqual(GeminiAppUsageParser.parse("Check your current usage below\n50% used\n"), .unknown)
+        // Percent far below the label (beyond 4 lines) is not taken.
+        XCTAssertEqual(GeminiAppUsageParser.parse("Current usage\na\nb\nc\nd\n50% used\n"), .unknown)
+        // Weekly numbers do not leak into the 5h section.
+        guard case let .reading(w) = GeminiAppUsageParser.parse("Current usage\nWeekly limit\n61% used\n") else { return XCTFail() }
+        XCTAssertNil(w.fiveHourUsed); XCTAssertEqual(w.weeklyUsed, 61)
+    }
+
+    func testRemainingPercentMath() {
+        guard case let .reading(r) = GeminiAppUsageParser.parse("Current usage\n70% left\nWeekly limit\n100% remaining\n") else { return XCTFail() }
+        XCTAssertEqual(r.fiveHourUsed, 30); XCTAssertEqual(r.weeklyUsed, 0)
+        let s = GeminiAppUsageParser.section(from: .reading(r), observedAt: Date())!
+        XCTAssertEqual(s.windows.map(\.leftPercent), [70, 100])
+    }
+
+    func testAnyVerificationTextBlocksEvenWithUsageHeading() {
+        XCTAssertEqual(GeminiAppUsageParser.parse(en + "\nVerify it's you"), .blocked)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n23% used\nSign in"), .blocked)
+    }
+
+    func testExactUsageURL() {
+        XCTAssertTrue(GeminiUsageURL.isUsagePage("https://gemini.google.com/usage"))
+        XCTAssertTrue(GeminiUsageURL.isUsagePage("https://gemini.google.com/usage?hl=ja"))
+        XCTAssertFalse(GeminiUsageURL.isUsagePage("https://gemini.google.com/usage-other"))
+        XCTAssertFalse(GeminiUsageURL.isUsagePage("https://gemini.google.com/usage/x"))
+        XCTAssertFalse(GeminiUsageURL.isUsagePage("http://gemini.google.com/usage"))
+    }
+
+    func testScriptChecksRunningAndTimesOut() {
+        let script = LiveChromeBridge.wrapped("return 1")
+        XCTAssertTrue(script.hasPrefix("if application id \"com.google.Chrome\" is running then"))
+        XCTAssertTrue(script.contains("with timeout of \(LiveChromeBridge.timeoutSeconds) seconds"))
+        XCTAssertFalse(script.lowercased().contains("activate"))
+        XCTAssertFalse(script.lowercased().contains("reload"))
     }
 }
 
@@ -53,39 +96,34 @@ final class GeminiReadPolicyTests: XCTestCase {
 
     func testReadsOnceAtStartThenEveryFiveMinutes() {
         var st = GeminiReadPolicy.State(); var reads: [TimeInterval] = []
-        for dt in stride(from: 0.0, through: 900, by: 30) {
-            let (n, read) = GeminiReadPolicy.step(st, sig(dt, front: true)); st = n
-            if read { reads.append(dt); st.lastRead = t0.addingTimeInterval(dt) }
+        for dt in stride(from: 0.0, through: 900, by: 30) where GeminiReadPolicy.shouldRead(st, sig(dt, front: true)) {
+            reads.append(dt); st.lastRead = t0.addingTimeInterval(dt)
         }
         XCTAssertEqual(reads, [0, 300, 600, 900])
     }
 
-    func testNoReadWhenNeverUsedIdleAsleepOrNight() {
+    func testNoReadWhenNotFrontmostIdleAsleepNightOrHalted() {
         let st = GeminiReadPolicy.State()
-        XCTAssertFalse(GeminiReadPolicy.step(st, sig(0, front: false)).1)
-        XCTAssertFalse(GeminiReadPolicy.step(st, sig(0, front: true, idle: 600)).1)
-        XCTAssertFalse(GeminiReadPolicy.step(st, sig(0, front: true, asleep: true)).1)
-        XCTAssertFalse(GeminiReadPolicy.step(st, sig(0, front: true, hour: 3)).1)
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: false)))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, idle: 600)))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, asleep: true)))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, hour: 3)))
         var halted = st; halted.halted = true
-        XCTAssertFalse(GeminiReadPolicy.step(halted, sig(0, front: true)).1)
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(0, front: true)))
     }
 
-    func testStopsAfterRecentUseWindow() {
-        var st = GeminiReadPolicy.State(lastSeenGemini: t0, lastRead: t0)
-        XCTAssertTrue(GeminiReadPolicy.step(st, sig(300, front: false)).1) // used within 5 min
-        st.lastRead = t0.addingTimeInterval(300)
-        XCTAssertFalse(GeminiReadPolicy.step(st, sig(601, front: false)).1)
-        XCTAssertFalse(GeminiReadPolicy.step(st, sig(1200, front: false)).1)
+    func testNotFrontmostNeverReadsEvenRightAfterUse() {
+        let st = GeminiReadPolicy.State(lastRead: t0.addingTimeInterval(-600))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(10, front: false)))
+        XCTAssertTrue(GeminiReadPolicy.shouldRead(st, sig(10, front: true)))
     }
 
-    func testNewSessionReadsImmediatelyButNotTwiceInAMinute() {
-        let st = GeminiReadPolicy.State(lastSeenGemini: t0, lastRead: t0.addingTimeInterval(-10))
-        XCTAssertTrue(GeminiReadPolicy.step(GeminiReadPolicy.State(lastSeenGemini: t0, lastRead: t0), sig(1000, front: true)).1)
-        XCTAssertFalse(GeminiReadPolicy.step(st, sig(30, front: true)).1)
+    func testNewSessionReadsAtOnceButNeverWithinFiveMinutes() {
+        XCTAssertTrue(GeminiReadPolicy.shouldRead(.init(lastRead: t0), sig(1000, front: true)))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(.init(lastRead: t0), sig(299, front: true)))
     }
 }
-
-final class FakeGeminiBridge: ChromeUsageBridge {
+final class FakeGeminiBridge: ChromeUsageBridge, @unchecked Sendable {
     var chromeRunning = true
     var chromeFrontmost = true
     var status: ChromeAutomationStatus = .granted
@@ -114,72 +152,107 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
     }
     var noon: Date { Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())! }
 
-    func testDisabledByDefaultTouchesNothing() {
+    func testDisabledByDefaultTouchesNothing() async {
         let b = FakeGeminiBridge(); let m = make(b, now: noon)
-        m.tick()
+        await m.tick()
         XCTAssertEqual(b.textReads + b.urlReads + b.asked, 0)
     }
 
-    func testEnableAsksOnlyWhenUndeterminedAndReads() {
+    func testEnableAsksOnlyWhenUndeterminedAndReads() async {
         let b = FakeGeminiBridge(); b.status = .notDetermined
         let m = make(b, now: noon)
-        m.setEnabled(true)
+        await m.setEnabled(true)
         XCTAssertEqual(b.asked, 1)
         XCTAssertEqual(m.section.windows.map(\.leftPercent), [60, 90])
-        m.tick(); m.tick()
+        await m.tick(); await m.tick()
         XCTAssertEqual(b.asked, 1, "ticks never show the permission dialog")
         XCTAssertEqual(b.textReads, 1, "no second read within 5 minutes")
     }
 
-    func testDeniedNeverReadsAndNeverReasks() {
+    func testDeniedNeverReadsAndNeverReasks() async {
         let b = FakeGeminiBridge(); b.status = .denied
         let m = make(b, now: noon)
-        m.setEnabled(true); m.tick()
+        await m.setEnabled(true); await m.tick()
         XCTAssertEqual(b.asked, 0); XCTAssertEqual(b.textReads, 0)
         XCTAssertTrue(m.section.windows.isEmpty)
         XCTAssertNotNil(m.section.failureText)
     }
 
-    func testChromeNotRunningOrNotFrontmost() {
+    func testChromeNotRunningOrNotFrontmost() async {
         let b = FakeGeminiBridge(); b.chromeRunning = false
         let m = make(b, now: noon); defaults.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
-        m.tick(); XCTAssertEqual(b.urlReads + b.textReads, 0)
+        await m.tick(); XCTAssertEqual(b.urlReads + b.textReads, 0)
         b.chromeRunning = true; b.chromeFrontmost = false
-        m.tick(); XCTAssertEqual(b.urlReads + b.textReads, 0)
+        await m.tick(); XCTAssertEqual(b.urlReads + b.textReads, 0)
     }
 
-    func testVerificationPageHaltsAndKeepsLastValueAsStale() {
+    func testVerificationPageHaltsAndKeepsLastValueAsStale() async {
         let b = FakeGeminiBridge(); var now = noon
         let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
         m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
-        m.setEnabled(true)
+        await m.setEnabled(true)
         XCTAssertFalse(m.section.isStale)
         b.text = .success("Our systems have detected unusual traffic")
-        now = now.addingTimeInterval(301); m.tick()
+        now = now.addingTimeInterval(301); await m.tick()
         XCTAssertTrue(m.state.halted)
         XCTAssertTrue(m.section.isStale)
         XCTAssertEqual(m.section.windows.map(\.leftPercent), [60, 90])
         XCTAssertTrue(m.section.failureText?.contains("停止") ?? false)
-        now = now.addingTimeInterval(301); m.tick()
+        now = now.addingTimeInterval(301); await m.tick()
         XCTAssertEqual(b.textReads, 2, "halted: no more reads")
     }
 
-    func testNoUsageTabShowsUnknownWithoutNumbers() {
+    func testNoUsageTabShowsUnknownWithoutNumbers() async {
         let b = FakeGeminiBridge(); b.text = nil
         let m = make(b, now: noon)
-        m.setEnabled(true)
+        await m.setEnabled(true)
         XCTAssertTrue(m.section.windows.isEmpty)
         XCTAssertTrue(m.section.failureText?.contains("不明") ?? false)
     }
 
-    func testNonGeminiFrontTabDoesNotRead() {
+    func testNonGeminiFrontTabDoesNotRead() async {
         let b = FakeGeminiBridge(); b.url = "https://mail.google.com/"
         let m = make(b, now: noon); defaults.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
-        m.tick()
+        await m.tick()
         XCTAssertEqual(b.textReads, 0)
     }
 
-    func testStoreMergeKeepsOtherProviders() {
+    func testLastReadPersistsAcrossToggleAndRestart() async {
+        let b = FakeGeminiBridge(); let now = noon
+        let m = make(b, now: now)
+        await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1)
+        await m.setEnabled(false); await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1, "toggling does not allow an early read")
+        let restarted = make(b, now: now.addingTimeInterval(60))
+        await restarted.tick()
+        XCTAssertEqual(b.textReads, 1, "restart keeps the 5-minute spacing")
+        XCTAssertEqual(restarted.state.lastRead, now)
+    }
+
+    func testVerificationTextSavesNothing() async {
+        let b = FakeGeminiBridge(); b.text = .success("Usage limits\nCurrent usage\n23% used\nVerify it's you")
+        let m = make(b, now: noon)
+        await m.setEnabled(true)
+        XCTAssertTrue(m.state.halted)
+        XCTAssertTrue(m.section.windows.isEmpty)
+        XCTAssertNil(defaults.dictionary(forKey: GeminiAppUsageMonitor.cacheKey))
+    }
+
+    func testOldValueBecomesStaleWhenNotInUse() async {
+        let b = FakeGeminiBridge(); var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertFalse(m.section.isStale)
+        b.chromeFrontmost = false
+        now = now.addingTimeInterval(GeminiReadPolicy.staleAfter + 1); await m.tick()
+        XCTAssertTrue(m.section.isStale)
+        XCTAssertEqual(m.section.windows.map(\.leftPercent), [60, 90])
+        XCTAssertEqual(b.textReads, 1)
+    }
+
+    func testStoreMergeKeepsOtherProviders() async {
         let base = MultiUsageSnapshot(sections: [ProviderSection(provider: .codex, windows: [], stats: [], failureText: nil)],
                                       codexSnapshot: nil, updatedAt: Date())
         let g = ProviderSection(provider: .gemini, windows: [], stats: [], failureText: "不明")

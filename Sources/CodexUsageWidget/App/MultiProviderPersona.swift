@@ -48,7 +48,8 @@ final class MultiProviderPersona: AppPersona {
     var geminiReadingEnabled: Bool? { store.geminiMonitor?.isEnabled }
     func setGeminiReading(_ on: Bool) {
         if on { preferences.setProviderVisible(true, for: .gemini) }
-        store.geminiMonitor?.setEnabled(on)
+        guard let monitor = store.geminiMonitor else { return }
+        Task { @MainActor in await monitor.setEnabled(on) }
     }
     func stop() { store.stop() }
     func refresh() { store.refresh() }

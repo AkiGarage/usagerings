@@ -24,56 +24,67 @@ enum GeminiAppUsageParser {
 
     static let maxTextLength = 40_000
 
-    private static let blockMarkers = [
+    /// Any of these anywhere on the page means "not the plain usage page": stop, show 不明, save nothing.
+    static let blockMarkers = [
         "unusual traffic", "not a robot", "captcha", "verify it's you", "verify it’s you", "sign in", "couldn't sign you in",
         "something went wrong", "try again later", "ロボットではありません", "不審なトラフィック", "本人確認",
         "ログイン", "問題が発生しました", "しばらくしてから",
     ]
-    private static let fiveLabels = ["current usage", "5-hour", "5 hour", "現在の使用量", "現在の使用状況", "5 時間", "5時間"]
-    private static let weekLabels = ["weekly limit", "weekly", "週間の上限", "週間", "週の上限", "1 週間", "1週間"]
+    /// Section labels must be a whole line (case-insensitive), not a substring of other text.
+    static let fiveLabels: Set<String> = ["current usage", "5-hour limit", "5 hour limit", "現在の使用量", "現在の使用状況",
+                                          "5 時間の上限", "5時間の上限"]
+    static let weekLabels: Set<String> = ["weekly limit", "weekly usage", "週間の上限", "週の上限", "1 週間の上限", "1週間の上限"]
+    private static let sectionLines = 4
 
     static func parse(_ text: String) -> Outcome {
         let text = String(text.prefix(maxTextLength))
         let lower = text.lowercased()
-        let hasUsageHeading = lower.contains("usage limits") || text.contains("使用量の上限") || text.contains("利用上限")
-            || lower.contains("current usage") || text.contains("現在の使用")
-        if blockMarkers.contains(where: { lower.contains($0) }), !hasUsageHeading { return .blocked }
-        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let five = section(lines, labels: fiveLabels, others: weekLabels)
-        let week = section(lines, labels: weekLabels, others: fiveLabels)
+        if blockMarkers.contains(where: { lower.contains($0) }) { return .blocked }
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let five = section(lines, labels: fiveLabels)
+        let week = section(lines, labels: weekLabels)
         let reading = Reading(fiveHourUsed: five.flatMap(usedPercent), weeklyUsed: week.flatMap(usedPercent),
                               fiveHourReset: five.flatMap(resetLine), weeklyReset: week.flatMap(resetLine))
         guard reading.fiveHourUsed != nil || reading.weeklyUsed != nil else { return .unknown }
         return .reading(reading)
     }
 
-    /// Lines from the first label hit up to (not including) the next section label (max 6 lines).
-    private static func section(_ lines: [String], labels: [String], others: [String]) -> [String]? {
-        guard let start = lines.firstIndex(where: { line in labels.contains { line.lowercased().contains($0) } }) else { return nil }
-        var out = [lines[start]]
+    private static func isLabel(_ line: String) -> Bool {
+        let l = line.lowercased()
+        return fiveLabels.contains(l) || weekLabels.contains(l)
+    }
+
+    /// Lines after the exact label line, up to the next label line (max 4).
+    private static func section(_ lines: [String], labels: Set<String>) -> [String]? {
+        let hits = lines.indices.filter { labels.contains(lines[$0].lowercased()) }
+        guard hits.count == 1, let start = hits.first else { return nil } // missing or repeated label = unknown
+        var out: [String] = []
         var i = start + 1
-        while i < lines.count, out.count < 6 {
-            let l = lines[i].lowercased()
-            if others.contains(where: { l.contains($0) }) && !labels.contains(where: { l.contains($0) }) { break }
-            out.append(lines[i]); i += 1
-        }
+        while i < lines.count, out.count < sectionLines, !isLabel(lines[i]) { out.append(lines[i]); i += 1 }
         return out
     }
 
-    /// A percentage that is unambiguously "used". "% left/remaining" is converted; a bare
-    /// percentage counts as used (the page shows percent used); two different numbers = unknown.
+    private static let usedRegex = try! NSRegularExpression(
+        pattern: #"^(\d{1,3}(?:\.\d+)?)\s*[%％]\s*(?:used|使用済み|使用)$"#, options: [.caseInsensitive])
+    private static let leftRegexes = [
+        try! NSRegularExpression(pattern: #"^(\d{1,3}(?:\.\d+)?)\s*[%％]\s*(?:left|remaining|残り)$"#, options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: #"^残り\s*(\d{1,3}(?:\.\d+)?)\s*[%％]$"#),
+    ]
+
+    /// Only whole lines like "23% used" / "70% left" / "残り 70%" count. Anything else
+    /// ("40% off", "2 requests left", bare "23%") is ignored; two different values = unknown.
     static func usedPercent(_ lines: [String]) -> Double? {
-        let regex = try! NSRegularExpression(pattern: #"(\d{1,3}(?:[.,]\d+)?)\s*[%％]"#)
+        func value(_ regex: NSRegularExpression, _ line: String) -> Double? {
+            let ns = line as NSString
+            guard let m = regex.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+                  let v = Double(ns.substring(with: m.range(at: 1))), (0...100).contains(v) else { return nil }
+            return v
+        }
         var values: [Double] = []
         for line in lines {
-            let ns = line as NSString
-            for m in regex.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
-                guard let v = Double(ns.substring(with: m.range(at: 1)).replacingOccurrences(of: ",", with: ".")),
-                      (0...100).contains(v) else { continue }
-                let l = line.lowercased()
-                let left = l.contains("left") || l.contains("remaining") || line.contains("残り")
-                values.append(left ? 100 - v : v)
-            }
+            if let v = value(usedRegex, line) { values.append(v) }
+            for r in leftRegexes { if let v = value(r, line) { values.append(100 - v) } }
         }
         let distinct = Set(values)
         return distinct.count == 1 ? distinct.first : nil
@@ -103,10 +114,8 @@ enum GeminiAppUsageParser {
 /// When to read. Pure so it can be tested.
 enum GeminiReadPolicy {
     static let interval: TimeInterval = 5 * 60
-    /// Gemini counts as "in use" for this long after it was last seen frontmost.
-    static let recentUse: TimeInterval = 5 * 60
-    /// A gap longer than this starts a new session (read once at the start).
-    static let sessionGap: TimeInterval = 15 * 60
+    /// A shown value older than this (no reads because Gemini isn't in use) is marked stale.
+    static let staleAfter: TimeInterval = 10 * 60
     static let idleLimit: TimeInterval = 120
     /// Local hours with no reads at all (01:00–05:59).
     static let quietHours = 1..<6
@@ -120,55 +129,66 @@ enum GeminiReadPolicy {
     }
 
     struct State: Equatable {
-        var lastSeenGemini: Date?
+        /// Persisted across toggles and restarts.
         var lastRead: Date?
         var halted = false
     }
 
-    /// Returns the updated state and whether to read now.
-    static func step(_ state: State, _ s: Signals) -> (State, Bool) {
-        var state = state
-        guard !state.halted, !s.screenAsleep, s.idleSeconds < idleLimit, !quietHours.contains(s.hour) else { return (state, false) }
-        let previousSeen = state.lastSeenGemini
-        if s.geminiFrontmost { state.lastSeenGemini = s.now }
-        guard let seen = state.lastSeenGemini, s.now.timeIntervalSince(seen) <= recentUse else { return (state, false) }
-        let newSession = s.geminiFrontmost && (previousSeen == nil || s.now.timeIntervalSince(previousSeen!) > sessionGap)
-        if newSession, state.lastRead.map({ s.now.timeIntervalSince($0) >= 60 }) ?? true { return (state, true) }
-        guard let last = state.lastRead else { return (state, true) }
-        return (state, s.now.timeIntervalSince(last) >= interval)
+    /// Read only while a Gemini tab is frontmost and Aki is active, at most once per 5 minutes.
+    /// The first frontmost tick after a break (>= 5 min since the last read) reads at once.
+    static func shouldRead(_ state: State, _ s: Signals) -> Bool {
+        guard !state.halted, s.geminiFrontmost, !s.screenAsleep, s.idleSeconds < idleLimit,
+              !quietHours.contains(s.hour) else { return false }
+        guard let last = state.lastRead else { return true }
+        let since = s.now.timeIntervalSince(last)
+        return since >= interval || since < -60 // clock moved backwards: allow once
     }
 }
 
 enum ChromeAutomationStatus: Equatable { case granted, notDetermined, denied, chromeNotRunning, unavailable }
 
-/// Everything that touches Chrome. Read-only AppleScript; nothing here activates or navigates.
-protocol ChromeUsageBridge {
+/// Everything that touches Chrome. Read-only AppleScript; nothing here activates, navigates or launches.
+protocol ChromeUsageBridge: Sendable {
     var chromeRunning: Bool { get }
     var chromeFrontmost: Bool { get }
     /// `ask` must only be true from an explicit user action.
-    func automationStatus(ask: Bool) -> ChromeAutomationStatus
-    func activeTabURL() -> String?
-    /// innerText of the first already-open gemini.google.com/usage tab, nil if none / not allowed.
-    func usageTabText() -> Result<String, ChromeReadError>?
+    func automationStatus(ask: Bool) async -> ChromeAutomationStatus
+    func activeTabURL() async -> String?
+    /// innerText of an already-open https://gemini.google.com/usage tab, nil if none.
+    func usageTabText() async -> Result<String, ChromeReadError>?
 }
 
-enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, failed }
+enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, timedOut, failed }
+
+enum GeminiUsageURL {
+    static let base = "https://gemini.google.com/usage"
+    /// Exact page only: the base URL, optionally with a query or fragment.
+    static func isUsagePage(_ url: String) -> Bool {
+        url == base || url.hasPrefix(base + "?") || url.hasPrefix(base + "#")
+    }
+    static func isGemini(_ url: String) -> Bool { url.hasPrefix("https://gemini.google.com/") }
+}
 
 struct LiveChromeBridge: ChromeUsageBridge {
     static let bundleID = "com.google.Chrome"
+    /// NSAppleScript runs on one serial background queue, never on the main thread.
+    private static let queue = DispatchQueue(label: "usagerings.gemini.applescript", qos: .utility)
+    static let timeoutSeconds = 8
 
     var chromeRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).isEmpty }
     var chromeFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID }
 
-    func automationStatus(ask: Bool) -> ChromeAutomationStatus {
-        guard chromeRunning else { return .chromeNotRunning }
+    private static func onQueue<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { c in queue.async { c.resume(returning: work()) } }
+    }
+
+    private static func status(ask: Bool) -> ChromeAutomationStatus {
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty else { return .chromeNotRunning }
         var target = AEAddressDesc()
-        let id = Self.bundleID
-        let made = id.withCString { AECreateDesc(typeApplicationBundleID, $0, id.utf8.count, &target) }
+        let made = bundleID.withCString { AECreateDesc(typeApplicationBundleID, $0, bundleID.utf8.count, &target) }
         guard made == noErr else { return .unavailable }
         defer { AEDisposeDesc(&target) }
-        let status = AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, ask)
-        switch status {
+        switch AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, ask) {
         case noErr: return .granted
         case OSStatus(errAEEventWouldRequireUserConsent): return .notDetermined
         case OSStatus(errAEEventNotPermitted): return .denied
@@ -176,39 +196,61 @@ struct LiveChromeBridge: ChromeUsageBridge {
         }
     }
 
-    private func run(_ source: String) -> (String?, Int?) {
-        // Never let AppleScript launch Chrome: `tell application` would start it.
-        guard chromeRunning, automationStatus(ask: false) == .granted else { return (nil, -1743) }
-        var error: NSDictionary?
-        let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if let error { return (nil, error[NSAppleScript.errorNumber] as? Int ?? -1) }
-        return (result?.stringValue, nil)
+    func automationStatus(ask: Bool) async -> ChromeAutomationStatus {
+        await Self.onQueue { Self.status(ask: ask) }
     }
 
-    func activeTabURL() -> String? {
-        run(#"tell application id "com.google.Chrome" to if (count of windows) > 0 then return URL of active tab of front window"#).0
+    /// Wraps the body so the script itself checks Chrome is running (never launches it)
+    /// and every Apple event gives up after `timeoutSeconds`.
+    static func wrapped(_ body: String) -> String {
+        """
+        if application id "\(bundleID)" is running then
+          with timeout of \(timeoutSeconds) seconds
+            tell application id "\(bundleID)"
+        \(body)
+            end tell
+          end timeout
+        end if
+        return "__NOT_RUNNING__"
+        """
     }
 
-    func usageTabText() -> Result<String, ChromeReadError>? {
+    private static func run(_ body: String) async -> (String?, Int?) {
+        await onQueue {
+            guard status(ask: false) == .granted else { return (nil, -1743) }
+            var error: NSDictionary?
+            let result = NSAppleScript(source: wrapped(body))?.executeAndReturnError(&error)
+            if let error { return (nil, error[NSAppleScript.errorNumber] as? Int ?? -1) }
+            let text = result?.stringValue
+            return text == "__NOT_RUNNING__" ? (nil, nil) : (text, nil)
+        }
+    }
+
+    func activeTabURL() async -> String? {
+        await Self.run(#"if (count of windows) > 0 then return URL of active tab of front window"#).0
+    }
+
+    func usageTabText() async -> Result<String, ChromeReadError>? {
         // Look for an existing usage tab without touching window order, selection or URL.
-        let script = #"""
-        tell application id "com.google.Chrome"
-          repeat with w in windows
-            repeat with t in tabs of w
-              set u to URL of t
-              if u starts with "https://gemini.google.com/usage" then
-                return execute t javascript "(document.body && document.body.innerText || '').slice(0, 40000)"
-              end if
-            end repeat
+        let body = #"""
+        repeat with w in windows
+          repeat with t in tabs of w
+            set u to URL of t
+            if u is "\#(GeminiUsageURL.base)" or u starts with "\#(GeminiUsageURL.base)?" or u starts with "\#(GeminiUsageURL.base)#" then
+              return execute t javascript "(document.body && document.body.innerText || '').slice(0, 40000)"
+            end if
           end repeat
-          return "__NO_USAGE_TAB__"
-        end tell
+        end repeat
+        return "__NO_USAGE_TAB__"
         """#
-        let (text, error) = run(script)
+        let (text, error) = await Self.run(body)
         if let error {
-            if error == -1743 { return .failure(.notAllowed) }
-            // Chrome: "Executing JavaScript through AppleScript is turned off" (View > Developer).
-            return .failure(error == 12 ? .javascriptDisabled : .failed)
+            switch error {
+            case -1743: return .failure(.notAllowed)
+            case -1712: return .failure(.timedOut)
+            case 12: return .failure(.javascriptDisabled) // "Executing JavaScript through AppleScript is turned off"
+            default: return .failure(.failed)
+            }
         }
         guard let text, text != "__NO_USAGE_TAB__" else { return nil }
         return .success(text)
@@ -219,10 +261,12 @@ struct LiveChromeBridge: ChromeUsageBridge {
 final class GeminiAppUsageMonitor {
     static let enabledKey = "geminiAppReadingEnabled"
     static let cacheKey = "geminiAppLastReading"
+    static let lastReadKey = "geminiAppLastReadAt"
 
     private let bridge: ChromeUsageBridge
     private let defaults: UserDefaults
     private var timer: Task<Void, Never>?
+    private var inFlight = false
     private(set) var state = GeminiReadPolicy.State()
     private(set) var section: ProviderSection
     var onChange: ((ProviderSection) -> Void)?
@@ -237,19 +281,24 @@ final class GeminiAppUsageMonitor {
     init(bridge: ChromeUsageBridge = LiveChromeBridge(), defaults: UserDefaults = .standard) {
         self.bridge = bridge
         self.defaults = defaults
+        let at = defaults.double(forKey: Self.lastReadKey)
+        state.lastRead = at > 0 ? Date(timeIntervalSince1970: at) : nil
         section = ProviderSection(provider: .gemini, windows: [], stats: [], failureText: "不明")
-        section = cachedOrUnknown("不明（Gemini の使用量タブを開くと読みます）")
+        section = cachedOrUnknown(Self.startText(enabled: isEnabled))
     }
 
     var isEnabled: Bool { defaults.bool(forKey: Self.enabledKey) }
 
+    static func startText(enabled: Bool) -> String {
+        enabled ? "不明（Gemini を使うと読みます）" : "オフ（メニューで「Gemini の使用量を読む」をオン）"
+    }
+
     func start() {
-        publish(isEnabled ? cachedOrUnknown("不明（Gemini の使用量タブを開くと読みます）")
-                          : cachedOrUnknown("オフ（メニューで「Gemini の使用量を読む」をオン）"))
+        publish(cachedOrUnknown(Self.startText(enabled: isEnabled)))
         timer?.cancel()
         timer = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                self?.tick()
+                await self?.tick()
                 try? await Task.sleep(for: .seconds(30), tolerance: .seconds(5))
             }
         }
@@ -258,14 +307,16 @@ final class GeminiAppUsageMonitor {
     func stop() { timer?.cancel(); timer = nil }
 
     /// Explicit user action from the menu. The only path that may show the macOS dialog, once.
-    func setEnabled(_ on: Bool) {
+    /// The last-read time is kept, so toggling never causes an extra read.
+    func setEnabled(_ on: Bool) async {
         defaults.set(on, forKey: Self.enabledKey)
         state.halted = false
         guard on else { publish(cachedOrUnknown("オフ")); return }
-        let status = bridge.automationStatus(ask: bridge.automationStatus(ask: false) == .notDetermined)
-        if status != .granted { publish(cachedOrUnknown(Self.text(for: status))) }
-        state.lastRead = nil
-        tick()
+        let current = await bridge.automationStatus(ask: false)
+        let status = current == .notDetermined ? await bridge.automationStatus(ask: true) : current
+        if status != .granted { publish(cachedOrUnknown(Self.text(for: status))); return }
+        publish(cachedOrUnknown(Self.startText(enabled: true)))
+        await tick()
     }
 
     static func text(for status: ChromeAutomationStatus) -> String {
@@ -278,32 +329,33 @@ final class GeminiAppUsageMonitor {
         }
     }
 
-    func tick() {
-        guard isEnabled, bridge.chromeRunning else { return }
+    func tick() async {
+        guard isEnabled, !inFlight else { return }
+        inFlight = true
+        defer { inFlight = false }
         let now = clock()
+        markStaleIfOld(now)
+        guard bridge.chromeRunning else { return }
         let hour = Calendar.current.component(.hour, from: now)
         let asleep = screenAsleep(), idle = idleSeconds()
-        // Cheap checks first: only ask Chrome for its URL while Chrome is frontmost and Aki is active.
-        var geminiFront = false
-        if bridge.chromeFrontmost, !asleep, idle < GeminiReadPolicy.idleLimit, !GeminiReadPolicy.quietHours.contains(hour),
-           bridge.automationStatus(ask: false) == .granted {
-            geminiFront = bridge.activeTabURL()?.hasPrefix("https://gemini.google.com/") ?? false
-        }
-        let (next, read) = GeminiReadPolicy.step(state, .init(now: now, geminiFrontmost: geminiFront, idleSeconds: idle,
-                                                              screenAsleep: asleep, hour: hour))
-        state = next
-        guard read else { return }
-        guard bridge.automationStatus(ask: false) == .granted else {
-            publish(cachedOrUnknown(Self.text(for: bridge.automationStatus(ask: false)))); return
-        }
+        let base = GeminiReadPolicy.Signals(now: now, geminiFrontmost: true, idleSeconds: idle, screenAsleep: asleep, hour: hour)
+        // Cheap local checks first; only then ask Chrome for its front tab URL.
+        guard bridge.chromeFrontmost, GeminiReadPolicy.shouldRead(state, base) else { return }
+        guard await bridge.automationStatus(ask: false) == .granted else { return }
+        let front = await bridge.activeTabURL().map(GeminiUsageURL.isGemini) ?? false
+        var signals = base; signals.geminiFrontmost = front && bridge.chromeFrontmost
+        guard GeminiReadPolicy.shouldRead(state, signals) else { return }
         state.lastRead = now
+        defaults.set(now.timeIntervalSince1970, forKey: Self.lastReadKey)
         readCount += 1
-        switch bridge.usageTabText() {
+        switch await bridge.usageTabText() {
         case nil:
             publish(cachedOrUnknown("不明（gemini.google.com/usage のタブが開いていません）"))
         case .failure(.javascriptDisabled):
             state.halted = true
             publish(cachedOrUnknown("不明（Chrome の「Apple Events からの JavaScript を許可」がオフ）"))
+        case .failure(.timedOut):
+            publish(cachedOrUnknown("不明（Chrome の応答がありません）"))
         case .failure:
             state.halted = true
             publish(cachedOrUnknown("不明（Chrome から読めませんでした。読み取りを停止）"))
@@ -321,6 +373,13 @@ final class GeminiAppUsageMonitor {
                 }
             }
         }
+    }
+
+    /// A fresh value that has not been re-read for a while is shown as stale with its time.
+    private func markStaleIfOld(_ now: Date) {
+        guard !section.isStale, let observed = section.windows.first?.observedAt,
+              now.timeIntervalSince(observed) > GeminiReadPolicy.staleAfter else { return }
+        publish(cachedOrUnknown("使用中でないため更新停止"))
     }
 
     private func publish(_ s: ProviderSection) { section = s; onChange?(s) }
