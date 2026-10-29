@@ -30,6 +30,11 @@ final class ProviderLockTests: XCTestCase {
 
     func testCodex() { assertLocked(.codex, title: "Session") }
     func testGLM() { assertLocked(.zai, title: "5h") }
+    func testGLMExhaustedMCPQuotaDoesNotLock() {
+        let all = bars(.zai, [window("5h", left: 60, resetIn: 3600), window("Monthly", left: 0, resetIn: 5 * 86_400),
+                              window("Weekly", left: 30, resetIn: 86_400)])
+        XCTAssertTrue(all.allSatisfy { $0.block == nil }, "GLM locks only on the 5-hour window")
+    }
     func testGrok() { assertLocked(.grok, title: "Weekly") }
     func testDeepSeek() { assertLocked(.deepseek, title: "Balance") }
     func testMiniMax() { assertLocked(.minimax, title: "5h") }

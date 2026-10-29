@@ -229,7 +229,9 @@ struct CollapsedUsageBar: Identifiable {
             var bar = bar
             // Same lock as Claude for every other provider (Codex, GLM, Grok, DeepSeek, Antigravity, Gemini…).
             if bar.block == nil, bar.provider != .claude {
-                bar.block = Self.quotaBlock(bar.windows, now: snapshot.updatedAt)
+                // GLM: only the 5-hour window blocks coding; an exhausted MCP/tool quota is not a lock.
+                let lockable = bar.provider == .zai ? bar.windows.filter { ServiceRowModel.kind($0.title) == .five } : bar.windows
+                bar.block = Self.quotaBlock(lockable, now: snapshot.updatedAt)
             }
             if let provider = bar.provider, let section = snapshot.sections.first(where: { $0.provider == provider }) {
                 let account = section.accounts.first { account in
