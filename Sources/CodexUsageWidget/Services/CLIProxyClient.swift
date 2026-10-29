@@ -77,6 +77,11 @@ actor CLIProxyClient {
         var failure: String?
         var failureReason: UsageFailureReason?
         var rateLimited = false
+        var resetRetries = 0
+        var lastAttemptAt: Date?
+        /// Resets announced by the last successful reading; survive failures so a
+        /// transient error right after a reset keeps the bounded post-reset retries.
+        var knownResets: [Date] = []
 
         var notice: String? {
             if rateLimited {
@@ -93,9 +98,36 @@ actor CLIProxyClient {
         var periods = [CachedUsage(providerName: "Grok Weekly"), CachedUsage(providerName: "Grok Monthly")]
         var nextAttempt = Date.distantPast
         var backoff: TimeInterval = 0
+        var resetRetries = 0
+        var lastAttemptAt: Date?
+        /// Resets announced by the last successful reading; survive failures so a
+        /// transient error right after a reset keeps the bounded post-reset retries.
+        var knownResets: [Date] = []
     }
     private var grokUsage: [AccountID: GrokUsage] = [:]
     private static let claudeMinimumInterval: TimeInterval = 5 * 60
+    /// Waits before re-asking a provider that still reports an already-passed reset.
+    static let resetRetryDelays: [TimeInterval] = [30, 90]
+
+    enum ResetRecheck: Equatable { case none, afterReset, staleRetry }
+
+    /// The minimum interval must not hide a reset the cached reading itself announced.
+    /// One refetch once that reset has passed, then at most `resetRetryDelays.count`
+    /// spaced retries while the provider still echoes the passed reset. Rate-limit
+    /// backoff is checked by callers and always wins.
+    /// `fetchedAt` is the start of the last attempt (success or not), so a failed or
+    /// partial fetch cannot re-trigger the same reset check.
+    static func resetRecheck(resets: [Date], fetchedAt: Date?, retries: Int, now: Date) -> ResetRecheck {
+        guard let fetchedAt else { return .none }
+        if resets.contains(where: { $0 > fetchedAt && $0 <= now }) { return .afterReset }
+        guard retries < resetRetryDelays.count, resets.contains(where: { $0 <= fetchedAt }),
+              now >= fetchedAt.addingTimeInterval(resetRetryDelays[retries]) else { return .none }
+        return .staleRetry
+    }
+
+    private static func hasPassedReset(_ windows: [UsageLimit], at date: Date) -> Bool {
+        windows.contains { ($0.resetAt ?? .distantFuture) <= date }
+    }
 
     init(
         transport: any CLIProxyTransport = CLIProxyURLSessionTransport(),
@@ -323,16 +355,23 @@ actor CLIProxyClient {
         let id = AccountID.cliProxy(account, provider: .claude)
         var cached = claudeUsage[id] ?? CachedUsage()
         let startedAt = clock()
-        guard startedAt >= cached.nextAttempt else {
+        let recheck: ResetRecheck = cached.rateLimited ? .none
+            : Self.resetRecheck(resets: cached.knownResets, fetchedAt: cached.lastAttemptAt, retries: cached.resetRetries, now: startedAt)
+        guard startedAt >= cached.nextAttempt || recheck != .none else {
             if cached.failureReason?.isTransient == true { cached.windows = cached.windows.filter { $0.isRetainable(at: startedAt) } }
             return cached
         }
+        if recheck == .afterReset { cached.resetRetries = 0 }
+        if recheck == .staleRetry { cached.resetRetries += 1 }
+        cached.lastAttemptAt = startedAt
         cached.nextAttempt = startedAt.addingTimeInterval(Self.claudeMinimumInterval)
         do {
             let windows = try await quota(account, provider: .claude, key: key, now: now)
             guard !windows.isEmpty else { throw Failure.noQuota }
             cached.fetchedAt = clock()
             cached.windows = windows.map { var w = $0; w.observedAt = cached.fetchedAt; return w }
+            cached.knownResets = cached.windows.compactMap(\.resetAt)
+            if !Self.hasPassedReset(cached.windows, at: startedAt) { cached.resetRetries = 0 }
             cached.backoff = 0
             cached.failure = nil
             cached.failureReason = nil
@@ -369,13 +408,20 @@ actor CLIProxyClient {
     private func cachedGrokUsage(_ account: CLIProxyCredential, key: String, now: Date) async throws -> GrokUsage {
         let id = AccountID.cliProxy(account, provider: .grok)
         var cached = grokUsage[id] ?? GrokUsage()
-        guard clock() >= cached.nextAttempt else {
+        let recheck: ResetRecheck = cached.backoff > 0 ? .none
+            : Self.resetRecheck(resets: cached.knownResets, fetchedAt: cached.lastAttemptAt,
+                                retries: cached.resetRetries, now: clock())
+        guard clock() >= cached.nextAttempt || recheck != .none else {
             for index in cached.periods.indices where cached.periods[index].failureReason?.isTransient == true {
                 cached.periods[index].windows = cached.periods[index].windows.filter { $0.isRetainable(at: clock()) }
             }
             return cached
         }
-        cached.nextAttempt = clock().addingTimeInterval(Self.claudeMinimumInterval)
+        if recheck == .afterReset { cached.resetRetries = 0 }
+        if recheck == .staleRetry { cached.resetRetries += 1 }
+        let startedAt = clock()
+        cached.lastAttemptAt = startedAt
+        cached.nextAttempt = startedAt.addingTimeInterval(Self.claudeMinimumInterval)
         var headers = ["Authorization": "Bearer $TOKEN$", "x-xai-token-auth": "xai-grok-cli",
                        "x-grok-client-version": "1.0.46", "accept": "*/*",
                        "user-agent": "grok-pager/1.0.46 grok-shell/1.0.46 (macos; aarch64)"]
@@ -428,6 +474,14 @@ actor CLIProxyClient {
             cached.periods[index] = period
         }
         cached.backoff = rateLimited ? backoff : 0
+        let fresh = cached.periods.filter { $0.failure == nil && !$0.rateLimited }.flatMap(\.windows).compactMap(\.resetAt)
+        let allSucceeded = cached.periods.allSatisfy { $0.failure == nil && !$0.rateLimited }
+        // A failed period keeps its last announced reset so its post-reset retries continue.
+        cached.knownResets = allSucceeded ? fresh : Array(Set(cached.knownResets + fresh))
+        // Only a full successful reading that shows no passed reset ends the retry series.
+        if allSucceeded, !cached.periods.contains(where: { Self.hasPassedReset($0.windows, at: startedAt) }) {
+            cached.resetRetries = 0
+        }
         for index in cached.periods.indices { cached.periods[index].nextAttempt = cached.nextAttempt }
         grokUsage[id] = cached
         return cached

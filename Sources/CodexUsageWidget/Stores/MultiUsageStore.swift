@@ -1,4 +1,78 @@
+import AppKit
 import Foundation
+
+/// A reset one provider announced (rounded up to the whole second).
+struct ResetKey: Hashable { let provider: ProviderID; let at: Date }
+
+/// Plans one refresh right after each reset a provider announced, plus a few spaced
+/// retries while the provider still echoes the passed reset or fails. Pure, for tests.
+enum ResetRefreshPlanner {
+    struct Attempts: Equatable { var count = 0; var last: Date? }
+    /// Fire times relative to the reset (aligned with `CLIProxyClient.resetRetryDelays`).
+    static let offsets: [TimeInterval] = [5, 36, 127]
+    /// Minimum spacing from the previous attempt for the same reset (sleep/wake catch-up).
+    static let gaps: [TimeInterval] = [0, 31, 91]
+
+    static func fireTime(_ key: ResetKey, _ done: Attempts, now: Date) -> Date? {
+        guard done.count < offsets.count else { return nil }
+        var fire = key.at.addingTimeInterval(offsets[done.count])
+        if let last = done.last { fire = max(fire, last.addingTimeInterval(gaps[done.count])) }
+        return max(fire, now)
+    }
+
+    /// Earliest fire across every pending reset; `attempts` holds every reset still in play.
+    static func next(attempts: [ResetKey: Attempts], now: Date) -> Date? {
+        attempts.compactMap { fireTime($0.key, $0.value, now: now) }.min()
+    }
+
+    /// Resets due at `now`: one targeted refresh serves all of them.
+    static func due(attempts: [ResetKey: Attempts], now: Date) -> Set<ResetKey> {
+        Set(attempts.filter { (fireTime($0.key, $0.value, now: now) ?? .distantFuture) <= now.addingTimeInterval(1) }.keys)
+    }
+
+    static func recordFire(_ keys: Set<ResetKey>, attempts: [ResetKey: Attempts], now: Date) -> [ResetKey: Attempts] {
+        var attempts = attempts
+        for key in keys {
+            var done = attempts[key] ?? Attempts()
+            done.count += 1
+            done.last = now
+            attempts[key] = done
+        }
+        return attempts
+    }
+
+    static func resets(in section: ProviderSection) -> Set<ResetKey> {
+        Set(section.windows.compactMap { $0.resetAt.map {
+            ResetKey(provider: section.provider, at: Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)))
+        } })
+    }
+
+    /// A reading that can settle a reset: fetched now, nothing failed or retained.
+    static func isConclusive(_ section: ProviderSection) -> Bool {
+        section.failureText == nil && section.failureReason == nil && !section.isStale && !section.windows.isEmpty
+            && !section.accounts.contains { $0.failureText != nil || $0.isStale }
+    }
+
+    /// Merge a fetch into the tracked resets. A conclusive reading for a provider replaces
+    /// its resets (a passed one it no longer echoes is done; one it still echoes keeps its
+    /// retry count). A failed or absent reading keeps them, so retries continue after a
+    /// transient failure. Untouched providers are left as they are.
+    static func track(_ attempts: [ResetKey: Attempts], sections: [ProviderSection], fetched: Set<ProviderID>,
+                      skipped: Set<ProviderID>, now: Date) -> [ResetKey: Attempts] {
+        // A reset more than a day old that a provider still echoes is not chased (same cutoff
+        // on both sides, so pruning and re-adding can never loop).
+        let cutoff = now.addingTimeInterval(-86_400)
+        var attempts = attempts.filter { !skipped.contains($0.key.provider) && $0.key.at > cutoff }
+        for section in sections where fetched.contains(section.provider) && !skipped.contains(section.provider) {
+            let seen = resets(in: section).filter { $0.at > cutoff }
+            if isConclusive(section) {
+                attempts = attempts.filter { $0.key.provider != section.provider || seen.contains($0.key) }
+            }
+            for key in seen where attempts[key] == nil { attempts[key] = Attempts() }
+        }
+        return attempts
+    }
+}
 
 @MainActor
 final class MultiUsageStore: ObservableObject {
@@ -26,6 +100,14 @@ final class MultiUsageStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
+    private var resetTask: Task<Void, Never>?
+    private var resetAttempts: [ResetKey: ResetRefreshPlanner.Attempts] = [:]
+    /// Providers the in-flight fetch covers (all when it is a regular refresh).
+    private var inFlightTargets: Set<ProviderID> = []
+    private var resetSchedulingEnabled = false
+    private var wakeObservers: [NSObjectProtocol] = []
+    /// Injected for tests.
+    var resetClock: () -> Date = { Date() }
 
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
          preferences: PanelPreferences? = nil) {
@@ -55,6 +137,7 @@ final class MultiUsageStore: ObservableObject {
     }
 
     func start() {
+        resetSchedulingEnabled = true
         refresh()
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
@@ -64,6 +147,19 @@ final class MultiUsageStore: ObservableObject {
                 self?.refresh()
             }
         }
+        observeWakeAndClock()
+    }
+
+    /// Sleep/wake and clock changes invalidate sleeping timers: re-plan from wall time.
+    private func observeWakeAndClock() {
+        guard wakeObservers.isEmpty else { return }
+        let replan: @Sendable (Notification) -> Void = { [weak self] _ in
+            Task { @MainActor in self?.scheduleResetRefresh() }
+        }
+        wakeObservers = [
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: replan),
+            NotificationCenter.default.addObserver(forName: .NSSystemClockDidChange, object: nil, queue: .main, using: replan),
+        ]
     }
 
     func stop() {
@@ -73,9 +169,42 @@ final class MultiUsageStore: ObservableObject {
         opacityHUDTask = nil
         expiryTask?.cancel()
         expiryTask = nil
+        resetSchedulingEnabled = false
+        resetTask?.cancel()
+        resetTask = nil
+        for observer in wakeObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            NotificationCenter.default.removeObserver(observer)
+        }
+        wakeObservers = []
     }
 
-    func refresh() {
+    /// One targeted refresh just after the earliest announced reset (no tighter global polling).
+    /// A reset that comes due while a fetch is in flight is not consumed: its attempt is
+    /// recorded only when a refresh actually starts, so apply() re-plans it at once
+    /// unless that in-flight result already settled it.
+    func scheduleResetRefresh() {
+        resetTask?.cancel()
+        resetTask = nil
+        guard resetSchedulingEnabled, case .live = dataSource,
+              let fire = ResetRefreshPlanner.next(attempts: resetAttempts, now: resetClock()) else { return }
+        resetTask = Task { @MainActor [weak self] in
+            let delay = max(0, fire.timeIntervalSince(self?.resetClock() ?? fire))
+            try? await Task.sleep(for: .seconds(delay), tolerance: .milliseconds(500))
+            guard !Task.isCancelled, let self else { return }
+            self.resetTask = nil
+            guard !self.isRefreshing else { return } // queued: apply() re-plans
+            let now = self.resetClock()
+            let due = ResetRefreshPlanner.due(attempts: self.resetAttempts, now: now)
+            guard !due.isEmpty else { self.scheduleResetRefresh(); return }
+            self.resetAttempts = ResetRefreshPlanner.recordFire(due, attempts: self.resetAttempts, now: now)
+            self.refresh(only: Set(due.map(\.provider)))
+        }
+    }
+
+    /// `only`: fetch just these providers and keep every other section as it is,
+    /// so a reset of one service costs no request to the others (Antigravity included).
+    func refresh(only targets: Set<ProviderID>? = nil) {
         guard !isRefreshing else { return }
         switch dataSource {
         case let .demo(demoSnapshot):
@@ -85,9 +214,12 @@ final class MultiUsageStore: ObservableObject {
             return
         case let .live(service, _):
             isRefreshing = true
+            let skip = preferences?.providersToSkip() ?? []
+            let others = targets.map { Set(ProviderID.allCases).subtracting($0) } ?? []
+            inFlightTargets = Set(ProviderID.allCases).subtracting(skip).subtracting(others)
             Task {
-                let snapshot = await service.fetchAll(disabled: preferences?.providersToSkip() ?? [])
-                apply(snapshot)
+                let snapshot = await service.fetchAll(disabled: skip.union(others))
+                apply(snapshot, partial: targets != nil)
             }
         }
     }
@@ -105,20 +237,33 @@ final class MultiUsageStore: ObservableObject {
         }
     }
 
-    private func apply(_ snapshot: MultiUsageSnapshot) {
+    private func apply(_ fetched: MultiUsageSnapshot, partial: Bool = false) {
         isRefreshing = false
+        let targets = inFlightTargets
+        var snapshot = fetched
+        if partial, let previous = rawSnapshot {
+            // Untouched providers keep their current sections and Codex snapshot.
+            let sections = previous.sections.filter { !targets.contains($0.provider) }
+                + fetched.sections.filter { targets.contains($0.provider) }
+            snapshot = MultiUsageSnapshot(sections: MultiUsageSnapshot.ordered(sections),
+                                          codexSnapshot: targets.contains(.codex) ? fetched.codexSnapshot : previous.codexSnapshot,
+                                          updatedAt: fetched.updatedAt, hiddenProviders: previous.hiddenProviders)
+        }
         preferences?.reconcileAccounts(in: snapshot)
         preferences?.reconcileProviders(in: snapshot)
         let displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: Date())
         rawSnapshot = displaySnapshot
-        updateClaudeChoice(from: snapshot, now: Date())
+        if targets.contains(.claude) { updateClaudeChoice(from: snapshot, now: Date()) }
         self.snapshot = visible(displaySnapshot)
         expiryTask?.cancel()
         expiryTask = nil
         scheduleExpiry()
-        if let codexSnapshot = snapshot.codexSnapshot {
+        if targets.contains(.codex), let codexSnapshot = snapshot.codexSnapshot {
             publish(codexSnapshot)
         }
+        resetAttempts = ResetRefreshPlanner.track(resetAttempts, sections: fetched.sections, fetched: targets,
+                                                  skipped: preferences?.providersToSkip() ?? [], now: resetClock())
+        scheduleResetRefresh()
     }
 
     /// Keep display data only; decisions and the published Codex snapshot use the fresh result.

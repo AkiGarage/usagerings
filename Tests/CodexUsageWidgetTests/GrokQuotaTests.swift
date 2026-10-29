@@ -121,6 +121,62 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertTrue(grok.allSatisfy(\.isWarning))
     }
 
+    func testPassedResetBypassesMinimumIntervalOnceThenBoundedRetries() async throws {
+        let clock = GrokClock(), transport = GrokTransport()
+        let client = client(transport, clock)
+        let end = ISO8601DateFormatter().string(from: clock.read().addingTimeInterval(60))
+        await transport.respond(weekly: true, body: #"{"config":{"creditUsagePercent":100,"currentPeriod":{"end":"\#(end)"}}}"#)
+        _ = try await grok(client)
+        func x1() async -> Int { await transport.counts["x1"] ?? 0 }
+        var n = await x1(); XCTAssertEqual(n, 2)
+        clock.advance(59); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 2, "Before the reset the 5-minute cache still applies")
+        clock.advance(6); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 4, "Right after the reset: one fresh fetch")
+        clock.advance(1); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 4)
+        // The provider still echoes the passed reset: two spaced retries, then back to the normal interval.
+        clock.advance(29); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 6)
+        clock.advance(90); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 8)
+        clock.advance(100); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 8, "Retries are bounded")
+    }
+
+    func testTransientFailureRightAfterResetKeepsBoundedRetries() async throws {
+        let clock = GrokClock(), transport = GrokTransport()
+        let client = client(transport, clock)
+        let end = ISO8601DateFormatter().string(from: clock.read().addingTimeInterval(60))
+        await transport.respond(weekly: true, body: #"{"config":{"creditUsagePercent":100,"currentPeriod":{"end":"\#(end)"}}}"#)
+        _ = try await grok(client)
+        func x1() async -> Int { await transport.counts["x1"] ?? 0 }
+        await transport.respond(weekly: true, status: 500)
+        clock.advance(65); _ = await client.fetchSections()
+        var n = await x1(); XCTAssertEqual(n, 4, "Post-reset fetch (fails)")
+        await transport.respond(weekly: true, status: 200)
+        clock.advance(29); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 4)
+        clock.advance(1); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 6, "Retry 30 s later, not after the 5-minute cache")
+        clock.advance(90); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 8)
+        clock.advance(100); _ = await client.fetchSections()
+        n = await x1(); XCTAssertEqual(n, 8, "Still bounded")
+    }
+
+    func testPersistentFailureAfterResetStaysBounded() async throws {
+        let clock = GrokClock(), transport = GrokTransport()
+        let client = client(transport, clock)
+        let end = ISO8601DateFormatter().string(from: clock.read().addingTimeInterval(60))
+        await transport.respond(weekly: true, body: #"{"config":{"creditUsagePercent":100,"currentPeriod":{"end":"\#(end)"}}}"#)
+        _ = try await grok(client)
+        await transport.respond(weekly: true, status: 500)
+        for _ in 0..<12 { clock.advance(20); _ = await client.fetchSections() }
+        let n = await transport.counts["x1"] ?? 0
+        XCTAssertEqual(n, 8, "Initial + after-reset + 2 retries, then the normal 5-minute interval")
+    }
+
     func testMinimumIntervalConcurrentRefreshAndPerAccountRetryAfter() async throws {
         let clock = GrokClock(), transport = GrokTransport()
         let client = client(transport, clock)
