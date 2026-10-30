@@ -345,16 +345,14 @@ struct ServiceRowView: View {
                 if let five = row.five { valueLine(label: "5h", limit: five, outer: true) }
                 else if row.week != nil { notReported("5h") }
                 ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .five }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
-                if let week = row.week { valueLine(label: "週", limit: week, outer: row.five == nil) }
-                if row.five == nil && row.week == nil, let first = row.extras.first {
-                    valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
-                }
-                ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .week }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
-                ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .other }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
-                // Below: usage-based 週の詳細.
+                // One weekly row: the pace bar replaces the plain weekly line, right under 5h.
                 ForEach(Array(row.weeklyPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
                     WeeklyPaceBar(pace: pace).padding(.top, 3)
                 }
+                if row.five == nil && row.week == nil, let first = row.extras.first, ServiceRowModel.kind(first.title) != .week {
+                    valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
+                }
+                ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .other }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
                 if let message = row.emptyStateText {
                     Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

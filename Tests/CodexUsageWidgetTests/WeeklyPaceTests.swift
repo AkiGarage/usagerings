@@ -15,14 +15,14 @@ final class WeeklyPaceTests: XCTestCase {
         // 2 days into the week (5 days to reset) = 28.6% elapsed; 41% used -> +12.
         let p = WeeklyPace(label: "週", limit: weekly(left: 59, resetIn: 5 * 86_400), now: now)
         XCTAssertEqual(p.elapsedPercent!, 200.0 / 7, accuracy: 0.01)
-        XCTAssertEqual(p.paceText, "均等より+12%使いすぎ")
+        XCTAssertEqual(p.paceText, "均等より残り12%少ない")
         XCTAssertEqual(p.tone, .over)
     }
 
     func testSurplusBehindPace() {
         // 4 days in = 57.1% elapsed; 49% used -> -8.
         let p = WeeklyPace(label: "週", limit: weekly(left: 51, resetIn: 3 * 86_400), now: now)
-        XCTAssertEqual(p.paceText, "余裕 -8%")
+        XCTAssertEqual(p.paceText, "均等より残り8%多い")
         XCTAssertEqual(p.tone, .under)
     }
 
@@ -43,7 +43,7 @@ final class WeeklyPaceTests: XCTestCase {
         // 2.6 points ahead rounds to +3: text and colour agree.
         let left = 100 - (200.0 / 7 + 2.6)
         let p = WeeklyPace(label: "週", limit: weekly(left: left, resetIn: 5 * 86_400), now: now)
-        XCTAssertEqual(p.paceText, "均等より+3%使いすぎ")
+        XCTAssertEqual(p.paceText, "均等より残り3%少ない")
         XCTAssertEqual(p.tone, .over)
     }
 
@@ -54,7 +54,7 @@ final class WeeklyPaceTests: XCTestCase {
         let bar = CollapsedUsageBar.bars(for: snap, blockedPreview: nil).first { $0.provider == .codex }!
         let model = RingDetailCardModel.make(bar: bar, now: now)!
         XCTAssertEqual(model.paces.count, 1)
-        XCTAssertEqual(model.paces.first?.paceText, "均等より+12%使いすぎ")
+        XCTAssertEqual(model.paces.first?.paceText, "均等より残り12%少ない")
     }
 
     func testTodaySliceIsTheDayContainingNow() {
@@ -63,10 +63,14 @@ final class WeeklyPaceTests: XCTestCase {
         XCTAssertEqual(p.todayIndex, 2)
         XCTAssertEqual(p.todayRange!.lowerBound, 200.0 / 7, accuracy: 0.01)
         XCTAssertEqual(p.todayRange!.upperBound, 300.0 / 7, accuracy: 0.01)
-        XCTAssertEqual(p.todayText, "今日の目安：使用43%まで（あと 2%）")
-        XCTAssertTrue(p.footerText.hasSuffix("今日の目安：使用43%まで（あと 2%）"))
+        XCTAssertEqual(p.todayText, "今日の目安：残り57%まで（あと 2%）")
+        XCTAssertTrue(p.footerText.hasSuffix("今日の目安：残り57%まで（あと 2%）"))
         XCTAssertTrue(p.rangeText.hasPrefix("今の期間："))
         XCTAssertFalse(p.todayOver)
+        XCTAssertEqual(p.leftInt, 59)
+        XCTAssertEqual(p.leftTodayRange!.lowerBound, 400.0 / 7, accuracy: 0.01)
+        XCTAssertEqual(p.leftTodayRange!.upperBound, 500.0 / 7, accuracy: 0.01)
+        XCTAssertEqual(p.evenLeftPercent!, 100 - p.elapsedPercent!, accuracy: 0.001)
     }
 
     func testGeminiAppWindowsAreLabelledByWindow() {
@@ -81,9 +85,9 @@ final class WeeklyPaceTests: XCTestCase {
         let b = WeeklyPace(label: "週", limit: weekly(left: 62, resetIn: reset - 600), now: now.addingTimeInterval(600))
         let c = WeeklyPace(label: "週", limit: weekly(left: 50, resetIn: reset - 1200), now: now.addingTimeInterval(1200))
         XCTAssertEqual([a.todayTarget, b.todayTarget, c.todayTarget], [43, 43, 43])
-        XCTAssertEqual(a.todayText, "今日の目安：使用43%まで（あと 13%）")
-        XCTAssertEqual(b.todayText, "今日の目安：使用43%まで（あと 5%）")
-        XCTAssertEqual(c.todayText, "今日の目安：使用43%まで（7% 超過）")
+        XCTAssertEqual(a.todayText, "今日の目安：残り57%まで（あと 13%）")
+        XCTAssertEqual(b.todayText, "今日の目安：残り57%まで（あと 5%）")
+        XCTAssertEqual(c.todayText, "今日の目安：残り57%まで（7% 超過）")
         XCTAssertTrue(c.todayOver)
         XCTAssertFalse(a.todayOver)
     }
@@ -152,7 +156,6 @@ final class WeeklyPaceTests: XCTestCase {
             let bar = try XCTUnwrap(bars.first { $0.id.hasPrefix(prefix) }, prefix)
             let m = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: now))
             XCTAssertEqual(m.orderedRows(.five).count, 1, prefix)
-            XCTAssertEqual(m.orderedRows(.week).count, 1, prefix)
             XCTAssertEqual(m.paces.count, 1, prefix)
             XCTAssertEqual(m.paces.first?.label, "週の枠", prefix)
         }
