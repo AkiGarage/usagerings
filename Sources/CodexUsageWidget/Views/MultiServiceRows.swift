@@ -44,12 +44,18 @@ struct ServiceRowModel: Identifiable {
     /// 5h detail bars (first) then weekly ones, for 詳細 mode.
     func detailPaces(now: Date) -> [WeeklyPace] {
         let fives = ([five].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .five })
-        return fives.map { WeeklyPace(label: fives.count == 1 ? "5時間枠" : "5h " + ServiceRowModel.shortLabel($0.title), limit: $0, now: now, period: WeeklyPace.fiveHours) }
+        return fives.map { WeeklyPace(label: fives.count == 1 ? "5時間枠" : Self.multiLabel("5h", $0.title), limit: $0, now: now, period: WeeklyPace.fiveHours) }
             + weeklyPaces(now: now)
     }
     func weeklyPaces(now: Date) -> [WeeklyPace] {
         let weekly = ([week].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .week })
-        return weekly.map { WeeklyPace(label: weekly.count == 1 ? "週の枠" : "週 " + ServiceRowModel.shortLabel($0.title), limit: $0, now: now) }
+        return weekly.map { WeeklyPace(label: weekly.count == 1 ? "週の枠" : Self.multiLabel("週", $0.title), limit: $0, now: now) }
+    }
+    /// Label for one of several windows of a kind; avoids 「5h 5h」 when the short label already names the kind.
+    static func multiLabel(_ kind: String, _ title: String) -> String {
+        let short = ServiceRowModel.shortLabel(title)
+        if !short.hasPrefix(kind) { return kind + " " + short }
+        return short == kind ? title : short
     }
 
     enum Kind { case five, week, other }
