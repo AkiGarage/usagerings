@@ -116,6 +116,8 @@ struct RingDetailCardModel: Equatable {
     struct Row: Equatable {
         let label: String
         let leftPercent: Double
+        /// Window kind, for ordering (5h on top, then the weekly pace bars, then the rest).
+        var kind: ServiceRowModel.Kind = .other
         var severity: RingCardSeverity { RingCardSeverity.of(leftPercent: leftPercent) }
         var percentText: String { "残り \(Int(leftPercent.rounded()))%" }
     }
@@ -167,6 +169,8 @@ struct RingDetailCardModel: Equatable {
     var failureText: String? = nil
     var paces: [WeeklyPace] = []
 
+    func orderedRows(_ kind: ServiceRowModel.Kind) -> [Row] { rows.filter { $0.kind == kind } }
+
     static func visibleStats(for bar: CollapsedUsageBar) -> [ProviderStat] {
         switch bar.provider {
         case .minimax, .kimi, .deepseek:
@@ -189,7 +193,7 @@ struct RingDetailCardModel: Equatable {
             }
             return RingCardLabel.label(for: window.title)
         }
-        let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent) }
+        let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent, kind: ServiceRowModel.kind($0.title)) }
         let codexExtras = bar.id == "codex" || bar.id.hasPrefix("codex-") ? bar.codexExtras : nil
         let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now)
         let hasExtras = codexExtras?.creditsText != nil || codexExtras?.availableCount != nil || !tickets.isEmpty
@@ -384,25 +388,16 @@ struct RingDetailCardView: View {
                     .font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
             }
-            ForEach(Array(model.rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 6) {
-                    Text(row.label).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 6)
-                    Text(row.percentText).font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                    GeometryReader { proxy in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.primary.opacity(0.12))
-                            Capsule().fill(color(for: row.severity))
-                                .frame(width: max(2, proxy.size.width * row.leftPercent / 100))
-                        }
-                    }
-                    .frame(width: 52, height: 4)
-                }
-            }
+            // 5時間枠 first, then one weekly row (the pace bar replaces the plain weekly row), then the rest.
+            ForEach(Array(model.orderedRows(.five).enumerated()), id: \.offset) { _, row in detailRow(row) }
             if !model.paces.isEmpty {
                 Divider().opacity(0.35)
                 ForEach(Array(model.paces.enumerated()), id: \.offset) { _, pace in WeeklyPaceBar(pace: pace, compact: true) }
+                Divider().opacity(0.35)
+            } else {
+                ForEach(Array(model.orderedRows(.week).enumerated()), id: \.offset) { _, row in detailRow(row) }
             }
+            ForEach(Array(model.orderedRows(.other).enumerated()), id: \.offset) { _, row in detailRow(row) }
             if let failure = model.ticketFailureText {
                 Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -453,6 +448,22 @@ struct RingDetailCardView: View {
             Text(value).lineLimit(1).minimumScaleFactor(0.75)
         }
         .font(.system(size: 10))
+    }
+
+    @ViewBuilder private func detailRow(_ row: RingDetailCardModel.Row) -> some View {
+        HStack(spacing: 6) {
+            Text(row.label).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 6)
+            Text(row.percentText).font(.system(size: 11, weight: .semibold)).monospacedDigit()
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.12))
+                    Capsule().fill(color(for: row.severity))
+                        .frame(width: max(2, proxy.size.width * row.leftPercent / 100))
+                }
+            }
+            .frame(width: 52, height: 4)
+        }
     }
 
     private func color(for severity: RingCardSeverity) -> Color {

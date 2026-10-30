@@ -148,4 +148,45 @@ final class WeeklyPaceTests: XCTestCase {
         }
         }
     }
+
+    func testDetailCardShowsOneWeeklyRowUnderFiveHour() throws {
+        let snap = UsageRingsDemoFixture.snapshot(now: now)
+        let bars = CollapsedUsageBar.bars(for: snap, blockedPreview: nil)
+        for prefix in ["codex", "claude", "gemini"] {
+            let bar = try XCTUnwrap(bars.first { $0.id.hasPrefix(prefix) }, prefix)
+            let m = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: now))
+            XCTAssertEqual(m.orderedRows(.five).count, 1, prefix)
+            XCTAssertEqual(m.paces.count, 1, prefix)
+            XCTAssertEqual(m.paces.first?.label, "週の枠", prefix)
+        }
+    }
+
+    @MainActor
+    func testWriteCardPreviews() throws {
+        guard let dir = ProcessInfo.processInfo.environment["PACE_SHOTS_DIR"] else { return }
+        let snap = UsageRingsDemoFixture.snapshot(now: now)
+        let bars = CollapsedUsageBar.bars(for: snap, blockedPreview: nil)
+        for prefix in ["claude", "codex", "gemini"] {
+            let bar = try XCTUnwrap(bars.first { $0.id.hasPrefix(prefix) })
+            let m = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: now))
+            for dark in [true, false] {
+                let view = RingDetailCardView(model: m).padding(14)
+                    .background(dark ? Color(white: 0.12) : .white)
+                    .environment(\.colorScheme, dark ? .dark : .light)
+                let host = NSHostingView(rootView: view)
+                let size = host.fittingSize
+                let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                window.contentView = host
+                host.frame = CGRect(origin: .zero, size: size)
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 3), pixelsHigh: Int(size.height * 3),
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                bitmap.size = size
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: URL(fileURLWithPath: dir).appendingPathComponent("card-\(prefix)-\(dark ? "dark" : "light").png"))
+            }
+        }
+    }
 }
