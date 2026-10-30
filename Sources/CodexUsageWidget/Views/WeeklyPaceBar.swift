@@ -28,6 +28,21 @@ struct WeeklyPace: Equatable {
         }
     }
 
+    /// Day of the window that contains now (0...6): the 24h slices start at the last reset, not at midnight.
+    var todayIndex: Int? {
+        guard let e = elapsedPercent else { return nil }
+        let i = Int(floor(e * 7 / 100 + 1e-9))
+        return min(max(i, 0), 6)
+    }
+    /// Today's even-pace allowance as a share of the week: expected use at the start and at the end of today.
+    var todayRange: ClosedRange<Double>? {
+        todayIndex.map { Double($0) * 100 / 7 ... Double($0 + 1) * 100 / 7 }
+    }
+    var todayText: String? {
+        guard let i = todayIndex, let r = todayRange else { return nil }
+        return "今日の枠 \(Int(r.lowerBound.rounded()))〜\(Int(r.upperBound.rounded()))%（\(i + 1)/7日目）"
+    }
+
     /// used - even share, in percentage points; positive means ahead of pace.
     var delta: Int? { elapsedPercent.map { Int((usedPercent - $0).rounded()) } }
 
@@ -50,6 +65,8 @@ struct WeeklyPace: Equatable {
         return String(format: "%d/%d %02d:%02d", c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0)
     }
     var rangeText: String { start == nil ? (unknownReason ?? "リセット 不明") : "\(Self.day(start)) → \(Self.day(reset))" }
+    /// Bottom line: reset range plus today's allowance when known.
+    var footerText: String { todayText.map { "\(rangeText) ・ \($0)" } ?? rangeText }
 
     /// Every weekly window of a list.
     static func all(_ windows: [UsageLimit], now: Date, label: (UsageLimit) -> String) -> [WeeklyPace] {
@@ -61,6 +78,9 @@ struct WeeklyPace: Equatable {
 struct WeeklyPaceBar: View {
     let pace: WeeklyPace
     var compact = false
+
+    /// Fixed blue: never the warning orange, independent of the system accent colour.
+    static let todayColor = Color(red: 0.16, green: 0.47, blue: 0.96)
 
     private var fill: Color {
         switch pace.tone {
@@ -81,25 +101,48 @@ struct WeeklyPaceBar: View {
             }
             GeometryReader { proxy in
                 let w = proxy.size.width
+                let h = proxy.size.height
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.10))
+                  ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+                    if let r = pace.todayRange {
+                        // Today's slice of an even spend: where today's use should land.
+                        Rectangle().fill(Self.todayColor.opacity(0.28))
+                            .frame(width: w * (r.upperBound - r.lowerBound) / 100, height: h)
+                            .offset(x: w * r.lowerBound / 100)
+                    }
                     if let e = pace.elapsedPercent {
                         // Even-pace region: what an even spend would have used by now.
                         Capsule().fill(Color.primary.opacity(0.10)).frame(width: max(2, w * e / 100))
                     }
                     Capsule().fill(fill.opacity(0.85)).frame(width: max(2, w * pace.usedPercent / 100))
+                    if pace.todayRange != nil {
+                        // Faint day dividers: the week split into 7 equal days from the last reset.
+                        ForEach(1..<7, id: \.self) { k in
+                            Rectangle().fill(Color.primary.opacity(0.30))
+                                .frame(width: 1, height: h)
+                                .offset(x: w * Double(k) / 7 - 0.5)
+                        }
+                    }
+                    if let r = pace.todayRange {
+                        Rectangle().strokeBorder(Self.todayColor.opacity(0.75), lineWidth: 1)
+                            .frame(width: w * (r.upperBound - r.lowerBound) / 100, height: h)
+                            .offset(x: w * r.lowerBound / 100)
+                    }
+                  }
+                  .clipShape(Capsule())
                     if let e = pace.elapsedPercent {
                         Rectangle().fill(Color.primary.opacity(0.85))
-                            .frame(width: 1.5, height: proxy.size.height + 4)
+                            .frame(width: 1.5, height: h + 4)
                             .offset(x: min(max(w * e / 100 - 0.75, 0), w - 1.5), y: 0)
                     }
                 }
             }
-            .frame(height: compact ? 5 : 6)
-            Text(pace.rangeText).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1)
+            .frame(height: compact ? 8 : 9)
+            Text(pace.footerText).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
         }
         .font(.system(size: compact ? 10 : 11))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(pace.label) 使用 \(Int(pace.usedPercent.rounded()))%、\(pace.paceText)、\(pace.rangeText)")
+        .accessibilityLabel("\(pace.label) 使用 \(Int(pace.usedPercent.rounded()))%、\(pace.paceText)、\(pace.footerText)")
     }
 }
