@@ -202,8 +202,10 @@ struct RingDetailCardModel: Equatable {
         }
         let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent, kind: ServiceRowModel.kind($0.title)) }
         let codexExtras = bar.id == "codex" || bar.id.hasPrefix("codex-") ? bar.codexExtras : nil
-        // Codex: only the 「リセットチケット 利用可能 N件」 count; no per-ticket 完全リセット/使用可/期限 lines (Aki t1655u).
-        let tickets: [TicketRow] = []
+        // Codex: keep each ticket's 期限 line but drop the 完全リセット title and 使用可 label (Aki t1655u, t1660u).
+        let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now).map {
+            TicketRow(id: $0.id, title: nil, status: $0.status, expiresText: $0.expiresText, isGreyedOut: $0.isGreyedOut)
+        }.filter { $0.statusText != nil || $0.expiresText != nil }  // a title-only row would be blank now
         let hasExtras = codexExtras?.creditsText != nil || codexExtras?.availableCount != nil || !tickets.isEmpty
         var extras = hasExtras
             ? Extras(creditsText: codexExtras?.creditsText, availableCount: codexExtras?.availableCount,
@@ -220,9 +222,11 @@ struct RingDetailCardModel: Equatable {
                         ? $0.offset < $1.offset : $0.element.expiresAt < $1.element.expiresAt
                 }
                 let ticketRows = sorted.map { index, ticket in
-                    TicketRow(id: index, title: ticket.title,
+                    // One line per ticket: 「期限 12/23 00:59 JST（5時間リセット）」 (Aki t1660u).
+                    TicketRow(id: index, title: nil,
                               status: ticket.expiresAt <= now ? "expired" : (ticket.available ? "available" : "使用不可"),
-                              expiresText: "期限 \(UsageDurationFormat.timestamp(ticket.expiresAt, now: now, calendar: RingResetFormat.tokyoCalendar)) JST",
+                              expiresText: "期限 \(UsageDurationFormat.timestamp(ticket.expiresAt, now: now, calendar: RingResetFormat.tokyoCalendar)) JST"
+                                  + (ticket.title.isEmpty ? "" : "（\(ticket.title)）"),
                               isGreyedOut: !ticket.available || ticket.expiresAt <= now)
                 }
                 extras = Extras(creditsText: nil,

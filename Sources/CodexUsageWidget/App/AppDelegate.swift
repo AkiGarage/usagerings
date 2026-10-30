@@ -64,6 +64,8 @@ final class NanoUpdateController {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    /// Right-click menu item; no （開いている Chrome タブから） suffix (Aki t1661u).
+    nonisolated static let geminiReadingMenuTitle = "Gemini の使用量を読む"
     private let persona: any AppPersona
     private let demoMode: DemoMode
     private let defaults: UserDefaults
@@ -439,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             menu.addItem(view)
             if let multi = persona as? MultiProviderPersona, let on = multi.geminiReadingEnabled {
                 // Only this explicit click may show the macOS Automation dialog (once).
-                let gemini = NSMenuItem(title: "Gemini の使用量を読む（開いている Chrome タブから）",
+                let gemini = NSMenuItem(title: Self.geminiReadingMenuTitle,
                                         action: #selector(toggleGeminiReading), keyEquivalent: "")
                 gemini.target = self
                 gemini.state = on ? .on : .off

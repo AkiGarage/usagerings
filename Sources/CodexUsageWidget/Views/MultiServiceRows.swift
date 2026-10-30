@@ -14,6 +14,8 @@ struct ServiceRowModel: Identifiable {
     var tickets: [String] = []
     var ticketCount: Int?
     var ticketExpiries: [Date] = []
+    /// Ticket type per expiry (Z.ai, e.g. 5時間リセット), same order as ticketExpiries; empty when unknown.
+    var ticketTitles: [String] = []
     /// Same quota lock as the tab ring (CollapsedUsageBar.quotaBlock); nil = not rate-limited.
     var block: ClaudeBlock?
     var isBlocked: Bool { block?.isActive(at: Date()) == true }
@@ -229,9 +231,11 @@ struct ServiceRowModel: Identifiable {
         // Z.ai tickets carry real expiries: list usable ones vertically like Codex.
         if rows[0].ticketExpiries.isEmpty, case let .loaded(tickets)? = section.zaiResetTickets {
             let now = Date()
-            rows[0].ticketExpiries = tickets.filter { $0.available && $0.expiresAt > now }.map(\.expiresAt)
+            let usable = tickets.filter { $0.available && $0.expiresAt > now }.sorted { $0.expiresAt < $1.expiresAt }
+            rows[0].ticketExpiries = usable.map(\.expiresAt)
+            rows[0].ticketTitles = usable.map(\.title)
         }
-        rows[0].ticketExpiries.sort()
+        if rows[0].ticketTitles.isEmpty { rows[0].ticketExpiries.sort() }
         rows[0].failureText = section.failureText
         if section.isStale || (section.accounts.count == 1 && section.accounts[0].isStale) {
             for i in rows.indices {
@@ -433,7 +437,7 @@ struct ServiceRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !row.ticketExpiries.isEmpty {
-                    TicketList(expiries: row.ticketExpiries)
+                    TicketList(expiries: row.ticketExpiries, titles: row.ticketTitles)
                         .padding(.top, 4)
                         .help(row.tickets.joined(separator: "\n"))
                 } else if let line = row.ticketLine(withTimes: true) {
@@ -510,6 +514,11 @@ struct ServiceRowView: View {
 /// One calm rounded row per usable reset ticket: 「リセット 1」 … 「10/23 05:56 · あと2日」 (JST, sorted).
 struct TicketList: View {
     let expiries: [Date]
+    var titles: [String] = []
+    /// Row label: the ticket type when known (Z.ai), else 「リセット N」.
+    static func label(index: Int, titles: [String]) -> String {
+        index < titles.count && !titles[index].isEmpty ? titles[index] : "リセット \(index + 1)"
+    }
     var now: Date = Date()
 
     static func relative(_ date: Date, now: Date) -> String {
@@ -532,7 +541,7 @@ struct TicketList: View {
         VStack(spacing: 4) {
             ForEach(Array(expiries.enumerated()), id: \.offset) { index, date in
                 HStack(spacing: 6) {
-                    Text("リセット \(index + 1)").foregroundStyle(.secondary)
+                    Text(Self.label(index: index, titles: titles)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 8)
                     Text(Self.stamp(date)).foregroundStyle(.secondary).monospacedDigit()
                     Text("·").foregroundStyle(.tertiary)

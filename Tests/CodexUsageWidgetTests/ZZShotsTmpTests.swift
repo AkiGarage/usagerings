@@ -20,7 +20,16 @@ final class ZZShotsTmpTests: XCTestCase {
             l.accountIndex = a; return l
         }
         let snap = MultiUsageSnapshot(sections: [
-            ProviderSection(provider: .codex, windows: [w("5h", 78, 3), w("Weekly", 49, 60)], stats: [], failureText: nil),
+            { () -> ProviderSection in  // v5: Codex with one real ticket (t1660u)
+                let exp = now.addingTimeInterval(86_400 * 8)
+                var s = ProviderSection(provider: .codex, windows: [w("5h", 78, 3), w("Weekly", 49, 60)],
+                                        stats: [ProviderStat(title: "Reset tickets", valueText: "1 available"),
+                                                ProviderStat(title: "Reset ticket expiry", valueText: ISO8601DateFormatter().string(from: exp))],
+                                        failureText: nil)
+                s.codexExtras = CodexExtrasParser.Extras(creditsText: nil, availableCount: 1, ticketExpiries: [exp], tickets: [
+                    CodexExtrasParser.Ticket(title: "完全リセット", status: "available", resetType: nil, grantedAt: nil, expiresAt: exp)])
+                return s
+            }(),
             ProviderSection(provider: .claude, windows: [w("Account A · 5h", 62, 2, 0), w("Account A · Weekly", 40, 90, 0),
                 w("Account B · 5h", 0, 4, 1), w("Account B · Weekly", 18, 30, 1)], stats: [], failureText: nil),
             ProviderSection(provider: .antigravity, windows: [w("Gemini 4 Argon · 5h", 0, 2), w("Gemini Models · Weekly", 76, 50)], stats: [], failureText: nil),

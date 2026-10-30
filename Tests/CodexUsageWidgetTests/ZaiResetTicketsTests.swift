@@ -28,7 +28,11 @@ final class ZaiResetTicketsTests: XCTestCase {
         let extras = try XCTUnwrap(model.extras)
         XCTAssertEqual(extras.availableCount, 2)
         // Aki t1655u: expired tickets are hidden and valid ones carry no 使用可 label.
-        XCTAssertEqual(extras.tickets.map(\.title), ["週リセット", "5時間リセット", "5時間リセット"])
+        // Aki t1660u: one line each — the type rides in parentheses after the expiry.
+        XCTAssertEqual(extras.tickets.map(\.title), [nil, nil, nil])
+        XCTAssertEqual(extras.tickets.map { $0.expiresText?.hasSuffix("）") }, [true, true, true])
+        XCTAssertTrue(extras.tickets[0].expiresText?.hasSuffix("JST（週リセット）") == true)
+        XCTAssertTrue(extras.tickets[1].expiresText?.hasSuffix("JST（5時間リセット）") == true)
         XCTAssertEqual(extras.tickets.map(\.statusText), [nil, "使用不可", nil])
         XCTAssertEqual(extras.tickets.map(\.isGreyedOut), [false, true, false])
         XCTAssertFalse(extras.tickets.contains { $0.statusText == "期限切れ" || $0.statusText == "使用可" })
@@ -66,7 +70,7 @@ final class ZaiResetTicketsTests: XCTestCase {
         let model = try XCTUnwrap(card(.loaded(tickets)))
         XCTAssertEqual(model.extras?.availableCount, 1)
         let texts = model.extras?.tickets.compactMap(\.expiresText) ?? []
-        XCTAssertTrue(texts.contains("期限 10/28 21:13 JST"), "\(texts)")
+        XCTAssertTrue(texts.contains("期限 10/28 21:13 JST（5時間リセット）"), "\(texts)")
         XCTAssertFalse(texts.contains { $0.contains("時帯未確認") })
     }
 

@@ -36,7 +36,26 @@ final class HideTicketsAndBlockedBarTests: XCTestCase {
                                     limit: nil, windows: [], codexExtras: extras)
         let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: now))
         XCTAssertEqual(model.extras?.availableCount, 3)
-        XCTAssertEqual(model.extras?.tickets.count, 0)
+        // t1660u: the expiry line is back, no 完全リセット title, no 使用可.
+        XCTAssertEqual(model.extras?.tickets.count, 1)
+        XCTAssertNil(model.extras?.tickets.first?.title)
+        XCTAssertNil(model.extras?.tickets.first?.statusText)
+        XCTAssertTrue(model.extras?.tickets.first?.expiresText?.hasPrefix("期限 ") == true)
+        XCTAssertTrue(model.extras?.tickets.first?.expiresText?.hasSuffix(" JST") == true)
+    }
+
+    func testZaiWindowTicketLabelIsTicketTypeOnOneLine() {
+        let section = ProviderSection(provider: .zai, windows: [], stats: [], zaiResetTickets: .loaded([
+            .init(title: "週リセット", available: true, expiresAt: Date().addingTimeInterval(7_200)),
+            .init(title: "5時間リセット", available: true, expiresAt: Date().addingTimeInterval(3_600)),
+            .init(title: "5時間リセット", available: true, expiresAt: Date().addingTimeInterval(-60)),
+        ]))
+        let row = ServiceRowModel.rows(for: section)[0]
+        XCTAssertEqual(row.ticketTitles, ["5時間リセット", "週リセット"], "sorted with expiries, expired hidden")
+        XCTAssertEqual(row.ticketExpiries.count, 2)
+        XCTAssertTrue(row.ticketExpiries[0] < row.ticketExpiries[1])
+        XCTAssertEqual(TicketList.label(index: 0, titles: row.ticketTitles), "5時間リセット")
+        XCTAssertEqual(TicketList.label(index: 1, titles: []), "リセット 2", "Codex keeps its numbered label")
     }
 
     func testZaiWindowListsOnlyUnexpiredUsableTickets() {
@@ -79,5 +98,9 @@ final class HideTicketsAndBlockedBarTests: XCTestCase {
         row.block = ClaudeBlock(kind: .session, resetAt: Date().addingTimeInterval(7200), timeZoneKnown: true)
         let locked = try XCTUnwrap(ImageRenderer(content: G1Gauge(row: row, size: 60)).nsImage?.tiffRepresentation)
         XCTAssertNotEqual(open, locked, "lock icon + unlock lines must change the ring")
+    }
+
+    func testGeminiMenuTitleHasNoChromeTabSuffix() {
+        XCTAssertEqual(AppDelegate.geminiReadingMenuTitle, "Gemini の使用量を読む")
     }
 }

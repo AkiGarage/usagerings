@@ -122,7 +122,10 @@ final class RingDetailCardTests: XCTestCase {
         XCTAssertEqual(model.resetLabel, "週の枠")
         XCTAssertEqual(model.extras?.creditsText, extras.creditsText)
         XCTAssertEqual(model.extras?.availableCount, 2)
-        XCTAssertEqual(model.extras?.tickets, [])  // Aki t1655u: count only
+        // Aki t1660u: 期限 lines are back, without the 完全リセット title or 使用可 label.
+        XCTAssertEqual(model.extras?.tickets.map(\.expiresText), ["期限 10/22 12:00 JST", "期限 10/23 12:00 JST"])
+        XCTAssertEqual(model.extras?.tickets.map(\.title), [nil, nil])
+        XCTAssertEqual(model.extras?.tickets.map(\.statusText), [nil, nil])
 
         if let path = ProcessInfo.processInfo.environment["CODEX_HOVER_PNG"] {
             let renderer = ImageRenderer(content: RingDetailCardView(model: model)
@@ -240,8 +243,10 @@ final class RingDetailCardTests: XCTestCase {
         let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: noonJST))
         XCTAssertEqual(model.extras?.creditsText, "61,003 credits")
         XCTAssertEqual(model.extras?.availableCount, 2)
-        // Aki t1655u: Codex hover keeps only 「リセットチケット 利用可能 N件」; no 完全リセット / 使用可 · 期限 rows.
-        XCTAssertEqual(model.extras?.tickets, [])
+        // Aki t1660u: expiry order kept, titles dropped, rows with nothing left to show are removed.
+        XCTAssertEqual(model.extras?.tickets.map(\.id), [6, 3, 2, 4, 1, 7])
+        XCTAssertTrue(model.extras?.tickets.allSatisfy { $0.title == nil } == true)
+        XCTAssertFalse(model.extras?.tickets.contains { $0.statusText == "使用可" } == true)
     }
 
     // MARK: - CollapsedUsageBar windows plumbing
