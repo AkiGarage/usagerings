@@ -149,6 +149,7 @@ struct PanelSettingsView: View {
     @AppStorage(ClaudeSSHSettings.hostKey) private var host = ""
     @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
     @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
+    @State private var showsAcknowledgements = false
 
     var body: some View {
         ScrollView {
@@ -174,6 +175,8 @@ struct PanelSettingsView: View {
             Divider()
             AccountSettingsView(snapshot: snapshot, preferences: preferences)
             Divider()
+            ClaudeCLIAccountsSettingsView()
+            Divider()
             Toggle("Read remote Claude B limits over SSH", isOn: $enabled)
             TextField("SSH host or user@host", text: $host)
                 .textFieldStyle(.roundedBorder)
@@ -186,6 +189,9 @@ struct PanelSettingsView: View {
             }
             Text("SSH changes apply on the next refresh.")
                 .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Button("謝辞・ライセンス（Acknowledgements）") { showsAcknowledgements = true }
+                .sheet(isPresented: $showsAcknowledgements) { AcknowledgementsView() }
         }
         .padding(16)
         }

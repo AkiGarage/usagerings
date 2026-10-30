@@ -2,56 +2,104 @@ import XCTest
 @testable import CodexUsageWidget
 
 final class ClaudeCLIUsageTests: XCTestCase {
-    private static let okJSON = Data("""
-    [{"provider":"claude","source":"claude","usage":{"primary":{"usedPercent":30,"windowMinutes":300,"resetsAt":"2026-10-30T07:50:00Z"},"secondary":{"usedPercent":72,"windowMinutes":10080,"resetsAt":"2026-11-02T00:00:00Z"}}}]
-    """.utf8)
+    private static func json(_ five: Int, _ week: Int) -> Data {
+        Data("""
+        [{"provider":"claude","source":"claude","usage":{"primary":{"usedPercent":\(five),"windowMinutes":300,"resetsAt":"2026-10-30T07:50:00Z"},"secondary":{"usedPercent":\(week),"windowMinutes":10080,"resetsAt":"2026-11-02T00:00:00Z"}}}]
+        """.utf8)
+    }
+    private let salt = Data(repeating: 7, count: 32)
+    private let a = ClaudeCLIAccount(label: "A", configDir: "/h/.claude-a")
+    private let b = ClaudeCLIAccount(label: "B", configDir: "/h/.claude-b")
 
-    private func result(_ data: Data, status: Int32 = 0) -> CodexUsageService.CommandResult {
-        CodexUsageService.CommandResult(terminationStatus: status, stdout: data, stderr: Data())
+    private func cli(_ calls: CallLog, failB: Bool = false) -> ClaudeCLIUsage {
+        ClaudeCLIUsage(runner: { args, env in
+            calls.append(args, env)
+            let dir = env?["CLAUDE_CONFIG_DIR"]
+            if failB, dir == "/h/.claude-b" {
+                return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data())
+            }
+            return CodexUsageService.CommandResult(terminationStatus: 0,
+                stdout: dir == "/h/.claude-b" ? Self.json(0, 0) : Self.json(30, 72), stderr: Data())
+        })
     }
 
-    func testUsesCLISourceArgumentsAndLabelsSource() async {
-        let seen = OSAllocatedUnfairLockBox()
-        let cli = ClaudeCLIUsage(runner: { args in seen.set(args); return self.result(Self.okJSON) })
+    func testFetchesEachConfigDirSequentiallyWithEnvAndCLISource() async {
+        let calls = CallLog()
+        let usage = cli(calls)
         let t0 = Date()
-        XCTAssertNil(cli.section(now: t0, timeZone: .current), "first call must not wait")
-        var section = cli.section(now: Date(), timeZone: .current)
-        for _ in 0..<100 where section == nil {  // background refresh started by the first call
-            try? await Task.sleep(for: .milliseconds(20))
-            section = cli.section(now: Date(), timeZone: .current)
-        }
-        XCTAssertEqual(section?.fromCache, false)
-        XCTAssertEqual(seen.get(), ["usage", "--provider", "claude", "--source", "cli", "--format", "json"])
-        XCTAssertFalse(seen.get().contains("web"))
-        let merged = ClaudeCLIUsage.merge(cli: section, proxy: nil)
-        XCTAssertEqual(merged?.windows.count, 2)
-        XCTAssertEqual(merged?.stats.last, ProviderStat(title: "取得元", valueText: "CodexBar CLI"))
+        XCTAssertNil(usage.section(accounts: [a, b], now: t0, timeZone: .current, salt: salt), "never waits")
+        for _ in 0..<200 where calls.count < 2 { try? await Task.sleep(for: .milliseconds(10)) }
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(calls.envs, ["/h/.claude-a", "/h/.claude-b"])
+        XCTAssertTrue(calls.args.allSatisfy { $0 == ClaudeCLIUsage.arguments })
+        XCTAssertEqual(calls.maxConcurrent, 1)
+
+        let section = usage.section(accounts: [a, b], now: t0, timeZone: .current, salt: salt)!.section
+        XCTAssertEqual(section.accountIndices, [0, 1])
+        XCTAssertEqual(section.forAccount(0).windows.map(\.leftPercent), [70, 28])
+        XCTAssertEqual(section.forAccount(1).windows.map(\.leftPercent), [100, 100])
+        XCTAssertEqual(section.accounts.map(\.id), [a.accountID(salt: salt), b.accountID(salt: salt)])
+        XCTAssertNotEqual(a.accountID(salt: salt), b.accountID(salt: salt))
+        XCTAssertTrue(section.forAccount(1).stats.contains { $0.valueText.hasPrefix("CodexBar CLI · B") })
     }
 
-    func testFallsBackToProxyWhenCLIFails() async {
-        let cli = ClaudeCLIUsage(runner: { _ in self.result(Data("[]".utf8), status: 1) })
-        _ = await cli.refreshNow(now: Date(), timeZone: .current)
-        let section = cli.section(now: Date(), timeZone: .current)
-        XCTAssertNil(section)
+    func testOneFailingAccountKeepsTheOtherAndProxyStaysFallback() async {
+        let usage = cli(CallLog(), failB: true)
+        await usage.refreshNow([a, b], timeZone: .current)
+        let result = usage.section(accounts: [a, b], now: Date(), timeZone: .current, salt: salt)
+        XCTAssertEqual(result?.section.forAccount(0).windows.count, 2)
+        XCTAssertEqual(result?.section.forAccount(1).failureText?.hasPrefix("取得失敗"), true)
+
+        let none = ClaudeCLIUsage(runner: { _, _ in .init(terminationStatus: 1, stdout: Data(), stderr: Data()) })
+        await none.refreshNow([a], timeZone: .current)
         let proxy = ProviderSection(provider: .claude, windows: [], stats: [], failureText: "x")
-        XCTAssertEqual(ClaudeCLIUsage.merge(cli: section, proxy: proxy)?.stats.last?.valueText, "CLIProxyAPI（予備）")
+        XCTAssertNil(none.section(accounts: [a], now: Date(), timeZone: .current, salt: salt))
+        XCTAssertEqual(ClaudeCLIUsage.merge(cli: nil, proxy: proxy)?.stats.last?.valueText, "CLIProxyAPI（予備）")
     }
 
-    func testCachedValueReturnedWithoutWaitingAndMarkedStale() async {
-        let calls = OSAllocatedUnfairLockBox()
-        let cli = ClaudeCLIUsage(runner: { args in calls.set(args); return self.result(Self.okJSON) }, refreshInterval: 60)
-        let t0 = Date()
-        _ = await cli.refreshNow(now: t0, timeZone: .current)
-        let later = cli.section(now: t0.addingTimeInterval(120), timeZone: .current)
-        XCTAssertEqual(later?.fromCache, true)
-        XCTAssertNil(cli.section(now: t0.addingTimeInterval(700), timeZone: .current), "old cache falls back to proxy")
-        XCTAssertEqual(ClaudeCLIUsage.merge(cli: later, proxy: nil)?.stats.last?.valueText, "CodexBar CLI（前回値）")
+    func testOldCacheExpiresToProxy() async {
+        let usage = cli(CallLog())
+        await usage.refreshNow([a], timeZone: .current)
+        let later = Date().addingTimeInterval(700)
+        XCTAssertNil(usage.section(accounts: [a], now: later, timeZone: .current, salt: salt))
+    }
+
+    func testDefaultAccountHasNoEnvOverride() async {
+        let calls = CallLog()
+        let usage = cli(calls)
+        await usage.refreshNow([ClaudeCLIAccount(label: "Claude", configDir: nil)], timeZone: .current)
+        XCTAssertEqual(calls.rawEnvs.count, 1)
+        XCTAssertEqual(calls.rawEnvs[0], ["CLAUDE_CONFIG_DIR": ""])  // blank = strip inherited value
+    }
+
+    func testDetectionAndParsing() {
+        XCTAssertEqual(ClaudeCLIAccountSettings.detected(home: "/h", isDirectory: { _ in false }),
+                       [ClaudeCLIAccount(label: "Claude", configDir: nil)])
+        XCTAssertEqual(ClaudeCLIAccountSettings.detected(home: "/h", isDirectory: { _ in true }).map(\.label), ["A", "B"])
+        XCTAssertEqual(ClaudeCLIAccountSettings.detected(home: "/h", isDirectory: { $0.hasSuffix("-b") }).map(\.configDir), ["/h/.claude-b"])
+        let parsed = ClaudeCLIAccountSettings.parse("A = ~/.claude-a\nMain = ~/.claude\n\n= x\nB ~/.claude-b", home: "/h")
+        XCTAssertEqual(parsed, [ClaudeCLIAccount(label: "A", configDir: "/h/.claude-a"), ClaudeCLIAccount(label: "Main", configDir: nil)])
+        let defaults = UserDefaults(suiteName: "ClaudeCLIUsageTests-\(UUID())")!
+        ClaudeCLIAccountSettings.save(parsed, defaults: defaults)
+        XCTAssertEqual(ClaudeCLIAccountSettings.load(defaults: defaults, home: "/h", isDirectory: { _ in false }), parsed)
+    }
+
+    func testLicenseTextIsComplete() {
+        XCTAssertTrue(Acknowledgements.codexBarLicense.contains("Copyright (c) 2026 Peter Steinberger"))
+        XCTAssertTrue(Acknowledgements.codexBarLicense.contains("The above copyright notice and this permission notice shall be included"))
     }
 }
 
-final class OSAllocatedUnfairLockBox: @unchecked Sendable {
+final class CallLog: @unchecked Sendable {
     private let lock = NSLock()
-    private var value: [String] = []
-    func set(_ v: [String]) { lock.lock(); value = v; lock.unlock() }
-    func get() -> [String] { lock.lock(); defer { lock.unlock() }; return value }
+    private var active = 0
+    private(set) var maxConcurrent = 0
+    private var entries: [([String], [String: String]?)] = []
+    func append(_ args: [String], _ env: [String: String]?) {
+        lock.lock(); entries.append((args, env)); active += 1; maxConcurrent = max(maxConcurrent, active); active -= 1; lock.unlock()
+    }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return entries.count }
+    var args: [[String]] { lock.lock(); defer { lock.unlock() }; return entries.map(\.0) }
+    var rawEnvs: [[String: String]?] { lock.lock(); defer { lock.unlock() }; return entries.map(\.1) }
+    var envs: [String?] { rawEnvs.map { $0?["CLAUDE_CONFIG_DIR"] } }
 }

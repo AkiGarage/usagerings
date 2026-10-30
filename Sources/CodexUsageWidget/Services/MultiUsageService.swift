@@ -54,7 +54,7 @@ struct MultiUsageService: Sendable {
         async let tickets = disabled.contains(.zai) ? nil : zaiTicketClient?.fetch()
         async let blocks = disabled.contains(.claude) ? nil : claudeRateLimitMonitor?.blocks(now: now)
         let (codexResult, zaiResult, proxyRaw, ticketResult, blockResult) = await (codex, zai, proxySections, tickets, blocks)
-        let cliClaude = disabled.contains(.claude) ? nil : claudeCLI?.section(now: now, timeZone: timeZone)
+        let cliClaude = disabled.contains(.claude) ? nil : claudeCLI?.section(accounts: ClaudeCLIAccountSettings.load(), now: now, timeZone: timeZone)
         var proxy = proxyRaw
         if claudeCLI != nil, !disabled.contains(.claude) {
             let index = proxy.firstIndex { $0.provider == .claude }
