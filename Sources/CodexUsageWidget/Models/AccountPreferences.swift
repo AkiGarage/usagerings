@@ -59,6 +59,15 @@ struct AccountID: Hashable, Sendable {
         return first
     }
 
+    /// Adds another identity of the same account as migration aliases (labels/hide move to self).
+    func merging(_ other: AccountID?) -> AccountID {
+        guard let other, other.rawValue != rawValue else { return self }
+        var copy = self
+        copy.aliases = Array(Set(aliases + [other.rawValue] + other.aliases).subtracting([rawValue])).sorted()
+        copy.legacyAliases.merge(other.legacyAliases) { existing, _ in existing }
+        return copy
+    }
+
     static func cliProxy(_ credential: CLIProxyCredential, provider: ProviderID,
                          salt: Data = AccountIdentitySalt.load()) -> Self {
         var sources: [(String, String)] = []

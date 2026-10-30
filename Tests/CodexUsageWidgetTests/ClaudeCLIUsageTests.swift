@@ -72,6 +72,75 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertEqual(calls.rawEnvs[0], ["CLAUDE_CONFIG_DIR": ""])  // blank = strip inherited value
     }
 
+    func testStaleValueIsMarkedPerAccountWithPreviousTime() async {
+        let usage = cli(CallLog(), failB: true)
+        let t0 = Date()
+        await usage.refreshNow([a, b], timeZone: .current, now: { t0 })
+        let fresh = usage.section(accounts: [a, b], now: t0.addingTimeInterval(60), timeZone: .current, salt: salt)!
+        XCTAssertFalse(fresh.section.accounts[0].isStale)
+        let old = usage.section(accounts: [a, b], now: t0.addingTimeInterval(usage.staleAge + 1), timeZone: .current, salt: salt)!
+        XCTAssertTrue(old.fromCache)
+        XCTAssertTrue(old.section.accounts[0].isStale)
+        XCTAssertEqual(old.section.accounts[0].failureText?.hasPrefix("前回値（"), true)
+        XCTAssertEqual(RingDetailCardView.staleLine(staleFailureText(old.section.accounts[0].failureText))?.hasPrefix("前回値（"), true)
+    }
+
+    func testSettingsChangeRestartsQueueAndDropsRemovedFolders() async {
+        let calls = CallLog()
+        let gate = Gate()
+        let usage = ClaudeCLIUsage(runner: { args, env in
+            calls.append(args, env)
+            if env?["CLAUDE_CONFIG_DIR"] == "/h/.claude-a" { await gate.wait() }
+            return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Self.json(10, 20), stderr: Data())
+        })
+        let t0 = Date()
+        _ = usage.section(accounts: [a], now: t0, timeZone: .current, salt: salt)  // starts a queue blocked on A
+        for _ in 0..<200 where calls.count < 1 { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = usage.section(accounts: [b], now: t0, timeZone: .current, salt: salt)  // settings changed: new queue for B
+        for _ in 0..<200 where calls.count < 2 { try? await Task.sleep(for: .milliseconds(5)) }
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(calls.envs, ["/h/.claude-a", "/h/.claude-b"])
+        await gate.open()
+        try? await Task.sleep(for: .milliseconds(30))
+        let result = usage.section(accounts: [b], now: t0, timeZone: .current, salt: salt)
+        XCTAssertEqual(result?.section.accounts.count, 1)
+        XCTAssertNil(result?.section.accounts[0].failureText)
+        // The old run's late result for A was dropped.
+        let back = usage.section(accounts: [a], now: t0, timeZone: .current, salt: salt)
+        XCTAssertNil(back, "A's stale-generation value must not be stored")
+    }
+
+    func testProxyLabelsCarryOverByUniqueMaskedEmail() {
+        let proxyA = AccountID(provider: .claude, source: "proxy-account-id", value: "pa", salt: salt)
+        let proxyB = AccountID(provider: .claude, source: "proxy-account-id", value: "pb", salt: salt)
+        var proxy = ProviderSection(provider: .claude, windows: [
+            { var w = UsageLimit(title: "aki***@e*** · 5h", leftPercent: 50, resetText: "", detailText: nil, projectionText: nil, markerPercent: nil); w.accountIndex = 0; return w }(),
+            { var w = UsageLimit(title: "bob***@e*** · 5h", leftPercent: 50, resetText: "", detailText: nil, projectionText: nil, markerPercent: nil); w.accountIndex = 1; return w }(),
+        ], stats: [], failureText: nil)
+        proxy.accounts = [ProviderAccount(index: 0, id: proxyA), ProviderAccount(index: 1, id: proxyB)]
+        let aliases = ClaudeCLIUsage.proxyAliases(cli: [0: "bob***@e***", 1: "zzz***@e***"], proxy: proxy)
+        XCTAssertEqual(aliases[0], [proxyB])
+        XCTAssertNil(aliases[1])
+        XCTAssertTrue(ClaudeCLIUsage.proxyAliases(cli: [0: "bob***@e***", 1: "bob***@e***"], proxy: proxy).isEmpty,
+                      "ambiguous CLI match is never guessed")
+        let merged = a.accountID(salt: salt).merging(proxyB)
+        XCTAssertEqual(merged, a.accountID(salt: salt))
+        XCTAssertTrue(merged.aliases.contains(proxyB.rawValue))
+        XCTAssertEqual(ClaudeCLIUsage.maskedEmail(Data(#"[{"provider":"claude","usage":{"identity":{"accountEmail":"bobby@example.com"}}}]"#.utf8)), "bob***@e***")
+    }
+
+    func testOldProxyLabelMigratesToFolderAccount() {
+        let proxyB = AccountID(provider: .claude, source: "proxy-account-id", value: "pb", salt: salt)
+        var prefs = AccountPreferences()
+        prefs.setLabel("仕事", for: proxyB)
+        let folder = b.accountID(salt: salt).merging(proxyB)
+        var section = ProviderSection(provider: .claude, windows: [], stats: [], failureText: nil)
+        section.accounts = [ProviderAccount(index: 0, id: folder)]
+        section.accountInventoryComplete = true
+        prefs.reconcile(MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: Date()), salt: salt)
+        XCTAssertEqual(prefs.label(for: folder), "仕事")
+    }
+
     func testDetectionAndParsing() {
         XCTAssertEqual(ClaudeCLIAccountSettings.detected(home: "/h", isDirectory: { _ in false }),
                        [ClaudeCLIAccount(label: "Claude", configDir: nil)])
@@ -102,4 +171,14 @@ final class CallLog: @unchecked Sendable {
     var args: [[String]] { lock.lock(); defer { lock.unlock() }; return entries.map(\.0) }
     var rawEnvs: [[String: String]?] { lock.lock(); defer { lock.unlock() }; return entries.map(\.1) }
     var envs: [String?] { rawEnvs.map { $0?["CLAUDE_CONFIG_DIR"] } }
+}
+
+actor Gate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func open() { isOpen = true; waiters.forEach { $0.resume() }; waiters = [] }
 }

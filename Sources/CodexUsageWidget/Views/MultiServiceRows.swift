@@ -358,15 +358,18 @@ struct ServiceRowView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if style == .detail, !row.detailPaces(now: Date()).isEmpty {
-                    // 詳細: 5h and weekly detail bars replace their plain lines (5h first).
-                    ForEach(Array(row.detailPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
-                        WeeklyPaceBar(pace: pace).padding(.top, 3)
+                if style == .detail, !row.detailPaces(now: Date()).isEmpty || !detailOthers.isEmpty {
+                    // 詳細: every window gets the same full-width bar (5h first, then weekly, then others like GLM MCP).
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(row.detailPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
+                            WeeklyPaceBar(pace: pace)
+                        }
+                        ForEach(Array(detailOthers.enumerated()), id: \.offset) { _, limit in
+                            DetailLimitRow(label: ServiceRowModel.shortLabel(limit.title), leftPercent: limit.clampedLeftPercent,
+                                           tint: GaugeStyle.tint(row.color, limit), caption: "リセット \(limit.shortReset)")
+                        }
                     }
-                    // Lead window that is neither 5h nor weekly would otherwise vanish (excluded from remainingExtras).
-                    if row.five == nil && row.week == nil, let first = row.extras.first, ServiceRowModel.kind(first.title) == .other {
-                        valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
-                    }
+                    .padding(.top, 4)
                 } else {
                     if let five = row.five { valueLine(label: "5h", limit: five, outer: true) }
                     else if row.week != nil { notReported("5h") }
@@ -377,7 +380,9 @@ struct ServiceRowView: View {
                     }
                     ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .week }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
                 }
-                ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .other }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                if style == .simple || (row.detailPaces(now: Date()).isEmpty && detailOthers.isEmpty) {
+                    ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .other }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                }
                 if let message = row.emptyStateText {
                     Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -405,37 +410,48 @@ struct ServiceRowView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func valueLine(label: String, limit: UsageLimit, outer: Bool) -> some View {
-        HStack(spacing: 6) {
-            Circle().strokeBorder(row.color.opacity(outer ? 1 : 0.6), lineWidth: outer ? 3 : 1.8)
-                .frame(width: outer ? 10 : 8, height: outer ? 10 : 8).frame(width: 12)
-            Text(label).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
-            Text(basis.valueText(leftPercent: limit.clampedLeftPercent)).fontWeight(.semibold).monospacedDigit()
-                .foregroundStyle(limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
-                .frame(width: 64, alignment: .trailing)
-            Text("リセット \(limit.shortReset)").font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+    /// Windows that are neither 5h nor weekly (lead window first), shown as full-width bars in 詳細.
+    private var detailOthers: [UsageLimit] {
+        let lead = (row.five == nil && row.week == nil) ? row.extras.first.map { [$0] } ?? [] : []
+        return (lead + row.remainingExtras).filter { ServiceRowModel.kind($0.title) == .other }
+    }
+
+    /// シンプル: dot | label | bar (same flexible width on every line of every provider) | value | reset.
+    private func simpleLine(label: String, limit: UsageLimit?, outer: Bool, dot: Bool) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                if dot {
+                    Circle().strokeBorder(row.color.opacity(outer ? 1 : 0.6), lineWidth: outer ? 3 : 1.8)
+                        .frame(width: outer ? 10 : 8, height: outer ? 10 : 8)
+                } else { Color.clear.frame(width: 1, height: 1) }
+            }.frame(width: 12)
+            Text(label).font(UsageLayout.labelFont).foregroundStyle(.secondary).lineLimit(1)
+                .frame(width: 56, alignment: .leading)
+            if let limit {
+                BasisBar(basis: basis, leftPercent: limit.clampedLeftPercent, tint: GaugeStyle.tint(row.color, limit),
+                         track: Color.white.opacity(0.10)).frame(height: UsageLayout.simpleBarHeight)
+                Text(basis.valueText(leftPercent: limit.clampedLeftPercent)).font(UsageLayout.valueFont)
+                    .foregroundStyle(limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
+                    .frame(width: 70, alignment: .trailing)
+                Text(limit.shortReset).font(UsageLayout.captionFont).foregroundStyle(.tertiary).lineLimit(1)
+                    .frame(width: 84, alignment: .leading)
+            } else {
+                Text("枠なし").font(UsageLayout.captionFont).foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+            }
         }
-        .font(.system(size: 12))
+    }
+
+    private func valueLine(label: String, limit: UsageLimit, outer: Bool) -> some View {
+        simpleLine(label: label, limit: limit, outer: outer, dot: true)
     }
 
     private func notReported(_ label: String) -> some View {
-        HStack(spacing: 6) {
-            Color.clear.frame(width: 12, height: 1)
-            Text(label).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
-            Text("枠なし").font(.system(size: 11)).foregroundStyle(.tertiary)
-        }.font(.system(size: 12))
+        simpleLine(label: label, limit: nil, outer: false, dot: false)
     }
 
     private func extraBar(_ limit: UsageLimit) -> some View {
-        HStack(spacing: 6) {
-            Color.clear.frame(width: 12, height: 1)
-            Text(ServiceRowModel.shortLabel(limit.title)).foregroundStyle(.secondary).lineLimit(1)
-                .frame(minWidth: 22, alignment: .leading)
-            BasisBar(basis: basis, leftPercent: limit.clampedLeftPercent, tint: GaugeStyle.tint(row.color, limit),
-                     track: Color.white.opacity(0.10)).frame(height: 3)
-            Text("\(basis.valueText(leftPercent: limit.clampedLeftPercent)) · \(limit.shortReset)").foregroundStyle(.tertiary).lineLimit(1)
-        }
-        .font(.system(size: 11))
+        simpleLine(label: ServiceRowModel.shortLabel(limit.title), limit: limit, outer: false, dot: false)
     }
 }
 

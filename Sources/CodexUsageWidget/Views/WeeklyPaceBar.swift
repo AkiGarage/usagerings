@@ -117,10 +117,13 @@ struct WeeklyPace: Equatable {
     }
 }
 
-/// Used-share bar with a vertical even-pace tick (like CLIProxy's "Quota windows"), plus a short verdict.
+/// 案B detail bar with even-pace tick and today's box. 残り: the remaining fill starts at the left and
+/// shrinks right→left, and the elapsed tick and today's box are mirrored onto the same axis.
+/// 使用量: orange fill grows left→right with unmirrored markers.
 struct WeeklyPaceBar: View {
     let pace: WeeklyPace
     var compact = false
+    var showLegend = false
     @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
     private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
 
@@ -133,102 +136,91 @@ struct WeeklyPaceBar: View {
     private var dimColor: Color { (scheme == .dark ? Color.black : Color.white).opacity(0.55) }
 
     private var fill: Color {
+        if basis == .used { return UsageLayout.usedColor }
         switch pace.tone {
-        case .over: CollapsedUsageBar.warningColor
-        case .under, .even: CollapsedUsageBar.antigravityColor
-        case .unknown: Color.secondary
+        case .over: return CollapsedUsageBar.warningColor
+        case .under, .even: return CollapsedUsageBar.antigravityColor
+        case .unknown: return Color.secondary
         }
     }
+    /// Today's box on the bar axis (mirrored in 残り).
+    private var todayBox: ClosedRange<Double>? {
+        pace.todayRange.map { r in
+            let a = basis.position(usedShare: r.lowerBound), b = basis.position(usedShare: r.upperBound)
+            return min(a, b)...max(a, b)
+        }
+    }
+    private var tick: Double? { pace.elapsedPercent.map { basis.position(usedShare: $0) } }
+    private var fillShare: Double { basis == .used ? pace.usedPercent : 100 - pace.usedPercent }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(pace.label).foregroundStyle(.secondary).lineLimit(1)
-                Spacer(minLength: 4)
-                Text(pace.valueText(basis)).fontWeight(.semibold).monospacedDigit()
-                Text(pace.paceText(basis)).foregroundStyle(pace.tone == .over ? CollapsedUsageBar.warningColor : .secondary)
-                    .lineLimit(1).minimumScaleFactor(0.7)
+        VStack(alignment: .leading, spacing: UsageLayout.rowSpacing) {
+            LimitHeader(label: pace.label, value: pace.valueText(basis))
+            bar
+                .frame(height: UsageLayout.detailBarHeight)
+                .padding(.vertical, pace.elapsedPercent != nil && Self.markerStyle == .outline ? 2 : 0)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pace.paceText(basis))
+                    .foregroundStyle(pace.tone == .over ? CollapsedUsageBar.warningColor : .secondary)
+                if let t = pace.recoverText {
+                    Text(t).foregroundStyle(.primary)
+                }
+                if let t = pace.todayText(basis) {
+                    Text(t).foregroundStyle(pace.todayOver ? CollapsedUsageBar.warningColor : .primary)
+                }
+                Text(pace.rangeText).foregroundStyle(.secondary)
+                if showLegend {
+                    Text(basis.directionText).font(UsageLayout.legendFont).foregroundStyle(.tertiary)
+                }
             }
-            GeometryReader { proxy in
-                let w = proxy.size.width
-                let h = proxy.size.height
+            .font(UsageLayout.captionFont)
+            .lineLimit(1).minimumScaleFactor(0.85)
+            .help(WeeklyPace.helpText)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(pace.label) \(pace.valueText(basis))、\(pace.paceText(basis))、\(pace.recoverText ?? pace.footerText)")
+    }
+
+    private var bar: some View {
+        GeometryReader { proxy in
+            let w = proxy.size.width
+            let h = proxy.size.height
+            ZStack(alignment: .leading) {
                 ZStack(alignment: .leading) {
-                  ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
-                    if let e = pace.elapsedPercent {
-                        // Even-pace region: what an even spend would have used by now.
-                        Capsule().fill(Color.primary.opacity(0.10)).frame(width: max(2, w * e / 100))
+                    if let t = tick {
+                        // Even-pace region: what an even spend would show now, on the same axis as the fill.
+                        Capsule().fill(Color.primary.opacity(0.10)).frame(width: max(2, w * t / 100))
                     }
-                    if basis == .used {
-                        Capsule().fill(fill.opacity(0.85)).frame(width: max(2, w * pace.usedPercent / 100))
-                    } else {
-                        // 残り mode, still left -> right: used part grey from the left, remaining coloured on the right.
-                        Rectangle().fill(fill.opacity(0.85))
-                            .frame(width: max(2, w * (100 - pace.usedPercent) / 100))
-                            .offset(x: w * pace.usedPercent / 100)
-                        Rectangle().fill(Color.secondary.opacity(0.55)).frame(width: w * pace.usedPercent / 100)
-                    }
+                    Capsule().fill(fill.opacity(0.85)).frame(width: max(2, w * fillShare / 100))
                     if pace.elapsedPercent != nil {
-                        // Faint slice dividers: 7 days or 5 hours from the window start.
                         ForEach(1..<pace.slices, id: \.self) { k in
                             Rectangle().fill(Color.primary.opacity(0.30))
                                 .frame(width: 1, height: h)
                                 .offset(x: w * Double(k) / Double(pace.slices) - 0.5)
                         }
                     }
-                    if let r = pace.todayRange, Self.markerStyle == .dim {
-                        // Dim everything outside today so today's slice stands out on any fill.
+                    if let r = todayBox, Self.markerStyle == .dim {
                         let x0 = w * r.lowerBound / 100, x1 = w * r.upperBound / 100
                         Rectangle().fill(dimColor).frame(width: x0, height: h)
                         Rectangle().fill(dimColor).frame(width: max(0, w - x1), height: h).offset(x: x1)
                     }
-                  }
-                  .clipShape(Capsule())
-                    if let r = pace.todayRange, Self.markerStyle == .outline {
-                        // Two-tone outline (light over dark) reads on green, orange, red and the empty track.
-                        let x0 = w * r.lowerBound / 100, rw = w * (r.upperBound - r.lowerBound) / 100
-                        RoundedRectangle(cornerRadius: 3).stroke(Color.black.opacity(0.45), lineWidth: 3)
-                            .frame(width: rw, height: h + 4).offset(x: x0, y: 0)
-                        RoundedRectangle(cornerRadius: 3).stroke(Color.white, lineWidth: 1.5)
-                            .frame(width: rw, height: h + 4).offset(x: x0, y: 0)
-                    }
-                    if let e = pace.elapsedPercent {
-                        Rectangle().fill(Color.primary.opacity(0.85))
-                            .frame(width: 1.5, height: h + 4)
-                            .offset(x: min(max(w * e / 100 - 0.75, 0), w - 1.5), y: 0)
-                    }
                 }
-            }
-            .frame(height: compact ? 8 : 9)
-            if let r = pace.todayRange, Self.markerStyle == .bracket {
-                // Today's even-pace range as a bracket under the bar: never overlaps the fill colour.
-                GeometryReader { proxy in
-                    let w = proxy.size.width
+                .clipShape(Capsule())
+                if let r = todayBox, Self.markerStyle != .dim {
+                    // Two-tone outline (light over dark) reads on green, orange, red and the empty track.
                     let x0 = w * r.lowerBound / 100, rw = w * (r.upperBound - r.lowerBound) / 100
-                    Path { p in
-                        p.move(to: CGPoint(x: x0 + 0.75, y: 0)); p.addLine(to: CGPoint(x: x0 + 0.75, y: 5))
-                        p.addLine(to: CGPoint(x: x0 + rw - 0.75, y: 5)); p.addLine(to: CGPoint(x: x0 + rw - 0.75, y: 0))
-                    }
-                    .stroke(Color.primary.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    RoundedRectangle(cornerRadius: 3).stroke(Color.black.opacity(0.45), lineWidth: 3)
+                        .frame(width: rw, height: h + 4).offset(x: x0)
+                    RoundedRectangle(cornerRadius: 3).stroke(Color.white, lineWidth: 1.5)
+                        .frame(width: rw, height: h + 4).offset(x: x0)
                 }
-                .frame(height: 6)
-                .padding(.top, -1)
+                if let t = tick {
+                    Rectangle().fill(Color.primary.opacity(0.85))
+                        .frame(width: 1.5, height: h + 4)
+                        .offset(x: min(max(w * t / 100 - 0.75, 0), w - 1.5))
+                }
             }
-            VStack(alignment: .leading, spacing: 1) {
-                if let t = pace.recoverText {
-                    Text(t).foregroundStyle(.primary).fontWeight(.medium)
-                }
-                if let t = pace.todayText(basis) {
-                    Text(t).foregroundStyle(pace.todayOver ? CollapsedUsageBar.warningColor : .primary).fontWeight(.medium)
-                }
-                Text(pace.rangeText).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
-            }
-            .help(WeeklyPace.helpText)
-            .monospacedDigit().fixedSize(horizontal: false, vertical: true)
-            .padding(.top, pace.elapsedPercent != nil && Self.markerStyle == .outline ? 3 : 0)
         }
-        .font(.system(size: compact ? 11 : 12))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(pace.label) \(pace.valueText(basis))、\(pace.paceText(basis))、\(pace.recoverText ?? pace.footerText)")
     }
 }

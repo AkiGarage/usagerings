@@ -378,6 +378,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 action: #selector(togglePanelOrientation), keyEquivalent: "")
             orientationToggle.target = self
             menu.addItem(orientationToggle)
+            menu.addItem(.separator())
+            let style = UsageStyle(rawValue: UserDefaults.standard.string(forKey: UsageStyle.key) ?? "") ?? .defaultValue
+            for option in UsageStyle.allCases {
+                let i = NSMenuItem(title: "\(option.title)表示", action: #selector(selectUsageStyle(_:)), keyEquivalent: "")
+                i.target = self; i.representedObject = option.rawValue; i.state = option == style ? .on : .off
+                menu.addItem(i)
+            }
+            let basis = UsageBasis(rawValue: UserDefaults.standard.string(forKey: UsageBasis.key) ?? "") ?? .defaultValue
+            for option in UsageBasis.allCases {
+                let i = NSMenuItem(title: "\(option.title)で表示", action: #selector(selectUsageBasis(_:)), keyEquivalent: "")
+                i.target = self; i.representedObject = option.rawValue; i.state = option == basis ? .on : .off
+                menu.addItem(i)
+            }
+            menu.addItem(.separator())
             let view = NSMenuItem(title: "表示", action: nil, keyEquivalent: "")
             let sub = NSMenu()
             func item(_ title: String, _ action: Selector, enabled: Bool = true) {
@@ -460,6 +474,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func toggleAntigravityAccounts() {
         persona.panelPreferences?.splitAntigravityAccounts.toggle()
     }
+    @objc private func selectUsageStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, UsageStyle(rawValue: raw) != nil else { return }
+        UserDefaults.standard.set(raw, forKey: UsageStyle.key)
+    }
+
+    @objc private func selectUsageBasis(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, UsageBasis(rawValue: raw) != nil else { return }
+        UserDefaults.standard.set(raw, forKey: UsageBasis.key)
+    }
+
     @objc private func selectAppearance(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let appearance = PanelAppearance(rawValue: raw) else { return }
