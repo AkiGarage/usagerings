@@ -203,7 +203,7 @@ struct WeeklyPaceBar: View {
                                 .offset(x: w * Double(k) / Double(pace.slices) - 0.5)
                         }
                     }
-                    if let r = todayBox, Self.markerStyle == .dim {
+                    if let r = todayBox, Self.markerStyle == .dim, !blocked {
                         let x0 = w * r.lowerBound / 100, x1 = w * r.upperBound / 100
                         Rectangle().fill(dimColor).frame(width: x0, height: h)
                         Rectangle().fill(dimColor).frame(width: max(0, w - x1), height: h).offset(x: x1)
