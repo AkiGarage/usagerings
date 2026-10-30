@@ -388,16 +388,14 @@ struct RingDetailCardView: View {
                     .font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
             }
-            // 5時間枠 first, then one weekly row (the pace bar replaces the plain weekly row), then the rest.
+            // Top: 5時間枠 then 週の枠 remaining (simple rows); below: usage-based 週の詳細.
             ForEach(Array(model.orderedRows(.five).enumerated()), id: \.offset) { _, row in detailRow(row) }
+            ForEach(Array(model.orderedRows(.week).enumerated()), id: \.offset) { _, row in detailRow(row) }
+            ForEach(Array(model.orderedRows(.other).enumerated()), id: \.offset) { _, row in detailRow(row) }
             if !model.paces.isEmpty {
                 Divider().opacity(0.35)
                 ForEach(Array(model.paces.enumerated()), id: \.offset) { _, pace in WeeklyPaceBar(pace: pace, compact: true) }
-                Divider().opacity(0.35)
-            } else {
-                ForEach(Array(model.orderedRows(.week).enumerated()), id: \.offset) { _, row in detailRow(row) }
             }
-            ForEach(Array(model.orderedRows(.other).enumerated()), id: \.offset) { _, row in detailRow(row) }
             if let failure = model.ticketFailureText {
                 Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
             }
