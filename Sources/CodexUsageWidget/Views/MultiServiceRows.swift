@@ -41,6 +41,12 @@ struct ServiceRowModel: Identifiable {
     var remainingExtras: [UsageLimit] { five == nil && week == nil ? Array(extras.dropFirst()) : extras }
 
     /// Pace bars for the weekly window and any weekly extras (e.g. Antigravity groups).
+    /// 5h detail bars (first) then weekly ones, for 詳細 mode.
+    func detailPaces(now: Date) -> [WeeklyPace] {
+        let fives = ([five].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .five })
+        return fives.map { WeeklyPace(label: fives.count == 1 ? "5時間枠" : "5h " + ServiceRowModel.shortLabel($0.title), limit: $0, now: now, period: WeeklyPace.fiveHours) }
+            + weeklyPaces(now: now)
+    }
     func weeklyPaces(now: Date) -> [WeeklyPace] {
         let weekly = ([week].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .week })
         return weekly.map { WeeklyPace(label: weekly.count == 1 ? "週の枠" : "週 " + ServiceRowModel.shortLabel($0.title), limit: $0, now: now) }
@@ -324,6 +330,10 @@ struct G1Gauge: View {
 
 struct ServiceRowView: View {
     let row: ServiceRowModel
+    @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
+    @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
+    private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
+    private var style: UsageStyle { UsageStyle(rawValue: styleRaw) ?? .defaultValue }
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             G1Gauge(row: row)
@@ -342,19 +352,26 @@ struct ServiceRowView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if let five = row.five { valueLine(label: "5h", limit: five, outer: true) }
-                else if row.week != nil { notReported("5h") }
-                ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .five }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
-                if let week = row.week { valueLine(label: "週", limit: week, outer: row.five == nil) }
-                if row.five == nil && row.week == nil, let first = row.extras.first {
-                    valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
+                if style == .detail, !row.detailPaces(now: Date()).isEmpty {
+                    // 詳細: 5h and weekly detail bars replace their plain lines (5h first).
+                    ForEach(Array(row.detailPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
+                        WeeklyPaceBar(pace: pace).padding(.top, 3)
+                    }
+                    // Lead window that is neither 5h nor weekly would otherwise vanish (excluded from remainingExtras).
+                    if row.five == nil && row.week == nil, let first = row.extras.first, ServiceRowModel.kind(first.title) == .other {
+                        valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
+                    }
+                } else {
+                    if let five = row.five { valueLine(label: "5h", limit: five, outer: true) }
+                    else if row.week != nil { notReported("5h") }
+                    ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .five }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                    if let week = row.week { valueLine(label: "週", limit: week, outer: row.five == nil) }
+                    if row.five == nil && row.week == nil, let first = row.extras.first {
+                        valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
+                    }
+                    ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .week }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
                 }
-                ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .week }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
                 ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .other }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
-                // Below: usage-based 週の詳細.
-                ForEach(Array(row.weeklyPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
-                    WeeklyPaceBar(pace: pace).padding(.top, 3)
-                }
                 if let message = row.emptyStateText {
                     Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -387,9 +404,9 @@ struct ServiceRowView: View {
             Circle().strokeBorder(row.color.opacity(outer ? 1 : 0.6), lineWidth: outer ? 3 : 1.8)
                 .frame(width: outer ? 10 : 8, height: outer ? 10 : 8).frame(width: 12)
             Text(label).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
-            Text("\(limit.percentInt)%").fontWeight(.semibold).monospacedDigit()
+            Text(basis.valueText(leftPercent: limit.clampedLeftPercent)).fontWeight(.semibold).monospacedDigit()
                 .foregroundStyle(limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
-                .frame(width: 40, alignment: .trailing)
+                .frame(width: 64, alignment: .trailing)
             Text("リセット \(limit.shortReset)").font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
         }
         .font(.system(size: 12))
@@ -408,14 +425,9 @@ struct ServiceRowView: View {
             Color.clear.frame(width: 12, height: 1)
             Text(ServiceRowModel.shortLabel(limit.title)).foregroundStyle(.secondary).lineLimit(1)
                 .frame(minWidth: 22, alignment: .leading)
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.10))
-                    Capsule().fill(GaugeStyle.tint(row.color, limit))
-                        .frame(width: proxy.size.width * limit.clampedLeftPercent / 100)
-                }
-            }.frame(height: 3)
-            Text("\(limit.percentInt)% · \(limit.shortReset)").foregroundStyle(.tertiary).lineLimit(1)
+            BasisBar(basis: basis, leftPercent: limit.clampedLeftPercent, tint: GaugeStyle.tint(row.color, limit),
+                     track: Color.white.opacity(0.10)).frame(height: 3)
+            Text("\(basis.valueText(leftPercent: limit.clampedLeftPercent)) · \(limit.shortReset)").foregroundStyle(.tertiary).lineLimit(1)
         }
         .font(.system(size: 11))
     }

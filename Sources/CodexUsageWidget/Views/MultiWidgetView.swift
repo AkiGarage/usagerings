@@ -147,11 +147,22 @@ struct PanelSettingsView: View {
     var snapshot: MultiUsageSnapshot = .placeholder
     @AppStorage(ClaudeSSHSettings.enabledKey) private var enabled = false
     @AppStorage(ClaudeSSHSettings.hostKey) private var host = ""
+    @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
+    @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
 
     var body: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings").font(.headline)
+            Picker("表示基準", selection: $basisRaw) {
+                ForEach(UsageBasis.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }.pickerStyle(.segmented)
+            Picker("表示形式", selection: $styleRaw) {
+                ForEach(UsageStyle.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }.pickerStyle(.segmented)
+            Text("全サブスクのパネル・詳細カードに反映。バーはどちらの基準でも左→右に進みます（残りは灰色＝使った分）。詳細は5時間枠・週の枠をバーだけで表示します。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Divider()
             Toggle("アカウント名を一部伏せて表示", isOn: $preferences.showAccountNames)
             Toggle("Antigravityをアカウント別に表示", isOn: $preferences.splitAntigravityAccounts)
             Divider()

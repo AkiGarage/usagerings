@@ -170,6 +170,11 @@ struct RingDetailCardModel: Equatable {
     var paces: [WeeklyPace] = []
 
     func orderedRows(_ kind: ServiceRowModel.Kind) -> [Row] { rows.filter { $0.kind == kind } }
+    /// In 詳細 mode a 5h/weekly row is shown as a plain row only if it has no detail bar.
+    var detailFallbackRows: [Row] {
+        let five = paces.filter(\.isFiveHour).count, week = paces.count - five
+        return (five == 0 ? orderedRows(.five) : []) + (week == 0 ? orderedRows(.week) : [])
+    }
 
     static func visibleStats(for bar: CollapsedUsageBar) -> [ProviderStat] {
         switch bar.provider {
@@ -237,7 +242,7 @@ struct RingDetailCardModel: Equatable {
                                    resetText: reset?.text, resetLabel: reset?.label, rows: rows, extras: extras,
                                    ticketFailureText: ticketFailureText, blockText: blockText, stats: stats,
                                    failureText: bar.failureText,
-                                   paces: WeeklyPace.all(bar.windows, now: now, label: windowLabel))
+                                   paces: WeeklyPace.details(bar.windows, now: now, label: windowLabel))
     }
 
     private static func sortedTicketRows(_ tickets: [CodexExtrasParser.Ticket], now: Date) -> [TicketRow] {
@@ -373,6 +378,10 @@ final class RingHighlightState: ObservableObject {
 struct RingDetailCardView: View {
     let model: RingDetailCardModel
     static let cardWidth: CGFloat = 224
+    @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
+    @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
+    private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
+    private var style: UsageStyle { UsageStyle(rawValue: styleRaw) ?? .defaultValue }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -388,14 +397,15 @@ struct RingDetailCardView: View {
                     .font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
             }
-            // Top: 5時間枠 then 週の枠 remaining (simple rows); below: usage-based 週の詳細.
-            ForEach(Array(model.orderedRows(.five).enumerated()), id: \.offset) { _, row in detailRow(row) }
-            ForEach(Array(model.orderedRows(.week).enumerated()), id: \.offset) { _, row in detailRow(row) }
-            ForEach(Array(model.orderedRows(.other).enumerated()), id: \.offset) { _, row in detailRow(row) }
-            if !model.paces.isEmpty {
-                Divider().opacity(0.35)
+            // 5時間枠 above 週の枠. シンプル: plain rows only. 詳細: detail bars replace the 5h/weekly plain rows.
+            if style == .detail {
                 ForEach(Array(model.paces.enumerated()), id: \.offset) { _, pace in WeeklyPaceBar(pace: pace, compact: true) }
+                ForEach(Array(model.detailFallbackRows.enumerated()), id: \.offset) { _, row in detailRow(row) }
+            } else {
+                ForEach(Array(model.orderedRows(.five).enumerated()), id: \.offset) { _, row in detailRow(row) }
+                ForEach(Array(model.orderedRows(.week).enumerated()), id: \.offset) { _, row in detailRow(row) }
             }
+            ForEach(Array(model.orderedRows(.other).enumerated()), id: \.offset) { _, row in detailRow(row) }
             if let failure = model.ticketFailureText {
                 Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -452,15 +462,9 @@ struct RingDetailCardView: View {
         HStack(spacing: 6) {
             Text(row.label).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 6)
-            Text(row.percentText).font(.system(size: 11, weight: .semibold)).monospacedDigit()
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.12))
-                    Capsule().fill(color(for: row.severity))
-                        .frame(width: max(2, proxy.size.width * row.leftPercent / 100))
-                }
-            }
-            .frame(width: 52, height: 4)
+            Text(basis.valueText(leftPercent: row.leftPercent)).font(.system(size: 11, weight: .semibold)).monospacedDigit()
+            BasisBar(basis: basis, leftPercent: row.leftPercent, tint: color(for: row.severity))
+                .frame(width: 52, height: 4)
         }
     }
 
