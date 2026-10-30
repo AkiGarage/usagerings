@@ -46,9 +46,15 @@ struct WeeklyPace: Equatable {
     var todayOver: Bool { (todayLeft ?? 0) < 0 }
     var todayText: String? {
         guard let t = todayTarget, let left = todayLeft else { return nil }
-        return left < 0 ? "今日の目安：\(t)%まで（\(-left)% 超過）" : "今日の目安：\(t)%まで（あと \(left)%）"
+        return left < 0 ? "今日の目安：残り\(100 - t)%まで（\(-left)% 超過）" : "今日の目安：残り\(100 - t)%まで（あと \(left)%）"
     }
-    static let helpText = "今日の目安：毎日同じだけ使った場合に今日の終わり時点での週の合計の目安で、（あと/超過）は今の使用量からリアルタイムに計算します。今の期間：この週の制限が数えられる期間で、終わりの時刻にリセットされます。"
+    static let helpText = "今日の目安：毎日同じだけ使った場合、今日の終わりに週の残りがこの%になる目安で、（あと/超過）は今の残りからリアルタイムに計算します。今の期間：この週の制限が数えられる期間で、終わりの時刻にリセットされます。"
+
+    /// Remaining-based view (matches the rings): left now, left at even pace now, today's slice in remaining terms.
+    var leftPercent: Double { 100 - usedPercent }
+    var leftInt: Int { 100 - Int(usedPercent.rounded()) }
+    var evenLeftPercent: Double? { elapsedPercent.map { 100 - $0 } }
+    var leftTodayRange: ClosedRange<Double>? { todayRange.map { (100 - $0.upperBound)...(100 - $0.lowerBound) } }
 
     /// used - even share, in percentage points; positive means ahead of pace.
     var delta: Int? { elapsedPercent.map { Int((usedPercent - $0).rounded()) } }
@@ -56,8 +62,8 @@ struct WeeklyPace: Equatable {
     var paceText: String {
         guard let delta else { return "リセット不明・均等ペース不明" }
         let d = delta
-        if d >= 3 { return "均等より+\(d)%使いすぎ" }
-        if d <= -3 { return "余裕 \(d)%" }
+        if d >= 3 { return "均等より残り\(d)%少ない" }
+        if d <= -3 { return "均等より残り\(-d)%多い" }
         return "ほぼ均等ペース"
     }
     enum Tone { case over, under, even, unknown }
@@ -107,7 +113,7 @@ struct WeeklyPaceBar: View {
             HStack(spacing: 6) {
                 Text(pace.label).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 4)
-                Text("使用 \(Int(pace.usedPercent.rounded()))%").fontWeight(.semibold).monospacedDigit()
+                Text("残り \(pace.leftInt)%").fontWeight(.semibold).monospacedDigit()
                 Text(pace.paceText).foregroundStyle(pace.tone == .over ? CollapsedUsageBar.warningColor : .secondary)
                     .lineLimit(1).minimumScaleFactor(0.7)
             }
@@ -117,11 +123,11 @@ struct WeeklyPaceBar: View {
                 ZStack(alignment: .leading) {
                   ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
-                    if let e = pace.elapsedPercent {
-                        // Even-pace region: what an even spend would have used by now.
+                    if let e = pace.evenLeftPercent {
+                        // Even-pace region: what an even spend would have left by now.
                         Capsule().fill(Color.primary.opacity(0.10)).frame(width: max(2, w * e / 100))
                     }
-                    Capsule().fill(fill.opacity(0.85)).frame(width: max(2, w * pace.usedPercent / 100))
+                    Capsule().fill(fill.opacity(0.85)).frame(width: max(2, w * pace.leftPercent / 100))
                     if pace.todayRange != nil {
                         // Faint day dividers: the week split into 7 equal days from the last reset.
                         ForEach(1..<7, id: \.self) { k in
@@ -130,7 +136,7 @@ struct WeeklyPaceBar: View {
                                 .offset(x: w * Double(k) / 7 - 0.5)
                         }
                     }
-                    if let r = pace.todayRange, Self.markerStyle == .dim {
+                    if let r = pace.leftTodayRange, Self.markerStyle == .dim {
                         // Dim everything outside today so today's slice stands out on any fill.
                         let x0 = w * r.lowerBound / 100, x1 = w * r.upperBound / 100
                         Rectangle().fill(dimColor).frame(width: x0, height: h)
@@ -138,7 +144,7 @@ struct WeeklyPaceBar: View {
                     }
                   }
                   .clipShape(Capsule())
-                    if let r = pace.todayRange, Self.markerStyle == .outline {
+                    if let r = pace.leftTodayRange, Self.markerStyle == .outline {
                         // Two-tone outline (light over dark) reads on green, orange, red and the empty track.
                         let x0 = w * r.lowerBound / 100, rw = w * (r.upperBound - r.lowerBound) / 100
                         RoundedRectangle(cornerRadius: 3).stroke(Color.black.opacity(0.45), lineWidth: 3)
@@ -146,7 +152,7 @@ struct WeeklyPaceBar: View {
                         RoundedRectangle(cornerRadius: 3).stroke(Color.white, lineWidth: 1.5)
                             .frame(width: rw, height: h + 4).offset(x: x0, y: 0)
                     }
-                    if let e = pace.elapsedPercent {
+                    if let e = pace.evenLeftPercent {
                         Rectangle().fill(Color.primary.opacity(0.85))
                             .frame(width: 1.5, height: h + 4)
                             .offset(x: min(max(w * e / 100 - 0.75, 0), w - 1.5), y: 0)
@@ -154,7 +160,7 @@ struct WeeklyPaceBar: View {
                 }
             }
             .frame(height: compact ? 8 : 9)
-            if let r = pace.todayRange, Self.markerStyle == .bracket {
+            if let r = pace.leftTodayRange, Self.markerStyle == .bracket {
                 // Today's even-pace range as a bracket under the bar: never overlaps the fill colour.
                 GeometryReader { proxy in
                     let w = proxy.size.width
@@ -180,6 +186,6 @@ struct WeeklyPaceBar: View {
         }
         .font(.system(size: compact ? 11 : 12))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(pace.label) 使用 \(Int(pace.usedPercent.rounded()))%、\(pace.paceText)、\(pace.footerText)")
+        .accessibilityLabel("\(pace.label) 残り \(pace.leftInt)%、\(pace.paceText)、\(pace.footerText)")
     }
 }

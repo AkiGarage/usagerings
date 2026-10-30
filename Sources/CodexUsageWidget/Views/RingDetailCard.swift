@@ -23,6 +23,14 @@ enum RingCardLabel {
     static func label(for title: String) -> String {
         var parts = title.components(separatedBy: " · ")
         if parts.count > 1, ServiceRowModel.accountPrefix(title) != nil { parts.removeFirst() }
+        // Gemini app windows ("Gemini · 5h" / "Gemini · Weekly"): the card already names Gemini, so label the window.
+        if parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "Gemini" {
+            switch ServiceRowModel.kind(parts[1]) {
+            case .five: return "5時間枠"
+            case .week: return "週の枠"
+            case .other: break
+            }
+        }
         let window = parts.joined(separator: " · ").trimmingCharacters(in: .whitespaces)
         let name = window
             .replacingOccurrences(of: #"\s*(·\s*)?(5[- ]?hours?|5h|weekly|week|7[- ]?days?|7d|daily|monthly)\s*$"#,
