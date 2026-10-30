@@ -56,6 +56,8 @@ struct MultiPanelContent: View {
     @ObservedObject var preferences: PanelPreferences
     var claudeChoice: ClaudeAccountPolicy.Decision? = nil
     static let baseWidth: CGFloat = 480
+    /// Top-right 更新 time and −/%/+/☀/▯/⚙ controls: 11pt → 14pt (≈1.27×, Aki t1662u).
+    static let headerControlFontSize: CGFloat = 14
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsSettings = false
 
@@ -66,7 +68,7 @@ struct MultiPanelContent: View {
                     Text("残り使用量").font(.system(size: 15, weight: .semibold))
                     Spacer()
                     Text("更新 \(snapshot.updatedAt.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                        .font(.system(size: Self.headerControlFontSize)).foregroundStyle(.secondary).monospacedDigit()
                     controls
                 }
                 HStack(spacing: 8) {
@@ -98,13 +100,13 @@ struct MultiPanelContent: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Button { preferences.zoomOut() } label: { Image(systemName: "minus") }
                 .disabled(preferences.zoom <= PanelPreferences.zoomRange.lowerBound)
                 .help("Zoom out")
                 .accessibilityLabel("Zoom out")
             Button("\(preferences.percent)%") { preferences.resetZoom() }
-                .monospacedDigit().frame(minWidth: 36)
+                .monospacedDigit().frame(minWidth: 46)
                 .help("Reset zoom to 100% (⌘0)")
                 .accessibilityLabel("Reset zoom to 100 percent")
             Button { preferences.zoomIn() } label: { Image(systemName: "plus") }
@@ -134,8 +136,8 @@ struct MultiPanelContent: View {
             }
         }
         .buttonStyle(.borderless)
-        .font(.system(size: 11))
-        .controlSize(.mini)
+        .font(.system(size: Self.headerControlFontSize))
+        .controlSize(.small)
     }
 
     private var appearanceAction: String {

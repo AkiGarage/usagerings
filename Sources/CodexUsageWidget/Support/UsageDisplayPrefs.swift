@@ -120,16 +120,19 @@ struct DetailLimitRow: View {
 
 /// Visible switches: 表示 シンプル/詳細 and 基準 残り/使用量 (both persisted; 5h and weekly switch together).
 struct UsageModeControls: View {
+    /// Captions drawn beside the toggles; 基準 was dropped (Aki t1662u).
+    static let captions = ["表示"]
     @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
     @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
     var body: some View {
         HStack(spacing: 10) {
-            labeled("表示", Picker("表示", selection: $styleRaw) {
+            labeled(Self.captions[0], Picker("表示", selection: $styleRaw) {
                 ForEach(UsageStyle.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
             })
-            labeled("基準", Picker("基準", selection: $basisRaw) {
+            // No 基準 caption here: it wrapped vertically; a plain gap reads better (Aki t1662u).
+            Picker("基準", selection: $basisRaw) {
                 ForEach(UsageBasis.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-            })
+            }.pickerStyle(.segmented).labelsHidden().fixedSize()
         }
         .controlSize(.small)
     }

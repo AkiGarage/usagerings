@@ -103,4 +103,10 @@ final class HideTicketsAndBlockedBarTests: XCTestCase {
     func testGeminiMenuTitleHasNoChromeTabSuffix() {
         XCTAssertEqual(AppDelegate.geminiReadingMenuTitle, "Gemini の使用量を読む")
     }
+
+    func testHeaderDropsBasisCaptionAndEnlargesControls() {
+        XCTAssertEqual(UsageModeControls.captions, ["表示"], "no 基準 caption (t1662u)")
+        let scale = MultiPanelContent.headerControlFontSize / 11
+        XCTAssertTrue((1.2...1.3).contains(scale), "\(scale)")
+    }
 }
