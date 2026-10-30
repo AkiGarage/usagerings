@@ -38,10 +38,17 @@ struct WeeklyPace: Equatable {
     var todayRange: ClosedRange<Double>? {
         todayIndex.map { Double($0) * 100 / 7 ... Double($0 + 1) * 100 / 7 }
     }
+    /// Even-pace weekly total at the end of today's day slice: fixed for the day.
+    var todayTarget: Int? { todayRange.map { Int($0.upperBound.rounded()) } }
+    /// Target minus current use, in the same rounded % as "使用 N%"; negative = over today's target.
+    /// Computed from the latest usage every time the pace is rebuilt (each refresh), never cached per day.
+    var todayLeft: Int? { todayTarget.map { $0 - Int(usedPercent.rounded()) } }
+    var todayOver: Bool { (todayLeft ?? 0) < 0 }
     var todayText: String? {
-        guard let i = todayIndex, let r = todayRange else { return nil }
-        return "今日の累計目安：\(Int(r.lowerBound.rounded()))%→\(Int(r.upperBound.rounded()))%（\(i + 1)/7日目）"
+        guard let t = todayTarget, let left = todayLeft else { return nil }
+        return left < 0 ? "今日の目安：\(t)%まで（\(-left)% 超過）" : "今日の目安：\(t)%まで（あと \(left)%）"
     }
+    static let helpText = "今日の目安：毎日同じだけ使った場合に今日の終わり時点での週の合計の目安で、（あと/超過）は今の使用量からリアルタイムに計算します。今の期間：この週の制限が数えられる期間で、終わりの時刻にリセットされます。"
 
     /// used - even share, in percentage points; positive means ahead of pace.
     var delta: Int? { elapsedPercent.map { Int((usedPercent - $0).rounded()) } }
@@ -64,7 +71,7 @@ struct WeeklyPace: Equatable {
         let c = RingResetFormat.tokyoCalendar.dateComponents([.month, .day, .hour, .minute], from: date)
         return String(format: "%d/%d %02d:%02d", c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0)
     }
-    var rangeText: String { start == nil ? (unknownReason ?? "リセット 不明") : "週の制限の期間：\(Self.day(start))〜\(Self.day(reset))" }
+    var rangeText: String { start == nil ? (unknownReason ?? "リセット 不明") : "今の期間：\(Self.day(start))〜\(Self.day(reset))" }
     /// Bottom line: reset range plus today's allowance when known.
     var footerText: String { todayText.map { "\(rangeText) ・ \($0)" } ?? rangeText }
 
@@ -163,11 +170,11 @@ struct WeeklyPaceBar: View {
             }
             VStack(alignment: .leading, spacing: 1) {
                 if let t = pace.todayText {
-                    Text(t).foregroundStyle(.primary).fontWeight(.medium)
+                    Text(t).foregroundStyle(pace.todayOver ? CollapsedUsageBar.warningColor : .primary).fontWeight(.medium)
                 }
-                Text(pace.rangeText).foregroundStyle(.secondary)
+                Text(pace.rangeText).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
             }
-            .help("今日の累計目安：毎日同じだけ使うと、週の使用量が今日の始めにこの%、今日の終わりにこの%になります（白枠の部分）。週の制限の期間：週の制限が数えられる期間（前のリセット〜次のリセット）。")
+            .help(WeeklyPace.helpText)
             .monospacedDigit().fixedSize(horizontal: false, vertical: true)
             .padding(.top, pace.todayRange != nil && Self.markerStyle == .outline ? 3 : 0)
         }

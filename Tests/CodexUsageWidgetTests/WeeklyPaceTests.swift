@@ -63,9 +63,24 @@ final class WeeklyPaceTests: XCTestCase {
         XCTAssertEqual(p.todayIndex, 2)
         XCTAssertEqual(p.todayRange!.lowerBound, 200.0 / 7, accuracy: 0.01)
         XCTAssertEqual(p.todayRange!.upperBound, 300.0 / 7, accuracy: 0.01)
-        XCTAssertEqual(p.todayText, "今日の累計目安：29%→43%（3/7日目）")
-        XCTAssertTrue(p.footerText.hasSuffix("今日の累計目安：29%→43%（3/7日目）"))
-        XCTAssertTrue(p.rangeText.hasPrefix("週の制限の期間："))
+        XCTAssertEqual(p.todayText, "今日の目安：43%まで（あと 2%）")
+        XCTAssertTrue(p.footerText.hasSuffix("今日の目安：43%まで（あと 2%）"))
+        XCTAssertTrue(p.rangeText.hasPrefix("今の期間："))
+        XCTAssertFalse(p.todayOver)
+    }
+
+    func testTodayLeftFollowsEachUsageRefresh() {
+        // Same day and reset; only the usage changes between refreshes -> target fixed, remainder live.
+        let reset: TimeInterval = 5 * 86_400
+        let a = WeeklyPace(label: "週", limit: weekly(left: 70, resetIn: reset), now: now)
+        let b = WeeklyPace(label: "週", limit: weekly(left: 62, resetIn: reset - 600), now: now.addingTimeInterval(600))
+        let c = WeeklyPace(label: "週", limit: weekly(left: 50, resetIn: reset - 1200), now: now.addingTimeInterval(1200))
+        XCTAssertEqual([a.todayTarget, b.todayTarget, c.todayTarget], [43, 43, 43])
+        XCTAssertEqual(a.todayText, "今日の目安：43%まで（あと 13%）")
+        XCTAssertEqual(b.todayText, "今日の目安：43%まで（あと 5%）")
+        XCTAssertEqual(c.todayText, "今日の目安：43%まで（7% 超過）")
+        XCTAssertTrue(c.todayOver)
+        XCTAssertFalse(a.todayOver)
     }
 
     func testTodaySliceEdges() {
