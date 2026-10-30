@@ -49,27 +49,17 @@ final class ZZShotsTmpTests: XCTestCase {
                 try save(RingDetailCardView(model: m).padding(12), "hover-\(slug)-\(style.rawValue)-\(basis.rawValue).png")
             }
         }}
-        // Window contrast options over a busy light/colour backdrop (what the real glass blurs).
-        UserDefaults.standard.set("detail", forKey: UsageStyle.key); UserDefaults.standard.set("left", forKey: UsageBasis.key)
+        // v3: real window background (AdaptiveGlass .panel) over a busy backdrop, every style/basis.
         let back = LinearGradient(colors: [Color(red: 0.95, green: 0.9, blue: 0.75), Color(red: 0.4, green: 0.7, blue: 0.95), .white], startPoint: .topLeading, endPoint: .bottomTrailing)
-        let graphite = Color(red: 0.094, green: 0.102, blue: 0.122)
-        let opts: [(String, AnyView)] = [
-            ("A-current-graphite74", AnyView(ZStack { back; graphite.opacity(0.74) })),
-            ("B-hoverlike-double-graphite", AnyView(ZStack { back; graphite.opacity(1 - 0.26 * 0.26) })),
-            ("C-opaque-black", AnyView(Color(red: 0.06, green: 0.06, blue: 0.07))),
-        ]
-        for (n, bg) in opts {
-            try save(MultiPanelContent(snapshot: snap, preferences: prefs).background(bg).environment(\.colorScheme, .dark), "window-option-\(n).png")
-        }
-        prefs.appearance = .light
-        let host = NSHostingView(rootView: MultiPanelContent(snapshot: snap, preferences: prefs).background(Color.white).environment(\.colorScheme, .light))
-        let size = host.fittingSize
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: .borderless, backing: .buffered, defer: false)
-        win.appearance = NSAppearance(named: .aqua); win.contentView = host
-        host.frame = CGRect(origin: .zero, size: size); host.layoutSubtreeIfNeeded()
-        let bm = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds)); host.cacheDisplay(in: host.bounds, to: bm)
-        try XCTUnwrap(bm.representation(using: .png, properties: [:])).write(to: dir.appendingPathComponent("window-option-D-light-opaque.png"))
-        withExtendedLifetime(win) {}
+        for style in UsageStyle.allCases { for basis in UsageBasis.allCases {
+            UserDefaults.standard.set(style.rawValue, forKey: UsageStyle.key)
+            UserDefaults.standard.set(basis.rawValue, forKey: UsageBasis.key)
+            let panel = MultiPanelContent(snapshot: snap, preferences: prefs)
+                .background(PanelBackground())
+                .clipShape(RoundedRectangle(cornerRadius: PanelBackground.cornerRadius, style: .continuous))
+                .padding(16).background(back)
+            try save(panel, "window-\(style.rawValue)-\(basis.rawValue).png")
+        }}
         UserDefaults.standard.removeObject(forKey: UsageStyle.key); UserDefaults.standard.removeObject(forKey: UsageBasis.key)
     }
 }

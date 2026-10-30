@@ -355,6 +355,8 @@ struct G1Gauge: View {
 }
 
 struct ServiceRowView: View {
+    /// Card tint that separates each card from the window: lighter grey in dark mode, slightly darker grey in light mode.
+    static let cardFill = Color.primary.opacity(0.085)
     let row: ServiceRowModel
     @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
     @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
@@ -434,7 +436,9 @@ struct ServiceRowView: View {
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.035)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Self.cardFill)
+            .shadow(color: .black.opacity(0.22), radius: 2, y: 1))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
         .accessibilityElement(children: .combine)
     }
 
