@@ -81,6 +81,11 @@ struct WeeklyPaceBar: View {
 
     /// Fixed blue: never the warning orange, independent of the system accent colour.
     static let todayColor = Color(red: 0.16, green: 0.47, blue: 0.96)
+    enum MarkerStyle { case bracket, outline, dim }
+    /// Chosen today marker; the others stay for preview comparison.
+    nonisolated(unsafe) static var markerStyle: MarkerStyle = .outline
+    @Environment(\.colorScheme) private var scheme
+    private var dimColor: Color { (scheme == .dark ? Color.black : Color.white).opacity(0.55) }
 
     private var fill: Color {
         switch pace.tone {
@@ -105,12 +110,6 @@ struct WeeklyPaceBar: View {
                 ZStack(alignment: .leading) {
                   ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
-                    if let r = pace.todayRange {
-                        // Today's slice of an even spend: where today's use should land.
-                        Rectangle().fill(Self.todayColor.opacity(0.28))
-                            .frame(width: w * (r.upperBound - r.lowerBound) / 100, height: h)
-                            .offset(x: w * r.lowerBound / 100)
-                    }
                     if let e = pace.elapsedPercent {
                         // Even-pace region: what an even spend would have used by now.
                         Capsule().fill(Color.primary.opacity(0.10)).frame(width: max(2, w * e / 100))
@@ -124,13 +123,22 @@ struct WeeklyPaceBar: View {
                                 .offset(x: w * Double(k) / 7 - 0.5)
                         }
                     }
-                    if let r = pace.todayRange {
-                        Rectangle().strokeBorder(Self.todayColor.opacity(0.75), lineWidth: 1)
-                            .frame(width: w * (r.upperBound - r.lowerBound) / 100, height: h)
-                            .offset(x: w * r.lowerBound / 100)
+                    if let r = pace.todayRange, Self.markerStyle == .dim {
+                        // Dim everything outside today so today's slice stands out on any fill.
+                        let x0 = w * r.lowerBound / 100, x1 = w * r.upperBound / 100
+                        Rectangle().fill(dimColor).frame(width: x0, height: h)
+                        Rectangle().fill(dimColor).frame(width: max(0, w - x1), height: h).offset(x: x1)
                     }
                   }
                   .clipShape(Capsule())
+                    if let r = pace.todayRange, Self.markerStyle == .outline {
+                        // Two-tone outline (light over dark) reads on green, orange, red and the empty track.
+                        let x0 = w * r.lowerBound / 100, rw = w * (r.upperBound - r.lowerBound) / 100
+                        RoundedRectangle(cornerRadius: 3).stroke(Color.black.opacity(0.45), lineWidth: 3)
+                            .frame(width: rw, height: h + 4).offset(x: x0, y: 0)
+                        RoundedRectangle(cornerRadius: 3).stroke(Color.white, lineWidth: 1.5)
+                            .frame(width: rw, height: h + 4).offset(x: x0, y: 0)
+                    }
                     if let e = pace.elapsedPercent {
                         Rectangle().fill(Color.primary.opacity(0.85))
                             .frame(width: 1.5, height: h + 4)
@@ -139,9 +147,30 @@ struct WeeklyPaceBar: View {
                 }
             }
             .frame(height: compact ? 8 : 9)
-            Text(pace.footerText).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+            if let r = pace.todayRange, Self.markerStyle == .bracket {
+                // Today's even-pace range as a bracket under the bar: never overlaps the fill colour.
+                GeometryReader { proxy in
+                    let w = proxy.size.width
+                    let x0 = w * r.lowerBound / 100, rw = w * (r.upperBound - r.lowerBound) / 100
+                    Path { p in
+                        p.move(to: CGPoint(x: x0 + 0.75, y: 0)); p.addLine(to: CGPoint(x: x0 + 0.75, y: 5))
+                        p.addLine(to: CGPoint(x: x0 + rw - 0.75, y: 5)); p.addLine(to: CGPoint(x: x0 + rw - 0.75, y: 0))
+                    }
+                    .stroke(Color.primary.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                }
+                .frame(height: 6)
+                .padding(.top, -1)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                if let t = pace.todayText {
+                    Text(t).foregroundStyle(.primary).fontWeight(.medium)
+                }
+                Text(pace.rangeText).foregroundStyle(.secondary)
+            }
+            .monospacedDigit().fixedSize(horizontal: false, vertical: true)
+            .padding(.top, pace.todayRange != nil && Self.markerStyle == .outline ? 3 : 0)
         }
-        .font(.system(size: compact ? 10 : 11))
+        .font(.system(size: compact ? 11 : 12))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(pace.label) 使用 \(Int(pace.usedPercent.rounded()))%、\(pace.paceText)、\(pace.footerText)")
     }

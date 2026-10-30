@@ -92,8 +92,13 @@ final class WeeklyPaceTests: XCTestCase {
             WeeklyPace(label: "Codex 週", limit: weekly(left: 59, resetIn: 5 * 86_400), now: now),
             WeeklyPace(label: "Claude 週", limit: weekly(left: 51, resetIn: 3 * 86_400 + 7200), now: now),
             WeeklyPace(label: "Grok 週", limit: weekly(left: 92, resetIn: 6.5 * 86_400), now: now),
+            WeeklyPace(label: "Kimi 週", limit: weekly(left: 20, resetIn: 4 * 86_400), now: now),
             WeeklyPace(label: "Z.ai 週", limit: weekly(left: 40, resetIn: nil), now: now),
         ]
+        let styles: [(WeeklyPaceBar.MarkerStyle, String)] = [(.bracket, "A-bracket"), (.outline, "B-outline"), (.dim, "C-dim"), (.outline, "final")]
+        defer { WeeklyPaceBar.markerStyle = .outline }
+        for (style, tag) in styles {
+        WeeklyPaceBar.markerStyle = style
         for dark in [true, false] {
             let view = VStack(spacing: 10) {
                 ForEach(Array(paces.enumerated()), id: \.offset) { _, p in WeeklyPaceBar(pace: p) }
@@ -114,7 +119,8 @@ final class WeeklyPaceTests: XCTestCase {
             bitmap.size = size
             host.cacheDisplay(in: host.bounds, to: bitmap)
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                .write(to: URL(fileURLWithPath: dir).appendingPathComponent("bars-\(dark ? "dark" : "light").png"))
+                .write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(tag)-bars-\(dark ? "dark" : "light").png"))
+        }
         }
     }
 }
