@@ -22,9 +22,12 @@ final class ZZShotsTmpTests: XCTestCase {
         let snap = MultiUsageSnapshot(sections: [
             ProviderSection(provider: .codex, windows: [w("5h", 78, 3), w("Weekly", 49, 60)], stats: [], failureText: nil),
             ProviderSection(provider: .claude, windows: [w("Account A · 5h", 62, 2, 0), w("Account A · Weekly", 40, 90, 0),
-                w("Account B · 5h", 30, 4, 1), w("Account B · Weekly", 18, 30, 1)], stats: [], failureText: nil),
+                w("Account B · 5h", 0, 4, 1), w("Account B · Weekly", 18, 30, 1)], stats: [], failureText: nil),
             ProviderSection(provider: .antigravity, windows: [w("Gemini 4 Argon · 5h", 0, 2), w("Gemini Models · Weekly", 76, 50)], stats: [], failureText: nil),
-            ProviderSection(provider: .zai, windows: [w("5h", 88, 1), w("Weekly", 70, 100), w("MCP monthly", 95, 400)], stats: [], failureText: nil),
+            ProviderSection(provider: .zai, windows: [w("5h", 88, 1), w("Weekly", 70, 100), w("MCP monthly", 0, 400)], stats: [], zaiResetTickets: .loaded([
+                .init(title: "5時間リセット", available: true, expiresAt: now.addingTimeInterval(-3600)),
+                .init(title: "週リセット", available: true, expiresAt: now.addingTimeInterval(86_400 * 3)),
+                .init(title: "5時間リセット", available: true, expiresAt: now.addingTimeInterval(86_400 * 9))])),
         ], codexSnapshot: nil, updatedAt: now)
         func save(_ v: some View, _ file: String) throws {
             let host = NSHostingView(rootView: v.background(Color(white: 0.10)).environment(\.colorScheme, .dark))

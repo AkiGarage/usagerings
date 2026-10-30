@@ -65,18 +65,32 @@ struct LimitHeader: View {
 /// 案B bar: 残り fills `tint` from the left (shrinks toward the left as it is used);
 /// 使用量 fills orange from the left (grows to the right).
 struct BasisBar: View {
+    static let blockedColor = Color.secondary.opacity(0.45)
     let basis: UsageBasis
     let leftPercent: Double
     let tint: Color
     var track: Color = Color.primary.opacity(0.12)
+    /// Rate-limited: one plain full-width grey bar, nothing else.
+    var blocked = false
+
+    /// Fill width in points: 0 (no stub) when the share is 0, else at least 2pt so a tiny share stays visible.
+    static func fillWidth(width: Double, share: Double) -> Double {
+        (share.isFinite && share > 0) ? max(2, width * min(share, 1)) : 0
+    }
 
     var body: some View {
         GeometryReader { proxy in
             let w = proxy.size.width
             let share = basis.fillPercent(leftPercent: leftPercent) / 100
             ZStack(alignment: .leading) {
-                Capsule().fill(track)
-                Capsule().fill(basis == .used ? UsageLayout.usedColor : tint).frame(width: max(2, w * share))
+                if blocked {
+                    Capsule().fill(BasisBar.blockedColor)
+                } else {
+                    Capsule().fill(track)
+                    if share > 0 {
+                        Capsule().fill(basis == .used ? UsageLayout.usedColor : tint).frame(width: Self.fillWidth(width: w, share: share))
+                    }
+                }
             }.clipShape(Capsule())
         }
     }
@@ -88,12 +102,13 @@ struct DetailLimitRow: View {
     let leftPercent: Double
     let tint: Color
     var caption: String? = nil
+    var blocked = false
     @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
     private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
     var body: some View {
         VStack(alignment: .leading, spacing: UsageLayout.rowSpacing) {
             LimitHeader(label: label, value: basis.valueText(leftPercent: leftPercent))
-            BasisBar(basis: basis, leftPercent: leftPercent, tint: tint).frame(height: UsageLayout.detailBarHeight)
+            BasisBar(basis: basis, leftPercent: leftPercent, tint: tint, blocked: blocked).frame(height: UsageLayout.detailBarHeight)
             if let caption {
                 Text(caption).font(UsageLayout.captionFont).foregroundStyle(.secondary).lineLimit(1)
             }

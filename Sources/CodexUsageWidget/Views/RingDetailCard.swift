@@ -140,7 +140,7 @@ struct RingDetailCardModel: Equatable {
 
         var statusText: String? {
             switch status {
-            case "available": isGreyedOut ? "期限切れ" : "使用可"
+            case "available": isGreyedOut ? "期限切れ" : nil  // usable tickets need no 使用可 label (Aki t1655u)
             case "used", "redeemed", "consumed": "使用済み"
             case "expired": "期限切れ"
             case let other?: other
@@ -202,7 +202,8 @@ struct RingDetailCardModel: Equatable {
         }
         let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent, kind: ServiceRowModel.kind($0.title)) }
         let codexExtras = bar.id == "codex" || bar.id.hasPrefix("codex-") ? bar.codexExtras : nil
-        let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now)
+        // Codex: only the 「リセットチケット 利用可能 N件」 count; no per-ticket 完全リセット/使用可/期限 lines (Aki t1655u).
+        let tickets: [TicketRow] = []
         let hasExtras = codexExtras?.creditsText != nil || codexExtras?.availableCount != nil || !tickets.isEmpty
         var extras = hasExtras
             ? Extras(creditsText: codexExtras?.creditsText, availableCount: codexExtras?.availableCount,
@@ -214,7 +215,7 @@ struct RingDetailCardModel: Equatable {
             case .unavailable:
                 ticketFailureText = "リセット券を取得できません"
             case .loaded(let records):
-                let sorted = records.enumerated().sorted {
+                let sorted = records.enumerated().filter { $0.element.expiresAt > now }.sorted {  // expired tickets are hidden
                     $0.element.expiresAt == $1.element.expiresAt
                         ? $0.offset < $1.offset : $0.element.expiresAt < $1.element.expiresAt
                 }
@@ -431,7 +432,8 @@ struct RingDetailCardView: View {
                                   blocked: model.blockText != nil)
                 }
                 ForEach(Array((model.detailFallbackRows + model.orderedRows(.other)).enumerated()), id: \.offset) { _, row in
-                    DetailLimitRow(label: row.label, leftPercent: row.leftPercent, tint: color(for: row.severity))
+                    DetailLimitRow(label: row.label, leftPercent: row.leftPercent, tint: color(for: row.severity),
+                                   blocked: model.blockText != nil)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -492,7 +494,7 @@ struct RingDetailCardView: View {
         HStack(spacing: 8) {
             Text(row.label).font(UsageLayout.labelFont).foregroundStyle(.secondary).lineLimit(1)
                 .frame(width: 76, alignment: .leading)
-            BasisBar(basis: basis, leftPercent: row.leftPercent, tint: color(for: row.severity))
+            BasisBar(basis: basis, leftPercent: row.leftPercent, tint: color(for: row.severity), blocked: model.blockText != nil)
                 .frame(height: UsageLayout.simpleBarHeight)
             Text(basis.valueText(leftPercent: row.leftPercent)).font(UsageLayout.valueFont)
                 .frame(width: 72, alignment: .trailing)

@@ -122,7 +122,7 @@ final class RingDetailCardTests: XCTestCase {
         XCTAssertEqual(model.resetLabel, "週の枠")
         XCTAssertEqual(model.extras?.creditsText, extras.creditsText)
         XCTAssertEqual(model.extras?.availableCount, 2)
-        XCTAssertEqual(model.extras?.tickets.compactMap(\.title), tickets.compactMap(\.title))
+        XCTAssertEqual(model.extras?.tickets, [])  // Aki t1655u: count only
 
         if let path = ProcessInfo.processInfo.environment["CODEX_HOVER_PNG"] {
             let renderer = ImageRenderer(content: RingDetailCardView(model: model)
@@ -240,18 +240,8 @@ final class RingDetailCardTests: XCTestCase {
         let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: noonJST))
         XCTAssertEqual(model.extras?.creditsText, "61,003 credits")
         XCTAssertEqual(model.extras?.availableCount, 2)
-        XCTAssertEqual(model.extras?.tickets.compactMap(\.title), Optional([
-            "Expired available", "Early available", "Same-time used", "Same-time available",
-            "Later available", "Later used", "No expiry first", "No expiry second",
-        ]))
-        XCTAssertEqual(model.extras?.tickets[0].expiresText, "期限 11:59 JST")
-        XCTAssertEqual(model.extras?.tickets[1].expiresText, "期限 12:30 JST")
-        XCTAssertEqual(model.extras?.tickets[2].expiresText, "期限 10/22 09:00 JST")
-        XCTAssertNil(model.extras?.tickets[6].expiresText)
-        XCTAssertEqual(model.extras?.tickets.map(\.isGreyedOut),
-                       Optional([true, false, true, false, false, true, false, true]))
-        XCTAssertEqual(model.extras?.tickets[0].statusText, "期限切れ")
-        XCTAssertEqual(model.extras?.tickets[1].statusText, "使用可")
+        // Aki t1655u: Codex hover keeps only 「リセットチケット 利用可能 N件」; no 完全リセット / 使用可 · 期限 rows.
+        XCTAssertEqual(model.extras?.tickets, [])
     }
 
     // MARK: - CollapsedUsageBar windows plumbing

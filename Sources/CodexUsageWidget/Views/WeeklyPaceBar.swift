@@ -63,6 +63,11 @@ struct WeeklyPace: Equatable {
         let goal = basis == .used ? "使用\(t)%まで" : "残り\(100 - t)%まで"
         return left < 0 ? "今日の目安：\(goal)（\(-left)% 超過）" : "今日の目安：\(goal)（あと \(left)%）"
     }
+    /// Rate-limited: the target is moot, so it reads 使用不可 (Aki t1655u).
+    func todayText(_ basis: UsageBasis, blocked: Bool) -> String? {
+        guard todayTarget != nil else { return nil }
+        return blocked ? "今日の目安：使用不可" : todayText(basis)
+    }
     /// 5h caption: "あと1時間20分で回復（20:00）".
     var recoverText: String? {
         guard isFiveHour, let reset else { return nil }
@@ -168,7 +173,7 @@ struct WeeklyPaceBar: View {
                 if let t = pace.recoverText {
                     Text(t).foregroundStyle(.primary)
                 }
-                if let t = pace.todayText(basis) {
+                if let t = pace.todayText(basis, blocked: blocked) {
                     Text(t).foregroundStyle(pace.todayOver && !blocked ? CollapsedUsageBar.warningColor : .primary)
                 }
                 Text(pace.rangeText).foregroundStyle(.secondary)
@@ -189,13 +194,19 @@ struct WeeklyPaceBar: View {
             let w = proxy.size.width
             let h = proxy.size.height
             ZStack(alignment: .leading) {
+                if blocked {
+                    // Rate-limited: exactly one plain grey bar (no today box, tick, slices or stub).
+                    Capsule().fill(BasisBar.blockedColor)
+                } else {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
-                    if let t = tick, !blocked {
+                    if let t = tick, !blocked, t > 0 {
                         // Even-pace region: what an even spend would show now, on the same axis as the fill.
                         Capsule().fill(Color.primary.opacity(0.10)).frame(width: max(2, w * t / 100))
                     }
-                    Capsule().fill(fill.opacity(0.85)).frame(width: max(2, w * fillShare / 100))
+                    if fillShare > 0 {
+                        Capsule().fill(fill.opacity(0.85)).frame(width: BasisBar.fillWidth(width: w, share: fillShare / 100))
+                    }
                     if pace.elapsedPercent != nil, !blocked {
                         ForEach(1..<pace.slices, id: \.self) { k in
                             Rectangle().fill(Color.primary.opacity(0.30))
@@ -222,6 +233,7 @@ struct WeeklyPaceBar: View {
                     Rectangle().fill(Color.primary.opacity(0.85))
                         .frame(width: 1.5, height: h + 4)
                         .offset(x: min(max(w * t / 100 - 0.75, 0), w - 1.5))
+                }
                 }
             }
         }

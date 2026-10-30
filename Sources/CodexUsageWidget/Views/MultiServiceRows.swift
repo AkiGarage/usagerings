@@ -228,7 +228,8 @@ struct ServiceRowModel: Identifiable {
         }
         // Z.ai tickets carry real expiries: list usable ones vertically like Codex.
         if rows[0].ticketExpiries.isEmpty, case let .loaded(tickets)? = section.zaiResetTickets {
-            rows[0].ticketExpiries = tickets.filter(\.available).map(\.expiresAt)
+            let now = Date()
+            rows[0].ticketExpiries = tickets.filter { $0.available && $0.expiresAt > now }.map(\.expiresAt)
         }
         rows[0].ticketExpiries.sort()
         rows[0].failureText = section.failureText
@@ -309,6 +310,11 @@ struct GaugeArc: Shape {
 struct G1Gauge: View {
     let row: ServiceRowModel
     var size: CGFloat = 60
+    /// Unlock date/time under the lock, same lines as the tab ring (Aki t1656u); nil when not rate-limited.
+    static func unlockLines(_ row: ServiceRowModel) -> (date: String, time: String)? {
+        guard row.isBlocked, let block = row.block else { return nil }
+        return ClaudeRateLimitParser.recoveryLines(resetAt: block.resetAt)
+    }
     var body: some View {
         let outerW: CGFloat = 5.5, innerW: CGFloat = 3, gap: CGFloat = 2.2
         let p = row.primary
@@ -336,13 +342,25 @@ struct G1Gauge: View {
                     .foregroundStyle(.secondary)
                     .offset(y: -size * 0.03)
                     .accessibilityLabel("制限中")
+                if let lines = Self.unlockLines(row) {
+                    VStack(spacing: -1) {
+                        Text(lines.date)
+                        Text(lines.time)
+                    }
+                    .font(.system(size: max(7, size * 0.15), weight: .semibold)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                    .foregroundStyle(.secondary)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .offset(y: size * 0.04)
+                    .accessibilityLabel("解除 \(lines.date) \(lines.time)")
+                }
             } else {
                 Text(p.map { "\($0.percentInt)" } ?? "–")
                     .font(.system(size: size * 0.31, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(p.map { $0.clampedLeftPercent < 20 } == true ? GaugeStyle.lowColor : Color.primary)
                     .offset(y: -size * 0.03)
             }
-            if let w = row.inner {
+            if let w = row.inner, !blocked {  // the unlock time takes this slot while locked
                 Text("週\(w.percentInt)")
                     .font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -392,7 +410,8 @@ struct ServiceRowView: View {
                         }
                         ForEach(Array(detailOthers.enumerated()), id: \.offset) { _, limit in
                             DetailLimitRow(label: ServiceRowModel.shortLabel(limit.title), leftPercent: limit.clampedLeftPercent,
-                                           tint: row.isBlocked ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit), caption: "リセット \(limit.shortReset)")
+                                           tint: row.isBlocked ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit), caption: "リセット \(limit.shortReset)",
+                                           blocked: row.isBlocked)
                         }
                     }
                     .padding(.top, 4)
@@ -462,7 +481,7 @@ struct ServiceRowView: View {
             if let limit {
                 BasisBar(basis: basis, leftPercent: limit.clampedLeftPercent,
                          tint: row.isBlocked ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit),
-                         track: Color.white.opacity(0.10)).frame(height: UsageLayout.simpleBarHeight)
+                         track: Color.white.opacity(0.10), blocked: row.isBlocked).frame(height: UsageLayout.simpleBarHeight)
                 Text(basis.valueText(leftPercent: limit.clampedLeftPercent)).font(UsageLayout.valueFont)
                     .foregroundStyle(row.isBlocked ? Color.secondary : limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
                     .frame(width: 70, alignment: .trailing)
