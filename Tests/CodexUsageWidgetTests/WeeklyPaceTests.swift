@@ -63,8 +63,9 @@ final class WeeklyPaceTests: XCTestCase {
         XCTAssertEqual(p.todayIndex, 2)
         XCTAssertEqual(p.todayRange!.lowerBound, 200.0 / 7, accuracy: 0.01)
         XCTAssertEqual(p.todayRange!.upperBound, 300.0 / 7, accuracy: 0.01)
-        XCTAssertEqual(p.todayText, "今日の枠 29〜43%（3/7日目）")
-        XCTAssertTrue(p.footerText.hasSuffix("今日の枠 29〜43%（3/7日目）"))
+        XCTAssertEqual(p.todayText, "今日の累計目安：29%→43%（3/7日目）")
+        XCTAssertTrue(p.footerText.hasSuffix("今日の累計目安：29%→43%（3/7日目）"))
+        XCTAssertTrue(p.rangeText.hasPrefix("週の制限の期間："))
     }
 
     func testTodaySliceEdges() {

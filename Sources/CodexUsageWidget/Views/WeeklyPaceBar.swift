@@ -40,7 +40,7 @@ struct WeeklyPace: Equatable {
     }
     var todayText: String? {
         guard let i = todayIndex, let r = todayRange else { return nil }
-        return "今日の枠 \(Int(r.lowerBound.rounded()))〜\(Int(r.upperBound.rounded()))%（\(i + 1)/7日目）"
+        return "今日の累計目安：\(Int(r.lowerBound.rounded()))%→\(Int(r.upperBound.rounded()))%（\(i + 1)/7日目）"
     }
 
     /// used - even share, in percentage points; positive means ahead of pace.
@@ -64,7 +64,7 @@ struct WeeklyPace: Equatable {
         let c = RingResetFormat.tokyoCalendar.dateComponents([.month, .day, .hour, .minute], from: date)
         return String(format: "%d/%d %02d:%02d", c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0)
     }
-    var rangeText: String { start == nil ? (unknownReason ?? "リセット 不明") : "\(Self.day(start)) → \(Self.day(reset))" }
+    var rangeText: String { start == nil ? (unknownReason ?? "リセット 不明") : "週の制限の期間：\(Self.day(start))〜\(Self.day(reset))" }
     /// Bottom line: reset range plus today's allowance when known.
     var footerText: String { todayText.map { "\(rangeText) ・ \($0)" } ?? rangeText }
 
@@ -167,6 +167,7 @@ struct WeeklyPaceBar: View {
                 }
                 Text(pace.rangeText).foregroundStyle(.secondary)
             }
+            .help("今日の累計目安：毎日同じだけ使うと、週の使用量が今日の始めにこの%、今日の終わりにこの%になります（白枠の部分）。週の制限の期間：週の制限が数えられる期間（前のリセット〜次のリセット）。")
             .monospacedDigit().fixedSize(horizontal: false, vertical: true)
             .padding(.top, pace.todayRange != nil && Self.markerStyle == .outline ? 3 : 0)
         }
