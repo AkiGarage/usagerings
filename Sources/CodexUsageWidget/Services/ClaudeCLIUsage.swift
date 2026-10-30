@@ -134,17 +134,21 @@ final class ClaudeCLIUsage: Sendable {
     /// Never waits. Returns nil until at least one account has a usable value.
     func section(accounts: [ClaudeCLIAccount], now: Date, timeZone: TimeZone, salt: Data? = nil) -> Result? {
         guard !accounts.isEmpty else { return nil }
-        resetIfAccountsChanged(accounts)
-        let entries = state.withLock { $0.entries }
-        let due = accounts.filter { account in
-            let entry = entries[Self.key(account)]
-            let last = entry?.attemptedAt ?? .distantPast
-            return now.timeIntervalSince(last) >= refreshInterval
+        // One lock: settings check, due list, claim and task hand-off are atomic, so an old queue
+        // can never start under a new generation and the stored task is always cancellable.
+        let signature = Self.signature(accounts), keys = Set(accounts.map(Self.key))
+        let interval = refreshInterval
+        let (entries, old) = state.withLock { s -> ([String: Entry], Task<Void, Never>?) in
+            let old = Self.rotate(&s, signature: signature, keys: keys)
+            let due = accounts.filter { now.timeIntervalSince(s.entries[Self.key($0)]?.attemptedAt ?? .distantPast) >= interval }
+            if !due.isEmpty, !s.refreshing {
+                s.refreshing = true
+                let generation = s.generation
+                s.task = Task.detached { [self] in await self.runRefresh(due, timeZone: timeZone, generation: generation) }
+            }
+            return (s.entries, old)
         }
-        if !due.isEmpty, let generation = startRefreshIfIdle() {
-            let task = Task.detached { [self] in await self.runRefresh(due, timeZone: timeZone, generation: generation) }
-            state.withLock { s in if s.generation == generation { s.task = task } }
-        }
+        old?.cancel()
         return Self.build(accounts: accounts, entries: entries, now: now,
                           staleAge: staleAge, maxCacheAge: maxCacheAge, salt: salt)
     }
@@ -158,20 +162,26 @@ final class ClaudeCLIUsage: Sendable {
 
     /// A settings change cancels the running queue and drops values of removed folders,
     /// so the next call starts a fresh queue for the new list.
+    private static func signature(_ accounts: [ClaudeCLIAccount]) -> [String] {
+        accounts.map { "\($0.label)\u{0}\(Self.key($0))" }
+    }
+
+    /// Under the lock: on a changed account list bump the generation, drop removed folders and
+    /// hand back the old task to cancel.
+    private static func rotate(_ s: inout State, signature: [String], keys: Set<String>) -> Task<Void, Never>? {
+        defer { s.accountsSignature = signature }
+        guard let previous = s.accountsSignature, previous != signature else { return nil }
+        s.generation += 1
+        s.refreshing = false
+        s.entries = s.entries.filter { keys.contains($0.key) }
+        let task = s.task
+        s.task = nil
+        return task
+    }
+
     private func resetIfAccountsChanged(_ accounts: [ClaudeCLIAccount]) {
-        let signature = accounts.map { "\($0.label)\u{0}\(Self.key($0))" }
-        let old: Task<Void, Never>? = state.withLock { s in
-            defer { s.accountsSignature = signature }
-            guard let previous = s.accountsSignature, previous != signature else { return nil }
-            s.generation += 1
-            s.refreshing = false
-            let keys = Set(accounts.map(Self.key))
-            s.entries = s.entries.filter { keys.contains($0.key) }
-            let task = s.task
-            s.task = nil
-            return task
-        }
-        old?.cancel()
+        let signature = Self.signature(accounts), keys = Set(accounts.map(Self.key))
+        state.withLock { Self.rotate(&$0, signature: signature, keys: keys) }?.cancel()
     }
 
     private func startRefreshIfIdle() -> Int? {

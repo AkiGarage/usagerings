@@ -14,6 +14,9 @@ struct ServiceRowModel: Identifiable {
     var tickets: [String] = []
     var ticketCount: Int?
     var ticketExpiries: [Date] = []
+    /// Same quota lock as the tab ring (CollapsedUsageBar.quotaBlock); nil = not rate-limited.
+    var block: ClaudeBlock?
+    var isBlocked: Bool { block?.isActive(at: Date()) == true }
 
     /// "リセットチケット ×3 · 期限 10/23 05:56 · 10/30 04:10 · 11/07 08:36" — available tickets, sorted by expiry.
     func ticketLine(withTimes: Bool) -> String? {
@@ -103,9 +106,16 @@ struct ServiceRowModel: Identifiable {
     static func rows(for snapshot: MultiUsageSnapshot, showAccounts: Bool = false,
                      splitAntigravityAccounts: Bool = false,
                      accountPreferences: AccountPreferences = AccountPreferences()) -> [Self] {
-        snapshot.sections.flatMap {
-            rows(for: $0, showAccounts: showAccounts, splitAntigravityAccounts: splitAntigravityAccounts,
-                 accountPreferences: accountPreferences)
+        snapshot.sections.flatMap { section in
+            rows(for: section, showAccounts: showAccounts, splitAntigravityAccounts: splitAntigravityAccounts,
+                 accountPreferences: accountPreferences).map { row in
+                var row = row
+                // Mirror the tab ring's lock exactly (GLM: only the 5h window locks).
+                let windows = [row.five, row.week].compactMap { $0 } + row.extras
+                let lockable = section.provider == .zai ? windows.filter { kind($0.title) == .five } : windows
+                row.block = CollapsedUsageBar.quotaBlock(lockable, now: snapshot.updatedAt)
+                return row
+            }
         }
     }
 
@@ -302,12 +312,14 @@ struct G1Gauge: View {
     var body: some View {
         let outerW: CGFloat = 5.5, innerW: CGFloat = 3, gap: CGFloat = 2.2
         let p = row.primary
+        let blocked = row.isBlocked
+        let grey = Color.secondary.opacity(0.45)
         ZStack {
-            GaugeArc(fraction: 1).stroke(row.color.opacity(0.20), style: .init(lineWidth: outerW, lineCap: .round))
+            GaugeArc(fraction: 1).stroke(blocked ? grey : row.color.opacity(0.20), style: .init(lineWidth: outerW, lineCap: .round))
                 .padding(outerW / 2)
             if let p {
                 GaugeArc(fraction: p.clampedLeftPercent / 100)
-                    .stroke(GaugeStyle.tint(row.color, p), style: .init(lineWidth: outerW, lineCap: .round))
+                    .stroke(blocked ? grey : GaugeStyle.tint(row.color, p), style: .init(lineWidth: outerW, lineCap: .round))
                     .padding(outerW / 2)
             }
             if let w = row.inner {
@@ -315,13 +327,21 @@ struct G1Gauge: View {
                 GaugeArc(fraction: 1).stroke(Color.white.opacity(0.08), style: .init(lineWidth: innerW, lineCap: .round))
                     .padding(inset)
                 GaugeArc(fraction: w.clampedLeftPercent / 100)
-                    .stroke(GaugeStyle.tint(row.color, w).opacity(0.62), style: .init(lineWidth: innerW, lineCap: .round))
+                    .stroke(blocked ? grey : GaugeStyle.tint(row.color, w).opacity(0.62), style: .init(lineWidth: innerW, lineCap: .round))
                     .padding(inset)
             }
-            Text(p.map { "\($0.percentInt)" } ?? "–")
-                .font(.system(size: size * 0.31, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(p.map { $0.clampedLeftPercent < 20 } == true ? GaugeStyle.lowColor : Color.primary)
-                .offset(y: -size * 0.03)
+            if blocked {
+                Image(systemName: CollapsedUsageBar.blockedSymbol)
+                    .font(.system(size: size * 0.28, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .offset(y: -size * 0.03)
+                    .accessibilityLabel("制限中")
+            } else {
+                Text(p.map { "\($0.percentInt)" } ?? "–")
+                    .font(.system(size: size * 0.31, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(p.map { $0.clampedLeftPercent < 20 } == true ? GaugeStyle.lowColor : Color.primary)
+                    .offset(y: -size * 0.03)
+            }
             if let w = row.inner {
                 Text("週\(w.percentInt)")
                     .font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
@@ -345,6 +365,10 @@ struct ServiceRowView: View {
             G1Gauge(row: row)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
+                    if row.isBlocked {
+                        Image(systemName: CollapsedUsageBar.blockedSymbol)
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    }
                     Text(row.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     if let account = row.account {
                         Text(account).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
@@ -362,11 +386,11 @@ struct ServiceRowView: View {
                     // 詳細: every window gets the same full-width bar (5h first, then weekly, then others like GLM MCP).
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(row.detailPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
-                            WeeklyPaceBar(pace: pace)
+                            WeeklyPaceBar(pace: pace, blocked: row.isBlocked)
                         }
                         ForEach(Array(detailOthers.enumerated()), id: \.offset) { _, limit in
                             DetailLimitRow(label: ServiceRowModel.shortLabel(limit.title), leftPercent: limit.clampedLeftPercent,
-                                           tint: GaugeStyle.tint(row.color, limit), caption: "リセット \(limit.shortReset)")
+                                           tint: row.isBlocked ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit), caption: "リセット \(limit.shortReset)")
                         }
                     }
                     .padding(.top, 4)
@@ -394,6 +418,10 @@ struct ServiceRowView: View {
                 } else if let line = row.ticketLine(withTimes: true) {
                     Text(line).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                         .minimumScaleFactor(0.7).help(row.tickets.joined(separator: "\n"))
+                }
+                if let block = row.block, row.isBlocked {
+                    Text(ClaudeRateLimitParser.cardLine(block: block, now: Date()))
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 ForEach(row.notes, id: \.self) { note in
                     Text(note).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -428,10 +456,11 @@ struct ServiceRowView: View {
             Text(label).font(UsageLayout.labelFont).foregroundStyle(.secondary).lineLimit(1)
                 .frame(width: 56, alignment: .leading)
             if let limit {
-                BasisBar(basis: basis, leftPercent: limit.clampedLeftPercent, tint: GaugeStyle.tint(row.color, limit),
+                BasisBar(basis: basis, leftPercent: limit.clampedLeftPercent,
+                         tint: row.isBlocked ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit),
                          track: Color.white.opacity(0.10)).frame(height: UsageLayout.simpleBarHeight)
                 Text(basis.valueText(leftPercent: limit.clampedLeftPercent)).font(UsageLayout.valueFont)
-                    .foregroundStyle(limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
+                    .foregroundStyle(row.isBlocked ? Color.secondary : limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
                     .frame(width: 70, alignment: .trailing)
                 Text(limit.shortReset).font(UsageLayout.captionFont).foregroundStyle(.tertiary).lineLimit(1)
                     .frame(width: 84, alignment: .leading)

@@ -413,7 +413,10 @@ struct RingDetailCardView: View {
                 }
                 if let staleLine { Text(staleLine).font(caption).foregroundStyle(CollapsedUsageBar.warningColor).lineLimit(1) }
                 if let blockText = model.blockText {
-                    Text(blockText).font(caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                    HStack(spacing: 4) {
+                        Image(systemName: CollapsedUsageBar.blockedSymbol)
+                        Text(blockText).lineLimit(1).minimumScaleFactor(0.8)
+                    }.font(caption).foregroundStyle(.secondary)
                 }
                 // 詳細 shows recovery/period under each bar, so the plain reset line is only for シンプル.
                 if style == .simple || model.paces.isEmpty, let resetText = model.resetText {
@@ -424,7 +427,8 @@ struct RingDetailCardView: View {
             // 5時間枠 above 週の枠. シンプル: one aligned line per window. 詳細: full-width bars for every window.
             if style == .detail {
                 ForEach(Array(model.paces.enumerated()), id: \.offset) { index, pace in
-                    WeeklyPaceBar(pace: pace, compact: true, showLegend: index == model.paces.count - 1)
+                    WeeklyPaceBar(pace: pace, compact: true, showLegend: index == model.paces.count - 1,
+                                  blocked: model.blockText != nil)
                 }
                 ForEach(Array((model.detailFallbackRows + model.orderedRows(.other)).enumerated()), id: \.offset) { _, row in
                     DetailLimitRow(label: row.label, leftPercent: row.leftPercent, tint: color(for: row.severity))
@@ -496,10 +500,11 @@ struct RingDetailCardView: View {
     }
 
     private func color(for severity: RingCardSeverity) -> Color {
+        if model.blockText != nil { return Color.secondary.opacity(0.45) }  // rate-limited: all grey
         switch severity {
-        case .red: CollapsedUsageBar.criticalColor
-        case .amber: CollapsedUsageBar.warningColor
-        case .green: CollapsedUsageBar.antigravityColor
+        case .red: return CollapsedUsageBar.criticalColor
+        case .amber: return CollapsedUsageBar.warningColor
+        case .green: return CollapsedUsageBar.antigravityColor
         }
     }
 }

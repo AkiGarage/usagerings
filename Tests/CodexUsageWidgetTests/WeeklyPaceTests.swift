@@ -22,7 +22,7 @@ final class WeeklyPaceTests: XCTestCase {
     func testSurplusBehindPace() {
         // 4 days in = 57.1% elapsed; 49% used -> -8.
         let p = WeeklyPace(label: "週", limit: weekly(left: 51, resetIn: 3 * 86_400), now: now)
-        XCTAssertEqual(p.paceText, "余裕 -8%")
+        XCTAssertEqual(p.paceText, "均等より使用8%少ない（余裕あり）")
         XCTAssertEqual(p.tone, .under)
     }
 

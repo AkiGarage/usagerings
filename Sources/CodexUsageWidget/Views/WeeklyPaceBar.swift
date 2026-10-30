@@ -88,7 +88,7 @@ struct WeeklyPace: Equatable {
             return "ほぼ均等ペース"
         }
         if d >= 3 { return "均等より+\(d)%使いすぎ" }
-        if d <= -3 { return "余裕 \(d)%" }
+        if d <= -3 { return "均等より使用\(-d)%少ない（余裕あり）" }
         return "ほぼ均等ペース"
     }
     enum Tone { case over, under, even, unknown }
@@ -124,6 +124,8 @@ struct WeeklyPaceBar: View {
     let pace: WeeklyPace
     var compact = false
     var showLegend = false
+    /// Rate-limited: the whole bar goes grey (no warning/critical colour, no pace markers).
+    var blocked = false
     @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
     private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
 
@@ -136,6 +138,7 @@ struct WeeklyPaceBar: View {
     private var dimColor: Color { (scheme == .dark ? Color.black : Color.white).opacity(0.55) }
 
     private var fill: Color {
+        if blocked { return Color.secondary.opacity(0.45) }
         if basis == .used { return UsageLayout.usedColor }
         switch pace.tone {
         case .over: return CollapsedUsageBar.warningColor
@@ -161,12 +164,12 @@ struct WeeklyPaceBar: View {
                 .padding(.vertical, pace.elapsedPercent != nil && Self.markerStyle == .outline ? 2 : 0)
             VStack(alignment: .leading, spacing: 2) {
                 Text(pace.paceText(basis))
-                    .foregroundStyle(pace.tone == .over ? CollapsedUsageBar.warningColor : .secondary)
+                    .foregroundStyle(pace.tone == .over && !blocked ? CollapsedUsageBar.warningColor : .secondary)
                 if let t = pace.recoverText {
                     Text(t).foregroundStyle(.primary)
                 }
                 if let t = pace.todayText(basis) {
-                    Text(t).foregroundStyle(pace.todayOver ? CollapsedUsageBar.warningColor : .primary)
+                    Text(t).foregroundStyle(pace.todayOver && !blocked ? CollapsedUsageBar.warningColor : .primary)
                 }
                 Text(pace.rangeText).foregroundStyle(.secondary)
                 if showLegend {
@@ -188,12 +191,12 @@ struct WeeklyPaceBar: View {
             ZStack(alignment: .leading) {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.08))
-                    if let t = tick {
+                    if let t = tick, !blocked {
                         // Even-pace region: what an even spend would show now, on the same axis as the fill.
                         Capsule().fill(Color.primary.opacity(0.10)).frame(width: max(2, w * t / 100))
                     }
                     Capsule().fill(fill.opacity(0.85)).frame(width: max(2, w * fillShare / 100))
-                    if pace.elapsedPercent != nil {
+                    if pace.elapsedPercent != nil, !blocked {
                         ForEach(1..<pace.slices, id: \.self) { k in
                             Rectangle().fill(Color.primary.opacity(0.30))
                                 .frame(width: 1, height: h)
@@ -207,7 +210,7 @@ struct WeeklyPaceBar: View {
                     }
                 }
                 .clipShape(Capsule())
-                if let r = todayBox, Self.markerStyle != .dim {
+                if let r = todayBox, Self.markerStyle != .dim, !blocked {
                     // Two-tone outline (light over dark) reads on green, orange, red and the empty track.
                     let x0 = w * r.lowerBound / 100, rw = w * (r.upperBound - r.lowerBound) / 100
                     RoundedRectangle(cornerRadius: 3).stroke(Color.black.opacity(0.45), lineWidth: 3)
@@ -215,7 +218,7 @@ struct WeeklyPaceBar: View {
                     RoundedRectangle(cornerRadius: 3).stroke(Color.white, lineWidth: 1.5)
                         .frame(width: rw, height: h + 4).offset(x: x0)
                 }
-                if let t = tick {
+                if let t = tick, !blocked {
                     Rectangle().fill(Color.primary.opacity(0.85))
                         .frame(width: 1.5, height: h + 4)
                         .offset(x: min(max(w * t / 100 - 0.75, 0), w - 1.5))

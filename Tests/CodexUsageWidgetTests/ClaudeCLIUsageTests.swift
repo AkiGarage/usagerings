@@ -182,3 +182,26 @@ actor Gate {
     }
     func open() { isOpen = true; waiters.forEach { $0.resume() }; waiters = [] }
 }
+
+final class WindowLockParityTests: XCTestCase {
+    func testWindowRowLockMatchesTabRingForEveryProvider() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func w(_ t: String, _ p: Double, account: Int? = nil) -> UsageLimit {
+            var l = UsageLimit(title: t, leftPercent: p, resetText: "Resets in 2h")
+            l.resetAt = now.addingTimeInterval(7200); l.accountIndex = account; return l
+        }
+        let snap = MultiUsageSnapshot(sections: [
+            ProviderSection(provider: .antigravity, windows: [w("Gemini 4 Argon · 5h", 0), w("Gemini Models · Weekly", 70)], stats: [], failureText: nil),
+            ProviderSection(provider: .zai, windows: [w("5h", 50), w("MCP monthly", 0)], stats: [], failureText: nil),
+            ProviderSection(provider: .codex, windows: [w("5h", 0)], stats: [], failureText: nil),
+        ], codexSnapshot: nil, updatedAt: now)
+        let rows = ServiceRowModel.rows(for: snap)
+        let bars = CollapsedUsageBar.bars(for: snap, blockedPreview: nil)
+        let argonRow = rows.first { $0.name.localizedCaseInsensitiveContains("argon") }
+        let argonBar = bars.first { $0.title.localizedCaseInsensitiveContains("argon") }
+        XCTAssertNotNil(argonRow?.block); XCTAssertNotNil(argonBar?.block)
+        XCTAssertNil(rows.first { $0.id.hasPrefix("zai") }?.block, "GLM MCP 0% is not a lock")
+        XCTAssertNotNil(rows.first { $0.id.hasPrefix("codex") }?.block)
+        XCTAssertNil(rows.first { $0.name.contains("Gemini Models") }?.block)
+    }
+}
