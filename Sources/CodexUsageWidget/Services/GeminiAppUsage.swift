@@ -312,8 +312,28 @@ import os
 let geminiLog = Logger(subsystem: "com.akigarage.usagerings", category: "gemini")
 func frontName() -> String { NSWorkspace.shared.frontmostApplication?.localizedName ?? "?" }
 
+// 目的: Gemini アプリの残量 (gemini.google.com/usage) を、Aki のタブには一切触れずに読むための
+// UsageRings 専用 Chrome ウィンドウ。非表示で開き、このウィンドウのタブだけを再読み込み・読み取りする。
+// 利点: Aki のタブを前面化・再読み込みしない／Chrome 再起動後も名前で見つけられる。
+// 閉じた場合: 次回から Gemini の残量が「?」になる。自動復旧: 最大1時間に1回だけ非表示で作り直す。
+// エージェント・人へ: このウィンドウは閉じないこと（タイトルとページ上部の帯にも同じ説明あり）。
 enum GeminiDedicatedWindow {
-    static let name = "UsageRings Gemini（自動・閉じても可）"
+    static let name = "UsageRings: Gemini残量読み取り用・閉じないで"
+    /// Names used by earlier builds; a window found under one is renamed to `name`.
+    static let legacyNames = ["UsageRings Gemini（自動・閉じても可）"]
+    static func isOurs(_ n: String?) -> Bool { guard let n else { return false }; return n == name || legacyNames.contains(n) }
+    /// Last dedicated-window lookup: true found, false missing, nil not checked yet.
+    private static let found = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+    static var lastFound: Bool? { found.withLock { $0 } }
+    static func record(found f: Bool) { found.withLock { $0 = f } }
+    static func statusText(_ f: Bool?) -> String? { f.map { $0 ? "正常" : "ウィンドウなし" } }
+    /// Banner shown on our own page only, added after each read (a reload removes it, so it is never read back).
+    static let bannerScript = """
+    (function(){if(document.getElementById('ur-keep-banner'))return 'ok';var d=document.createElement('div');d.id='ur-keep-banner';\
+    d.setAttribute('style','position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#1a73e8;color:#fff;font:13px/1.5 -apple-system,sans-serif;padding:6px 12px;pointer-events:none');\
+    d.textContent='UsageRings: Gemini残量の自動読み取り用ウィンドウです。閉じないでください（閉じると UsageRings の Gemini が「?」になります。1時間以内に自動で作り直されます）。正常なら UsageRings の詳細に「Gemini読み取り: 正常」と出ます。';\
+    document.documentElement.appendChild(d);return 'ok';})()
+    """
     static let reopenInterval: TimeInterval = 3600
     static let lastOpenKey = "geminiDedicatedWindowOpenedAt"
     static func mayOpen(lastOpen: Date?, now: Date) -> Bool {
@@ -411,12 +431,12 @@ struct LiveChromeBridge: ChromeUsageBridge {
         guard case let .success(names) = send("core", "getd", direct: property("GNam", of: window(nil))),
               case let .success(ids) = send("core", "getd", direct: property("ID  ", of: window(nil))),
               names.numberOfItems == ids.numberOfItems, names.numberOfItems > 0 else { return nil }
-        for i in 1...names.numberOfItems where names.atIndex(i)?.stringValue == GeminiDedicatedWindow.name {
+        for i in 1...names.numberOfItems where GeminiDedicatedWindow.isOurs(names.atIndex(i)?.stringValue) {
             guard let id = ids.atIndex(i)?.stringValue else { continue }
             // Re-check by ID (indexes can shift between events) and require exactly one tab.
             let w = windowByID(id)
             guard case let .success(n) = send("core", "getd", direct: property("GNam", of: w)),
-                  n.stringValue == GeminiDedicatedWindow.name,
+                  GeminiDedicatedWindow.isOurs(n.stringValue),
                   case let .success(tabs) = send("core", "getd", direct: property("ID  ", of: spec("CrTb", form: "indx", every, in: w))),
                   tabs.numberOfItems == 1 else { continue }
             return (Int32(i), id)
@@ -482,6 +502,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
     }
     private static func readDedicatedInner(alive: () -> Bool) -> Result<String, ChromeReadError>? {
         guard let (_, id) = findDedicated() else {
+            GeminiDedicatedWindow.record(found: false)
             geminiLog.notice("dedicated window not found")
             let last = UserDefaults.standard.object(forKey: GeminiDedicatedWindow.lastOpenKey) as? Date
             if GeminiDedicatedWindow.mayOpen(lastOpen: last, now: Date()) {
@@ -490,7 +511,12 @@ struct LiveChromeBridge: ChromeUsageBridge {
             }
             return nil
         }
+        GeminiDedicatedWindow.record(found: true)
         let w = windowByID(id)
+        // Old builds' name: rename to the current one (ours only, checked by findDedicated).
+        if case let .success(n) = send("core", "getd", direct: property("GNam", of: w)), n.stringValue != GeminiDedicatedWindow.name {
+            set("GNam", of: w, NSAppleEventDescriptor(string: GeminiDedicatedWindow.name))
+        }
         // A Chrome restart can restore it visible: hide our own window again (only ours).
         if case let .success(v) = send("core", "getd", direct: property("pvis", of: w)), v.booleanValue {
             set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
@@ -516,7 +542,10 @@ struct LiveChromeBridge: ChromeUsageBridge {
         switch send("CrSu", "ExJa", direct: tab, params: ["JvSc": NSAppleEventDescriptor(string: pageScript)]) {
         case let .success(d):
             guard let json = d.stringValue, !json.isEmpty else { return .failure(.tabAsleep) }
-            return usageText(fromJSON: json) ?? .failure(.failed)
+            let result = usageText(fromJSON: json) ?? .failure(.failed)
+            // Purpose banner after the read; the next reload clears it before the next read.
+            if case .success = result { _ = send("CrSu", "ExJa", direct: tab, params: ["JvSc": NSAppleEventDescriptor(string: GeminiDedicatedWindow.bannerScript)]) }
+            return result
         case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
         case .failure(.code(12)): return .failure(.javascriptDisabled)
         case .failure(.code(-1712)): return .failure(.timedOut)
@@ -923,7 +952,14 @@ final class GeminiAppUsageMonitor {
 
     private func setHalted(_ on: Bool) { state.halted = on; defaults.set(on, forKey: Self.haltedKey) }
 
-    private func publish(_ s: ProviderSection) { section = s; onChange?(s) }
+    private func publish(_ s: ProviderSection) {
+        var s = s
+        if let t = GeminiDedicatedWindow.statusText(GeminiDedicatedWindow.lastFound) {
+            s.stats.removeAll { $0.title == "Gemini読み取り" }
+            s.stats.append(ProviderStat(title: "Gemini読み取り", valueText: t))
+        }
+        section = s; onChange?(s)
+    }
 
     private func save(_ s: ProviderSection, at date: Date) {
         let rows = s.windows.map { var r: [String: Any] = ["title": $0.title, "left": $0.leftPercent, "reset": $0.resetText]
