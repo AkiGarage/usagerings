@@ -139,7 +139,7 @@ struct CodexUsageTextParser {
 
         // The live payload reports an unreported 5h window as an all-null
         // object; only a window carrying usedPercent participates.
-        let session = try reportedWindow(usage.primary).map {
+        var session = try reportedWindow(usage.primary).map {
             try usageLimit(
                 title: "Session",
                 limit: $0,
@@ -148,7 +148,7 @@ struct CodexUsageTextParser {
                 projectionPrefix: "Projected empty in"
             )
         }
-        let weekly = try reportedWindow(usage.secondary).map {
+        var weekly = try reportedWindow(usage.secondary).map {
             try usageLimit(
                 title: "Weekly",
                 limit: $0,
@@ -159,6 +159,11 @@ struct CodexUsageTextParser {
         }
         guard session != nil || weekly != nil else {
             throw CodexUsageError.invalidJSON
+        }
+        if let timestamp = usage.updatedAt {
+            guard let observed = CLIProxyParser.date(timestamp) else { throw CodexUsageError.invalidJSON }
+            session?.observedAt = observed
+            weekly?.observedAt = observed
         }
         return UsageSnapshot(session: session, weekly: weekly, updatedAt: now)
     }
@@ -390,6 +395,7 @@ private struct CodexBarUsageEntry: Decodable {
 }
 
 private struct CodexBarUsage: Decodable {
+    let updatedAt: String?
     let primary: CodexBarLimit?
     let secondary: CodexBarLimit?
 }

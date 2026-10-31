@@ -152,6 +152,13 @@ struct PanelSettingsView: View {
         ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings").font(.headline)
+            Toggle("iPhoneへiCloudで使用状況を同期", isOn: Binding(
+                get: { preferences.cloudSyncEnabled },
+                set: { preferences.setCloudSyncEnabled($0) }
+            )).disabled(preferences.cloudSyncStopping)
+            Text(preferences.cloudSyncStopping ? "送信の終了を待っています。" : "初期設定はオフです。オンにすると対応する使用率とリセット時刻を自分のiCloudに保存します。利用には対応するiCloud設定が必要です。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Divider()
             Toggle("アカウント名を一部伏せて表示", isOn: $preferences.showAccountNames)
             Toggle("Antigravityをアカウント別に表示", isOn: $preferences.splitAntigravityAccounts)
             Divider()

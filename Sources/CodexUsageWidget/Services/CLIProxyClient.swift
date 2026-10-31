@@ -212,7 +212,11 @@ actor CLIProxyClient {
                         let windows: [UsageLimit]
                         if provider == .claude {
                             let usage = try await cachedClaudeUsage(account, key: key, now: now)
-                            windows = usage.windows
+                            windows = usage.windows.map { window in
+                                var value = window
+                                value.observedAt = usage.fetchedAt
+                                return value
+                            }
                             if let notice = usage.notice {
                                 accountState.isStale = !usage.windows.isEmpty
                                 section.accountInventoryComplete = false
@@ -223,7 +227,13 @@ actor CLIProxyClient {
                             }
                         } else if provider == .grok {
                             let usage = try await cachedGrokUsage(account, key: key, now: now)
-                            windows = usage.periods.flatMap(\.windows)
+                            windows = usage.periods.flatMap { period in
+                                period.windows.map { window in
+                                    var value = window
+                                    value.observedAt = period.fetchedAt
+                                    return value
+                                }
+                            }
                             var unavailablePeriods = 0
                             for period in usage.periods {
                                 section.stats.append(contentsOf: period.stats)

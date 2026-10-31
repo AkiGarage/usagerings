@@ -7,6 +7,8 @@ final class CLIProxyRateLimitTests: XCTestCase {
         let transport = QuotaTransport()
         let client = client(transport, clock)
         let first = await client.fetchSections()
+        XCTAssertFalse(first[0].windows.isEmpty)
+        XCTAssertTrue(first[0].windows.allSatisfy { $0.observedAt == clock.read() })
         for elapsed in [0.0, 59, 1, 239] {
             clock.advance(elapsed)
             let cached = await client.fetchSections()

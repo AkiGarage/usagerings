@@ -51,6 +51,30 @@ final class PanelPreferences: ObservableObject {
     static let barZoomRange = 0.6...2.5
     static let barZoomGestureStep = 0.05
     let defaults: UserDefaults
+    static let cloudSyncKey = "cloudSnapshotSyncEnabledV1"
+    @Published private(set) var cloudSyncEnabled: Bool
+    @Published private(set) var cloudSyncStopping = false
+    var onCloudSyncChange: ((Bool) async -> Void)?
+    private var cloudSyncTask: Task<Void, Never>?
+
+    func setCloudSyncEnabled(_ enabled: Bool) {
+        guard !cloudSyncStopping, enabled != cloudSyncEnabled else { return }
+        let previous = cloudSyncTask
+        if enabled {
+            cloudSyncEnabled = true
+            defaults.set(true, forKey: Self.cloudSyncKey)
+            cloudSyncTask = Task { await previous?.value; await onCloudSyncChange?(true) }
+        } else {
+            cloudSyncStopping = true
+            defaults.set(false, forKey: Self.cloudSyncKey)
+            cloudSyncTask = Task {
+                await previous?.value
+                await onCloudSyncChange?(false)
+                cloudSyncEnabled = false
+                cloudSyncStopping = false
+            }
+        }
+    }
     @Published private(set) var zoom: Double
     @Published private(set) var barZoom: Double
     @Published var orientation: PanelOrientation {
@@ -96,6 +120,7 @@ final class PanelPreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        cloudSyncEnabled = defaults.bool(forKey: Self.cloudSyncKey)
         _ = AccountIdentitySalt.load(defaults: defaults)
         let stored = defaults.object(forKey: Self.zoomKey) as? Double ?? 1
         zoom = Self.clamped(stored)

@@ -70,9 +70,9 @@ This optional reader supports a Linux host with Bash, GNU command-line tools, Py
 
 ## Privacy
 
-UsageRings stores its settings and display snapshots **locally only**. It has no UsageRings-hosted account, analytics service, or cloud upload. It does not expose an HTTP/LAN server.
+UsageRings stores settings and display snapshots locally by default. The optional iPhone sync setting is off by default; when enabled, supported usage percentages, reset times and random device/account identifiers are sent to the user's private iCloud database. It does not send credentials, account names, logs or balances. CloudKit requires matching signing, entitlements and container configuration, which are not yet included in this build. It has no UsageRings-hosted account, analytics service, or HTTP/LAN server.
 
-Fetching current usage still requires network access: CodexBarCLI communicates with its providers, the local authenticated proxy brokers provider requests, and GLM reset-ticket details contact Z.ai directly. Enabling remote Claude monitoring adds SSH traffic to the host you configure. “Local-only” describes storage and processing, not offline operation.
+Fetching current usage still requires network access: CodexBarCLI communicates with its providers, the local authenticated proxy brokers provider requests, and GLM reset-ticket details contact Z.ai directly. Enabling remote Claude monitoring adds SSH traffic to the host you configure.
 
 Local Claude monitoring reads bounded recent log tails from `~/.claude/projects`, `~/.claude-a/projects`, and `~/.claude-b/projects`. Remote monitoring returns filtered quota-event text, timestamps, and model identifiers. Local Codex display snapshots are written to `~/Library/Application Support/CodexUsageWidget-Multi/` and a per-user `UsageRings` folder inside the macOS per-user temporary directory (`$TMPDIR`, mode 0700; files 0600), which also holds a provider/window diagnostic JSON file. This version writes nothing to the shared `/private/tmp`; files left there by older builds are not removed automatically. If remote Claude monitoring over SSH fails, the separate "Claude logs B" notice shows a short reason without host details. Treat these files as personal usage information and sanitize logs or screenshots before sharing them.
 

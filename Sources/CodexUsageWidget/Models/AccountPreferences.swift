@@ -20,6 +20,7 @@ enum AccountIdentitySalt {
 /// Only provider-scoped digests cross the parser/preferences boundary.
 struct AccountID: Hashable, Sendable {
     let rawValue: String
+    private(set) var stableForCloud = true
     private(set) var aliases: [String] = []
     // Migration probes only: unsalted digests are never persisted as aliases.
     private(set) var legacyAliases: [String: String] = [:]
@@ -31,6 +32,7 @@ struct AccountID: Hashable, Sendable {
         input.append(salt)
         input.append(Data("\u{0}\(provider.rawValue)\u{0}\(source)\u{0}\(value)".utf8))
         rawValue = Self.digest(input)
+        stableForCloud = source != "proxy-auth-index" && source != "slot"
         legacyAliases = [Self.digest(Data(legacyInput.utf8)): rawValue]
     }
 

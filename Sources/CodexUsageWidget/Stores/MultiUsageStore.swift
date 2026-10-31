@@ -97,6 +97,7 @@ final class MultiUsageStore: ObservableObject {
 
     private let dataSource: DataSource
     private let preferences: PanelPreferences?
+    private var cloudSender: CloudSnapshotSender?
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
@@ -113,8 +114,11 @@ final class MultiUsageStore: ObservableObject {
     private(set) var geminiMonitor: GeminiAppUsageMonitor?
 
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
-         preferences: PanelPreferences? = nil) {
+         preferences: PanelPreferences? = nil, cloudTransport: CloudSnapshotTransport = CloudKitSnapshotTransport()) {
         self.preferences = preferences
+        if let preferences {
+            cloudSender = CloudSnapshotSender(defaults: preferences.defaults, transport: cloudTransport, enabled: preferences.cloudSyncEnabled)
+        }
         if preferences != nil, NSClassFromString("XCTestCase") == nil { claudeChoiceURL = ClaudeAccountChoice.fileURL() }
         do {
             let publisher = try UsageSnapshotPublisher(urls: snapshotURLs ?? MultiAppPaths.defaultSnapshotURLs())
@@ -245,12 +249,18 @@ final class MultiUsageStore: ObservableObject {
             return
         case let .live(service, _):
             isRefreshing = true
-            let skip = preferences?.providersToSkip() ?? []
+            var skip = preferences?.providersToSkip() ?? []
+            if preferences?.cloudSyncEnabled == true, preferences?.cloudSyncStopping == false {
+                // iPhone sync needs Codex, Claude and Grok even when hidden on the Mac.
+                skip.subtract([.codex, .claude, .grok])
+            }
             let others = targets.map { Set(ProviderID.allCases).subtracting($0) } ?? []
             inFlightTargets = Set(ProviderID.allCases).subtracting(skip).subtracting(others)
+            let disabled = skip.union(others)
+            let cloudDataComplete = disabled.isDisjoint(with: [.codex, .claude, .grok])
             Task {
-                let snapshot = await service.fetchAll(disabled: skip.union(others))
-                apply(snapshot, partial: targets != nil)
+                let snapshot = await service.fetchAll(disabled: disabled)
+                apply(snapshot, partial: targets != nil, cloudDataComplete: cloudDataComplete)
             }
         }
     }
@@ -268,7 +278,7 @@ final class MultiUsageStore: ObservableObject {
         }
     }
 
-    private func apply(_ fetched: MultiUsageSnapshot, partial: Bool = false) {
+    private func apply(_ fetched: MultiUsageSnapshot, partial: Bool = false, cloudDataComplete: Bool = true) {
         isRefreshing = false
         let targets = inFlightTargets
         var snapshot = fetched
@@ -289,6 +299,10 @@ final class MultiUsageStore: ObservableObject {
         rawSnapshot = displaySnapshot
         if targets.contains(.claude) { updateClaudeChoice(from: snapshot, now: Date()) }
         self.snapshot = visible(displaySnapshot)
+        if preferences?.cloudSyncEnabled == true, preferences?.cloudSyncStopping == false {
+            // The sender gets the fresh observation (not retained stale values).
+            if cloudDataComplete { cloudSender?.offer(snapshot) } else if !partial { refresh() }
+        }
         expiryTask?.cancel()
         expiryTask = nil
         scheduleExpiry()
@@ -375,6 +389,12 @@ final class MultiUsageStore: ObservableObject {
             self.scheduleExpiry()
             if blockExpired { self.refresh() }
         }
+    }
+
+    func cloudSyncChanged(enabled: Bool) async {
+        if enabled, preferences?.cloudSyncEnabled != true || preferences?.cloudSyncStopping == true { return }
+        await cloudSender?.setEnabled(enabled)
+        if enabled, preferences?.cloudSyncStopping == false { refresh() }
     }
 
     /// Re-filter after a visibility toggle; a provider turned on is fetched immediately.
