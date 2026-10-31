@@ -365,11 +365,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSMenu.popUpContextMenu(makeTabMenu(), with: event, for: view)
     }
 
+    @objc private func recreateGeminiWindow() {
+        NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil)
+    }
+
     func makeTabMenu() -> NSMenu {
         let menu = NSMenu()
         let toggleTitle = panel?.isVisible == true ? "Hide Panel" : "Show Panel"
         menu.addItem(NSMenuItem(title: toggleTitle, action: #selector(togglePanel), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Refresh", action: #selector(refreshUsage), keyEquivalent: ""))
+        if GeminiDedicatedWindow.lastFound == false {
+            let g = NSMenuItem(title: "Gemini読み取りウィンドウを作り直す", action: #selector(recreateGeminiWindow), keyEquivalent: "")
+            g.target = self
+            menu.addItem(g)
+        }
         if updateController?.isAvailable == true {
             menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: ""))
         }

@@ -304,6 +304,8 @@ protocol ChromeUsageBridge: Sendable {
     func invalidatePending()
     /// Close only UsageRings' own hidden Chrome window (menu toggle-off). Never any other window.
     func closeDedicatedWindow() async
+    /// Recreate UsageRings' own hidden window if it is missing (button/menu). Never fronts Chrome.
+    func openDedicatedWindow() async
 }
 
 /// UsageRings' own hidden Chrome window holding only the usage tab. Found by its window name,
@@ -315,7 +317,8 @@ func frontName() -> String { NSWorkspace.shared.frontmostApplication?.localizedN
 // 目的: Gemini アプリの残量 (gemini.google.com/usage) を、Aki のタブには一切触れずに読むための
 // UsageRings 専用 Chrome ウィンドウ。非表示で開き、このウィンドウのタブだけを再読み込み・読み取りする。
 // 利点: Aki のタブを前面化・再読み込みしない／Chrome 再起動後も名前で見つけられる。
-// 閉じた場合: 次回から Gemini の残量が「?」になる。自動復旧: 最大1時間に1回だけ非表示で作り直す。
+// 閉じた場合: Gemini の残量が「?」になる。自動復旧: 見つからないと次の読み取りで非表示のまま作り直す（2分に1回まで）。
+// 手動復旧: 詳細ウィンドウの「Gemini読み取り: ウィンドウなし」横のボタン、またはタブの右クリックメニュー。
 // エージェント・人へ: このウィンドウは閉じないこと（タイトルとページ上部の帯にも同じ説明あり）。
 enum GeminiDedicatedWindow {
     static let name = "UsageRings: Gemini残量読み取り用・閉じないで"
@@ -326,6 +329,7 @@ enum GeminiDedicatedWindow {
     private static let found = OSAllocatedUnfairLock<Bool?>(initialState: nil)
     static var lastFound: Bool? { found.withLock { $0 } }
     static func record(found f: Bool) { found.withLock { $0 = f } }
+    static let recreateRequest = Notification.Name("UsageRingsRecreateGeminiWindow")
     static func statusText(_ f: Bool?) -> String? { f.map { $0 ? "正常" : "ウィンドウなし" } }
     /// Banner shown on our own page only, added after each read (a reload removes it, so it is never read back).
     static let bannerScript = """
@@ -334,7 +338,7 @@ enum GeminiDedicatedWindow {
     d.textContent='UsageRings: Gemini残量の自動読み取り用ウィンドウです。閉じないでください（閉じると UsageRings の Gemini が「?」になります。1時間以内に自動で作り直されます）。正常なら UsageRings の詳細に「Gemini読み取り: 正常」と出ます。';\
     document.documentElement.appendChild(d);return 'ok';})()
     """
-    static let reopenInterval: TimeInterval = 3600
+    static let reopenInterval: TimeInterval = 120
     static let lastOpenKey = "geminiDedicatedWindowOpenedAt"
     static func mayOpen(lastOpen: Date?, now: Date) -> Bool {
         guard let lastOpen else { return true }
@@ -482,6 +486,17 @@ struct LiveChromeBridge: ChromeUsageBridge {
     private static func hideIfVisible(_ w: NSAppleEventDescriptor?) {
         if case let .success(v) = send("core", "getd", direct: property("pvis", of: w)), v.booleanValue {
             set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        }
+    }
+
+    func openDedicatedWindow() async {
+        await Self.onQueue(cancelled: ()) {
+            guard Self.status(ask: false) == .granted else { return }
+            if Self.findDedicated() == nil {
+                UserDefaults.standard.set(Date(), forKey: GeminiDedicatedWindow.lastOpenKey)
+                Self.openDedicated()
+            }
+            GeminiDedicatedWindow.record(found: Self.findDedicated() != nil)
         }
     }
 
@@ -748,6 +763,9 @@ final class GeminiAppUsageMonitor {
         state.lastRead = at > 0 ? Date(timeIntervalSince1970: at) : nil
         state.halted = defaults.bool(forKey: Self.haltedKey)
         section = ProviderSection(provider: .gemini, windows: [], stats: [], failureText: "不明")
+        NotificationCenter.default.addObserver(forName: GeminiDedicatedWindow.recreateRequest, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.recreateWindow() }
+        }
         section = cachedOrUnknown(startText)
     }
 
@@ -772,6 +790,13 @@ final class GeminiAppUsageMonitor {
     }
 
     func stop() { timer?.cancel(); timer = nil }
+
+    /// Button / menu: recreate the hidden window now, then show the new status.
+    func recreateWindow() async {
+        guard isEnabled else { return }
+        await bridge.openDedicatedWindow()
+        publish(section)
+    }
 
     /// Explicit user action from the menu. The only path that may show the macOS dialog, once.
     /// The last-read time is kept, so toggling never causes an extra read.

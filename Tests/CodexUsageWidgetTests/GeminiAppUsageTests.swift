@@ -224,6 +224,8 @@ final class FakeGeminiBridge: ChromeUsageBridge, @unchecked Sendable {
     func invalidatePending() { invalidated += 1 }
     var closed = 0
     func closeDedicatedWindow() { closed += 1 }
+    var opened = 0
+    func openDedicatedWindow() { opened += 1 }
 }
 
 @MainActor
@@ -568,10 +570,10 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
 
 
 final class GeminiDedicatedWindowTests: XCTestCase {
-    func testReopensAtMostHourly() {
+    func testReopensAtMostEveryTwoMinutes() {
         let t = Date(timeIntervalSince1970: 1_800_000_000)
         XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: nil, now: t))
-        XCTAssertFalse(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(3599)))
-        XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(3600)))
+        XCTAssertFalse(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(119)))
+        XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(120)))
     }
 }
