@@ -335,7 +335,7 @@ enum GeminiDedicatedWindow {
     static let bannerScript = """
     (function(){if(document.getElementById('ur-keep-banner'))return 'ok';var d=document.createElement('div');d.id='ur-keep-banner';\
     d.setAttribute('style','position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#1a73e8;color:#fff;font:13px/1.5 -apple-system,sans-serif;padding:6px 12px;pointer-events:none');\
-    d.textContent='UsageRings: Gemini残量の自動読み取り用ウィンドウです。閉じないでください（閉じると UsageRings の Gemini が「?」になります。1時間以内に自動で作り直されます）。正常なら UsageRings の詳細に「Gemini読み取り: 正常」と出ます。';\
+    d.textContent='UsageRings: Gemini残量の自動読み取り用ウィンドウです。閉じないでください（閉じると UsageRings の Gemini が「?」になります。2分ほどで非表示のまま自動で作り直されます。UsageRings の詳細の［作り直す］でもすぐ戻せます）。正常なら UsageRings の詳細に「Gemini読み取り: 正常」と出ます。';\
     document.documentElement.appendChild(d);return 'ok';})()
     """
     static let reopenInterval: TimeInterval = 120
