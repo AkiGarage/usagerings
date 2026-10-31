@@ -328,7 +328,7 @@ enum GeminiDedicatedWindow {
     /// Last dedicated-window lookup: true found, false missing, nil not checked yet.
     private static let found = OSAllocatedUnfairLock<Bool?>(initialState: nil)
     static var lastFound: Bool? { found.withLock { $0 } }
-    static func record(found f: Bool) { found.withLock { $0 = f } }
+    static func record(found f: Bool?) { found.withLock { $0 = f } }
     static let recreateRequest = Notification.Name("UsageRingsRecreateGeminiWindow")
     static func statusText(_ f: Bool?) -> String? { f.map { $0 ? "正常" : "ウィンドウなし" } }
     /// Banner shown on our own page only, added after each read (a reload removes it, so it is never read back).
@@ -504,6 +504,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
         await Self.onQueue(cancelled: ()) {
             guard Self.status(ask: false) == .granted, let (_, id) = Self.findDedicated() else { return }
             _ = Self.send("core", "clos", direct: Self.windowByID(id))
+            GeminiDedicatedWindow.record(found: nil) // closed on purpose (toggle off): no status line
         }
     }
 
@@ -529,7 +530,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
         GeminiDedicatedWindow.record(found: true)
         let w = windowByID(id)
         // Old builds' name: rename to the current one (ours only, checked by findDedicated).
-        if case let .success(n) = send("core", "getd", direct: property("GNam", of: w)), n.stringValue != GeminiDedicatedWindow.name {
+        if case let .success(n) = send("core", "getd", direct: property("GNam", of: w)), GeminiDedicatedWindow.isOurs(n.stringValue), n.stringValue != GeminiDedicatedWindow.name {
             set("GNam", of: w, NSAppleEventDescriptor(string: GeminiDedicatedWindow.name))
         }
         // A Chrome restart can restore it visible: hide our own window again (only ours).
@@ -763,9 +764,7 @@ final class GeminiAppUsageMonitor {
         state.lastRead = at > 0 ? Date(timeIntervalSince1970: at) : nil
         state.halted = defaults.bool(forKey: Self.haltedKey)
         section = ProviderSection(provider: .gemini, windows: [], stats: [], failureText: "不明")
-        NotificationCenter.default.addObserver(forName: GeminiDedicatedWindow.recreateRequest, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.recreateWindow() }
-        }
+        observeRecreate()
         section = cachedOrUnknown(startText)
     }
 
@@ -779,6 +778,7 @@ final class GeminiAppUsageMonitor {
     }
 
     func start() {
+        observeRecreate()
         publish(cachedOrUnknown(startText))
         timer?.cancel()
         timer = Task { @MainActor [weak self] in
@@ -789,7 +789,17 @@ final class GeminiAppUsageMonitor {
         }
     }
 
-    func stop() { timer?.cancel(); timer = nil }
+    func stop() {
+        timer?.cancel(); timer = nil
+        if let o = recreateObserver { NotificationCenter.default.removeObserver(o); recreateObserver = nil }
+    }
+    private var recreateObserver: NSObjectProtocol?
+    private func observeRecreate() {
+        guard recreateObserver == nil else { return }
+        recreateObserver = NotificationCenter.default.addObserver(forName: GeminiDedicatedWindow.recreateRequest, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.recreateWindow() }
+        }
+    }
 
     /// Button / menu: recreate the hidden window now, then show the new status.
     func recreateWindow() async {
@@ -979,7 +989,8 @@ final class GeminiAppUsageMonitor {
 
     private func publish(_ s: ProviderSection) {
         var s = s
-        if let t = GeminiDedicatedWindow.statusText(GeminiDedicatedWindow.lastFound) {
+        s.stats.removeAll { $0.title == "Gemini読み取り" }
+        if isEnabled, let t = GeminiDedicatedWindow.statusText(GeminiDedicatedWindow.lastFound) {
             s.stats.removeAll { $0.title == "Gemini読み取り" }
             s.stats.append(ProviderStat(title: "Gemini読み取り", valueText: t))
         }
