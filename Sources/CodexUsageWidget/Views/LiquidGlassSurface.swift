@@ -219,11 +219,12 @@ struct AdaptiveGlass<S: InsettableShape>: View {
         if reduceTransparency {
             shape.fill(opaqueFallbackColor)
         } else if colorScheme == .dark {
-            if case .hud = intensity {
-                // The detached hover card needs the panel's two-layer dark surface.
+            switch intensity {
+            case .panel, .hud:
+                // Window and hover card share the two-layer (~93%) graphite so text stays crisp over any wallpaper.
                 LiquidGraphiteGlass(shape: shape)
                     .background(LiquidGraphiteGlass(shape: shape))
-            } else {
+            default:
                 LiquidGraphiteGlass(shape: shape)
             }
         } else {

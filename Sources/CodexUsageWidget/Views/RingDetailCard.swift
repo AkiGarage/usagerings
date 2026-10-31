@@ -23,6 +23,14 @@ enum RingCardLabel {
     static func label(for title: String) -> String {
         var parts = title.components(separatedBy: " · ")
         if parts.count > 1, ServiceRowModel.accountPrefix(title) != nil { parts.removeFirst() }
+        // Gemini app windows ("Gemini · 5h" / "Gemini · Weekly"): the card already names Gemini, so label the window.
+        if parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "Gemini" {
+            switch ServiceRowModel.kind(parts[1]) {
+            case .five: return "5時間枠"
+            case .week: return "週の枠"
+            case .other: break
+            }
+        }
         let window = parts.joined(separator: " · ").trimmingCharacters(in: .whitespaces)
         let name = window
             .replacingOccurrences(of: #"\s*(·\s*)?(5[- ]?hours?|5h|weekly|week|7[- ]?days?|7d|daily|monthly)\s*$"#,
@@ -108,6 +116,8 @@ struct RingDetailCardModel: Equatable {
     struct Row: Equatable {
         let label: String
         let leftPercent: Double
+        /// Window kind, for ordering (5h on top, then the weekly pace bars, then the rest).
+        var kind: ServiceRowModel.Kind = .other
         var severity: RingCardSeverity { RingCardSeverity.of(leftPercent: leftPercent) }
         var percentText: String { "残り \(Int(leftPercent.rounded()))%" }
     }
@@ -130,7 +140,7 @@ struct RingDetailCardModel: Equatable {
 
         var statusText: String? {
             switch status {
-            case "available": isGreyedOut ? "期限切れ" : "使用可"
+            case "available": isGreyedOut ? "期限切れ" : nil  // usable tickets need no 使用可 label (Aki t1655u)
             case "used", "redeemed", "consumed": "使用済み"
             case "expired": "期限切れ"
             case let other?: other
@@ -157,6 +167,16 @@ struct RingDetailCardModel: Equatable {
     var blockText: String? = nil
     var stats: [ProviderStat] = []
     var failureText: String? = nil
+    var paces: [WeeklyPace] = []
+    /// Values are from an earlier successful read (前回値).
+    var isStale = false
+
+    func orderedRows(_ kind: ServiceRowModel.Kind) -> [Row] { rows.filter { $0.kind == kind } }
+    /// In 詳細 mode a 5h/weekly row is shown as a plain row only if it has no detail bar.
+    var detailFallbackRows: [Row] {
+        let five = paces.filter(\.isFiveHour).count, week = paces.count - five
+        return (five == 0 ? orderedRows(.five) : []) + (week == 0 ? orderedRows(.week) : [])
+    }
 
     static func visibleStats(for bar: CollapsedUsageBar) -> [ProviderStat] {
         switch bar.provider {
@@ -180,9 +200,12 @@ struct RingDetailCardModel: Equatable {
             }
             return RingCardLabel.label(for: window.title)
         }
-        let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent) }
+        let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent, kind: ServiceRowModel.kind($0.title)) }
         let codexExtras = bar.id == "codex" || bar.id.hasPrefix("codex-") ? bar.codexExtras : nil
-        let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now)
+        // Codex: keep each ticket's 期限 line but drop the 完全リセット title and 使用可 label (Aki t1655u, t1660u).
+        let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now).map {
+            TicketRow(id: $0.id, title: nil, status: $0.status, expiresText: $0.expiresText, isGreyedOut: $0.isGreyedOut)
+        }.filter { $0.statusText != nil || $0.expiresText != nil }  // a title-only row would be blank now
         let hasExtras = codexExtras?.creditsText != nil || codexExtras?.availableCount != nil || !tickets.isEmpty
         var extras = hasExtras
             ? Extras(creditsText: codexExtras?.creditsText, availableCount: codexExtras?.availableCount,
@@ -194,14 +217,16 @@ struct RingDetailCardModel: Equatable {
             case .unavailable:
                 ticketFailureText = "リセット券を取得できません"
             case .loaded(let records):
-                let sorted = records.enumerated().sorted {
+                let sorted = records.enumerated().filter { $0.element.expiresAt > now }.sorted {  // expired tickets are hidden
                     $0.element.expiresAt == $1.element.expiresAt
                         ? $0.offset < $1.offset : $0.element.expiresAt < $1.element.expiresAt
                 }
                 let ticketRows = sorted.map { index, ticket in
-                    TicketRow(id: index, title: ticket.title,
+                    // One line per ticket: 「期限 12/23 00:59 JST（5時間リセット）」 (Aki t1660u).
+                    TicketRow(id: index, title: nil,
                               status: ticket.expiresAt <= now ? "expired" : (ticket.available ? "available" : "使用不可"),
-                              expiresText: "期限 \(UsageDurationFormat.timestamp(ticket.expiresAt, now: now, calendar: RingResetFormat.tokyoCalendar)) JST",
+                              expiresText: "期限 \(UsageDurationFormat.timestamp(ticket.expiresAt, now: now, calendar: RingResetFormat.tokyoCalendar)) JST"
+                                  + (ticket.title.isEmpty ? "" : "（\(ticket.title)）"),
                               isGreyedOut: !ticket.available || ticket.expiresAt <= now)
                 }
                 extras = Extras(creditsText: nil,
@@ -220,10 +245,13 @@ struct RingDetailCardModel: Equatable {
                                                   sourceTimeZone: sourceTimeZone) else { return nil }
             return (windowLabel(limit), RingResetFormat.text(reset: date, now: now))
         }
-        return RingDetailCardModel(title: "\(bar.ringName) の詳細",
+        var model = RingDetailCardModel(title: "\(bar.ringName) の詳細",
                                    resetText: reset?.text, resetLabel: reset?.label, rows: rows, extras: extras,
                                    ticketFailureText: ticketFailureText, blockText: blockText, stats: stats,
-                                   failureText: bar.failureText)
+                                   failureText: bar.failureText,
+                                   paces: WeeklyPace.details(bar.windows, now: now, label: windowLabel))
+        model.isStale = bar.isStale
+        return model
     }
 
     private static func sortedTicketRows(_ tickets: [CodexExtrasParser.Ticket], now: Date) -> [TicketRow] {
@@ -358,94 +386,131 @@ final class RingHighlightState: ObservableObject {
 /// Hover detail card: title, JST reset line, one severity bar per limit window.
 struct RingDetailCardView: View {
     let model: RingDetailCardModel
-    static let cardWidth: CGFloat = 224
+    static let cardWidth: CGFloat = 280
+    @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
+    @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
+    private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
+    private var style: UsageStyle { UsageStyle(rawValue: styleRaw) ?? .defaultValue }
+    private let caption = UsageLayout.captionFont
+
+    /// "Stale · last successful reading · 前回値（10/30 14:02 JST 取得）" -> "前回値（10/30 14:02 JST 取得）".
+    static func staleLine(_ failure: String?) -> String? {
+        guard let failure else { return nil }
+        if let r = failure.range(of: "前回値") { return String(failure[r.lowerBound...]) }
+        return failure.hasPrefix("Stale · last successful reading") ? "前回値（最後に取得できた値）" : nil
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(model.title)
-                .font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
-            if let blockText = model.blockText {
-                Text(blockText).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .lineLimit(1).minimumScaleFactor(0.6)
-            }
-            if let resetText = model.resetText {
-                // The reset belongs to the ring's binding window, which the label names.
-                Text("リセット" + (model.resetLabel.map { "（\($0)）" } ?? "") + " \(resetText)")
-                    .font(.system(size: 11)).monospacedDigit()
-                    .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
-            }
-            ForEach(Array(model.rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 6) {
-                    Text(row.label).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+        let staleLine = model.isStale ? Self.staleLine(model.failureText) ?? "前回値（最後に取得できた値）" : nil
+        let otherFailure = staleLine == nil ? model.failureText : nil
+        VStack(alignment: .leading, spacing: UsageLayout.sectionSpacing) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(model.title).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 6)
-                    Text(row.percentText).font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                    GeometryReader { proxy in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.primary.opacity(0.12))
-                            Capsule().fill(color(for: row.severity))
-                                .frame(width: max(2, proxy.size.width * row.leftPercent / 100))
+                    if model.isStale {
+                        Text("前回値").font(.system(size: 10, weight: .semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(CollapsedUsageBar.warningColor.opacity(0.22)))
+                            .foregroundStyle(CollapsedUsageBar.warningColor).fixedSize()
+                    }
+                    UsageModeChip()
+                }
+                if let staleLine { Text(staleLine).font(caption).foregroundStyle(CollapsedUsageBar.warningColor).lineLimit(1) }
+                if let blockText = model.blockText {
+                    HStack(spacing: 4) {
+                        Image(systemName: CollapsedUsageBar.blockedSymbol)
+                        Text(blockText).lineLimit(1).minimumScaleFactor(0.8)
+                    }.font(caption).foregroundStyle(.secondary)
+                }
+                // 詳細 shows recovery/period under each bar, so the plain reset line is only for シンプル.
+                if style == .simple || model.paces.isEmpty, let resetText = model.resetText {
+                    Text("リセット" + (model.resetLabel.map { "（\($0)）" } ?? "") + " \(resetText)")
+                        .font(caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
+            // 5時間枠 above 週の枠. シンプル: one aligned line per window. 詳細: full-width bars for every window.
+            if style == .detail {
+                ForEach(Array(model.paces.enumerated()), id: \.offset) { index, pace in
+                    WeeklyPaceBar(pace: pace, compact: true, showLegend: index == model.paces.count - 1,
+                                  blocked: model.blockText != nil)
+                }
+                ForEach(Array((model.detailFallbackRows + model.orderedRows(.other)).enumerated()), id: \.offset) { _, row in
+                    DetailLimitRow(label: row.label, leftPercent: row.leftPercent, tint: color(for: row.severity),
+                                   blocked: model.blockText != nil)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array((model.orderedRows(.five) + model.orderedRows(.week) + model.orderedRows(.other)).enumerated()),
+                            id: \.offset) { _, row in simpleRow(row) }
+                }
+            }
+            let notes = [model.ticketFailureText, otherFailure].compactMap { $0 } + model.stats.map { "\($0.title): \($0.valueText)" }
+            if !notes.isEmpty || model.extras != nil {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
+                        Text(note).font(caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let extras = model.extras {
+                        if !notes.isEmpty { Divider().opacity(0.35).padding(.vertical, 2) }
+                        if let creditsText = extras.creditsText { extraLine(label: "クレジット", value: creditsText) }
+                        if let availableCount = extras.availableCount {
+                            extraLine(label: "リセットチケット", value: "利用可能 \(availableCount)件")
+                        }
+                        ForEach(extras.tickets) { ticket in
+                            VStack(alignment: .leading, spacing: 1) {
+                                if let title = ticket.title, !title.isEmpty {
+                                    Text(title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                                }
+                                let details = [ticket.statusText, ticket.expiresText].compactMap { $0 }.filter { !$0.isEmpty }
+                                if !details.isEmpty {
+                                    Text(details.joined(separator: " · ")).font(caption)
+                                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .foregroundStyle(ticket.isGreyedOut ? Color.secondary : Color.primary)
                         }
                     }
-                    .frame(width: 52, height: 4)
                 }
             }
-            if let failure = model.ticketFailureText {
-                Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            if let failure = model.failureText {
-                Text(failure).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            ForEach(Array(model.stats.enumerated()), id: \.offset) { _, stat in
-                Text("\(stat.title): \(stat.valueText)")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let extras = model.extras {
-                Divider().opacity(0.35)
-                if let creditsText = extras.creditsText {
-                    extraLine(label: "クレジット", value: creditsText)
-                }
-                if let availableCount = extras.availableCount {
-                    extraLine(label: "リセットチケット", value: "利用可能 \(availableCount)件")
-                }
-                ForEach(extras.tickets) { ticket in
-                    VStack(alignment: .leading, spacing: 1) {
-                        if let title = ticket.title, !title.isEmpty {
-                            Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1)
-                        }
-                        let details = [ticket.statusText, ticket.expiresText].compactMap { $0 }.filter { !$0.isEmpty }
-                        if !details.isEmpty {
-                            Text(details.joined(separator: " · "))
-                                .font(.system(size: 10)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .foregroundStyle(ticket.isGreyedOut ? Color.secondary : Color.primary)
-                }
-            }
+            Text("切替：パネル上部の［表示］［基準］／タブを右クリック").font(UsageLayout.legendFont).foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 11).padding(.vertical, 9)
+        .padding(.horizontal, 14).padding(.vertical, 12)
         .frame(width: Self.cardWidth, alignment: .topLeading)
         .background(AdaptiveGlass(
-            shape: RoundedRectangle(cornerRadius: 11, style: .continuous),
+            shape: RoundedRectangle(cornerRadius: 12, style: .continuous),
             intensity: .hud
         ))
         .accessibilityElement(children: .combine)
     }
 
     private func extraLine(label: String, value: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 8) {
             Text(label).foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Text(value).lineLimit(1).minimumScaleFactor(0.75)
+            Spacer(minLength: 8)
+            Text(value).lineLimit(1).minimumScaleFactor(0.8)
         }
-        .font(.system(size: 10))
+        .font(caption)
+    }
+
+    /// Label column | flexible bar (same width on every row) | value column.
+    @ViewBuilder private func simpleRow(_ row: RingDetailCardModel.Row) -> some View {
+        HStack(spacing: 8) {
+            Text(row.label).font(UsageLayout.labelFont).foregroundStyle(.secondary).lineLimit(1)
+                .frame(width: 76, alignment: .leading)
+            BasisBar(basis: basis, leftPercent: row.leftPercent, tint: color(for: row.severity), blocked: model.blockText != nil)
+                .frame(height: UsageLayout.simpleBarHeight)
+            Text(basis.valueText(leftPercent: row.leftPercent)).font(UsageLayout.valueFont)
+                .frame(width: 72, alignment: .trailing)
+        }
     }
 
     private func color(for severity: RingCardSeverity) -> Color {
+        if model.blockText != nil { return Color.secondary.opacity(0.45) }  // rate-limited: all grey
         switch severity {
-        case .red: CollapsedUsageBar.criticalColor
-        case .amber: CollapsedUsageBar.warningColor
-        case .green: CollapsedUsageBar.antigravityColor
+        case .red: return CollapsedUsageBar.criticalColor
+        case .amber: return CollapsedUsageBar.warningColor
+        case .green: return CollapsedUsageBar.antigravityColor
         }
     }
 }
@@ -536,6 +601,14 @@ final class RingDetailCardController {
             }
             .store(in: &cancellables)
         preferences.$splitAntigravityAccounts
+            .dropFirst()
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.hide(immediately: true) }
+            }
+            .store(in: &cancellables)
+        // 表示/基準 switched: the card's size was measured for the old layout.
+        UserDefaults.standard.publisher(for: \.usageDisplayModeToken)
+            .removeDuplicates()
             .dropFirst()
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.hide(immediately: true) }
@@ -722,5 +795,15 @@ final class RingDetailCardController {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         return panel
+    }
+}
+
+extension UserDefaults {
+    /// KVO-observable combination of 表示形式 and 表示基準 (key paths must match the stored keys).
+    @objc dynamic var usageDisplayModeToken: String {
+        "\(string(forKey: UsageStyle.key) ?? "")|\(string(forKey: UsageBasis.key) ?? "")"
+    }
+    @objc class func keyPathsForValuesAffectingUsageDisplayModeToken() -> Set<String> {
+        [UsageStyle.key, UsageBasis.key]
     }
 }

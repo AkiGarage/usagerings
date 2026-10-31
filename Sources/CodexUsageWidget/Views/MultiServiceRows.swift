@@ -14,6 +14,11 @@ struct ServiceRowModel: Identifiable {
     var tickets: [String] = []
     var ticketCount: Int?
     var ticketExpiries: [Date] = []
+    /// Ticket type per expiry (Z.ai, e.g. 5時間リセット), same order as ticketExpiries; empty when unknown.
+    var ticketTitles: [String] = []
+    /// Same quota lock as the tab ring (CollapsedUsageBar.quotaBlock); nil = not rate-limited.
+    var block: ClaudeBlock?
+    var isBlocked: Bool { block?.isActive(at: Date()) == true }
 
     /// "リセットチケット ×3 · 期限 10/23 05:56 · 10/30 04:10 · 11/07 08:36" — available tickets, sorted by expiry.
     func ticketLine(withTimes: Bool) -> String? {
@@ -39,6 +44,24 @@ struct ServiceRowModel: Identifiable {
     /// Inner arc only when a 5h window carries the outer one.
     var inner: UsageLimit? { five != nil ? week : nil }
     var remainingExtras: [UsageLimit] { five == nil && week == nil ? Array(extras.dropFirst()) : extras }
+
+    /// Pace bars for the weekly window and any weekly extras (e.g. Antigravity groups).
+    /// 5h detail bars (first) then weekly ones, for 詳細 mode.
+    func detailPaces(now: Date) -> [WeeklyPace] {
+        let fives = ([five].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .five })
+        return fives.map { WeeklyPace(label: fives.count == 1 ? "5時間枠" : Self.multiLabel("5h", $0.title), limit: $0, now: now, period: WeeklyPace.fiveHours) }
+            + weeklyPaces(now: now)
+    }
+    func weeklyPaces(now: Date) -> [WeeklyPace] {
+        let weekly = ([week].compactMap { $0 } + extras.filter { ServiceRowModel.kind($0.title) == .week })
+        return weekly.map { WeeklyPace(label: weekly.count == 1 ? "週の枠" : Self.multiLabel("週", $0.title), limit: $0, now: now) }
+    }
+    /// Label for one of several windows of a kind; avoids 「5h 5h」 when the short label already names the kind.
+    static func multiLabel(_ kind: String, _ title: String) -> String {
+        let short = ServiceRowModel.shortLabel(title)
+        if !short.hasPrefix(kind) { return kind + " " + short }
+        return short == kind ? title : short
+    }
 
     enum Kind { case five, week, other }
     /// Real titles include "5h", "Session", "Weekly", and Antigravity's
@@ -85,9 +108,16 @@ struct ServiceRowModel: Identifiable {
     static func rows(for snapshot: MultiUsageSnapshot, showAccounts: Bool = false,
                      splitAntigravityAccounts: Bool = false,
                      accountPreferences: AccountPreferences = AccountPreferences()) -> [Self] {
-        snapshot.sections.flatMap {
-            rows(for: $0, showAccounts: showAccounts, splitAntigravityAccounts: splitAntigravityAccounts,
-                 accountPreferences: accountPreferences)
+        snapshot.sections.flatMap { section in
+            rows(for: section, showAccounts: showAccounts, splitAntigravityAccounts: splitAntigravityAccounts,
+                 accountPreferences: accountPreferences).map { row in
+                var row = row
+                // Mirror the tab ring's lock exactly (GLM: only the 5h window locks).
+                let windows = [row.five, row.week].compactMap { $0 } + row.extras
+                let lockable = section.provider == .zai ? windows.filter { kind($0.title) == .five } : windows
+                row.block = CollapsedUsageBar.quotaBlock(lockable, now: snapshot.updatedAt)
+                return row
+            }
         }
     }
 
@@ -200,9 +230,12 @@ struct ServiceRowModel: Identifiable {
         }
         // Z.ai tickets carry real expiries: list usable ones vertically like Codex.
         if rows[0].ticketExpiries.isEmpty, case let .loaded(tickets)? = section.zaiResetTickets {
-            rows[0].ticketExpiries = tickets.filter(\.available).map(\.expiresAt)
+            let now = Date()
+            let usable = tickets.filter { $0.available && $0.expiresAt > now }.sorted { $0.expiresAt < $1.expiresAt }
+            rows[0].ticketExpiries = usable.map(\.expiresAt)
+            rows[0].ticketTitles = usable.map(\.title)
         }
-        rows[0].ticketExpiries.sort()
+        if rows[0].ticketTitles.isEmpty { rows[0].ticketExpiries.sort() }
         rows[0].failureText = section.failureText
         if section.isStale || (section.accounts.count == 1 && section.accounts[0].isStale) {
             for i in rows.indices {
@@ -281,15 +314,22 @@ struct GaugeArc: Shape {
 struct G1Gauge: View {
     let row: ServiceRowModel
     var size: CGFloat = 60
+    /// Unlock date/time under the lock, same lines as the tab ring (Aki t1656u); nil when not rate-limited.
+    static func unlockLines(_ row: ServiceRowModel) -> (date: String, time: String)? {
+        guard row.isBlocked, let block = row.block else { return nil }
+        return ClaudeRateLimitParser.recoveryLines(resetAt: block.resetAt)
+    }
     var body: some View {
         let outerW: CGFloat = 5.5, innerW: CGFloat = 3, gap: CGFloat = 2.2
         let p = row.primary
+        let blocked = row.isBlocked
+        let grey = Color.secondary.opacity(0.45)
         ZStack {
-            GaugeArc(fraction: 1).stroke(row.color.opacity(0.20), style: .init(lineWidth: outerW, lineCap: .round))
+            GaugeArc(fraction: 1).stroke(blocked ? grey : row.color.opacity(0.20), style: .init(lineWidth: outerW, lineCap: .round))
                 .padding(outerW / 2)
             if let p {
                 GaugeArc(fraction: p.clampedLeftPercent / 100)
-                    .stroke(GaugeStyle.tint(row.color, p), style: .init(lineWidth: outerW, lineCap: .round))
+                    .stroke(blocked ? grey : GaugeStyle.tint(row.color, p), style: .init(lineWidth: outerW, lineCap: .round))
                     .padding(outerW / 2)
             }
             if let w = row.inner {
@@ -297,14 +337,34 @@ struct G1Gauge: View {
                 GaugeArc(fraction: 1).stroke(Color.white.opacity(0.08), style: .init(lineWidth: innerW, lineCap: .round))
                     .padding(inset)
                 GaugeArc(fraction: w.clampedLeftPercent / 100)
-                    .stroke(GaugeStyle.tint(row.color, w).opacity(0.62), style: .init(lineWidth: innerW, lineCap: .round))
+                    .stroke(blocked ? grey : GaugeStyle.tint(row.color, w).opacity(0.62), style: .init(lineWidth: innerW, lineCap: .round))
                     .padding(inset)
             }
-            Text(p.map { "\($0.percentInt)" } ?? "–")
-                .font(.system(size: size * 0.31, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(p.map { $0.clampedLeftPercent < 20 } == true ? GaugeStyle.lowColor : Color.primary)
-                .offset(y: -size * 0.03)
-            if let w = row.inner {
+            if blocked {
+                Image(systemName: CollapsedUsageBar.blockedSymbol)
+                    .font(.system(size: size * 0.28, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .offset(y: -size * 0.03)
+                    .accessibilityLabel("制限中")
+                if let lines = Self.unlockLines(row) {
+                    VStack(spacing: -1) {
+                        Text(lines.date)
+                        Text(lines.time)
+                    }
+                    .font(.system(size: max(7, size * 0.15), weight: .semibold)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                    .foregroundStyle(.secondary)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .offset(y: size * 0.04)
+                    .accessibilityLabel("解除 \(lines.date) \(lines.time)")
+                }
+            } else {
+                Text(p.map { "\($0.percentInt)" } ?? "–")
+                    .font(.system(size: size * 0.31, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(p.map { $0.clampedLeftPercent < 20 } == true ? GaugeStyle.lowColor : Color.primary)
+                    .offset(y: -size * 0.03)
+            }
+            if let w = row.inner, !blocked {  // the unlock time takes this slot while locked
                 Text("週\(w.percentInt)")
                     .font(.system(size: 10.5, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -317,12 +377,22 @@ struct G1Gauge: View {
 }
 
 struct ServiceRowView: View {
+    /// Card tint that separates each card from the window: lighter grey in dark mode, slightly darker grey in light mode.
+    static let cardFill = Color.primary.opacity(0.085)
     let row: ServiceRowModel
+    @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
+    @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
+    private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
+    private var style: UsageStyle { UsageStyle(rawValue: styleRaw) ?? .defaultValue }
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             G1Gauge(row: row)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
+                    if row.isBlocked {
+                        Image(systemName: CollapsedUsageBar.blockedSymbol)
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    }
                     Text(row.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     if let account = row.account {
                         Text(account).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
@@ -336,24 +406,47 @@ struct ServiceRowView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if let five = row.five { valueLine(label: "5h", limit: five, outer: true) }
-                else if row.week != nil { notReported("5h") }
-                if let week = row.week { valueLine(label: "週", limit: week, outer: row.five == nil) }
-                if row.five == nil && row.week == nil, let first = row.extras.first {
-                    valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
+                if style == .detail, !row.detailPaces(now: Date()).isEmpty || !detailOthers.isEmpty {
+                    // 詳細: every window gets the same full-width bar (5h first, then weekly, then others like GLM MCP).
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(row.detailPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
+                            WeeklyPaceBar(pace: pace, blocked: row.isBlocked)
+                        }
+                        ForEach(Array(detailOthers.enumerated()), id: \.offset) { _, limit in
+                            DetailLimitRow(label: ServiceRowModel.shortLabel(limit.title), leftPercent: limit.clampedLeftPercent,
+                                           tint: row.isBlocked ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit), caption: "リセット \(limit.shortReset)",
+                                           blocked: row.isBlocked)
+                        }
+                    }
+                    .padding(.top, 4)
+                } else {
+                    if let five = row.five { valueLine(label: "5h", limit: five, outer: true) }
+                    else if row.week != nil { notReported("5h") }
+                    ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .five }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                    if let week = row.week { valueLine(label: "週", limit: week, outer: row.five == nil) }
+                    if row.five == nil && row.week == nil, let first = row.extras.first {
+                        valueLine(label: ServiceRowModel.shortLabel(first.title), limit: first, outer: true)
+                    }
+                    ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .week }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
                 }
-                ForEach(Array(row.remainingExtras.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                if style == .simple || (row.detailPaces(now: Date()).isEmpty && detailOthers.isEmpty) {
+                    ForEach(Array(row.remainingExtras.filter { ServiceRowModel.kind($0.title) == .other }.enumerated()), id: \.offset) { _, extra in extraBar(extra) }
+                }
                 if let message = row.emptyStateText {
                     Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !row.ticketExpiries.isEmpty {
-                    TicketList(expiries: row.ticketExpiries)
+                    TicketList(expiries: row.ticketExpiries, titles: row.ticketTitles)
                         .padding(.top, 4)
                         .help(row.tickets.joined(separator: "\n"))
                 } else if let line = row.ticketLine(withTimes: true) {
                     Text(line).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                         .minimumScaleFactor(0.7).help(row.tickets.joined(separator: "\n"))
+                }
+                if let block = row.block, row.isBlocked {
+                    Text(ClaudeRateLimitParser.cardLine(block: block, now: Date()))
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 ForEach(row.notes, id: \.self) { note in
                     Text(note).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -366,52 +459,66 @@ struct ServiceRowView: View {
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.035)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Self.cardFill)
+            .shadow(color: .black.opacity(0.22), radius: 2, y: 1))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
         .accessibilityElement(children: .combine)
     }
 
-    private func valueLine(label: String, limit: UsageLimit, outer: Bool) -> some View {
-        HStack(spacing: 6) {
-            Circle().strokeBorder(row.color.opacity(outer ? 1 : 0.6), lineWidth: outer ? 3 : 1.8)
-                .frame(width: outer ? 10 : 8, height: outer ? 10 : 8).frame(width: 12)
-            Text(label).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
-            Text("\(limit.percentInt)%").fontWeight(.semibold).monospacedDigit()
-                .foregroundStyle(limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
-                .frame(width: 40, alignment: .trailing)
-            Text("リセット \(limit.shortReset)").font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+    /// Windows that are neither 5h nor weekly (lead window first), shown as full-width bars in 詳細.
+    private var detailOthers: [UsageLimit] {
+        let lead = (row.five == nil && row.week == nil) ? row.extras.first.map { [$0] } ?? [] : []
+        return (lead + row.remainingExtras).filter { ServiceRowModel.kind($0.title) == .other }
+    }
+
+    /// シンプル: dot | label | bar (same flexible width on every line of every provider) | value | reset.
+    private func simpleLine(label: String, limit: UsageLimit?, outer: Bool, dot: Bool) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                if dot {
+                    Circle().strokeBorder(row.color.opacity(outer ? 1 : 0.6), lineWidth: outer ? 3 : 1.8)
+                        .frame(width: outer ? 10 : 8, height: outer ? 10 : 8)
+                } else { Color.clear.frame(width: 1, height: 1) }
+            }.frame(width: 12)
+            Text(label).font(UsageLayout.labelFont).foregroundStyle(.secondary).lineLimit(1)
+                .frame(width: 56, alignment: .leading)
+            if let limit {
+                BasisBar(basis: basis, leftPercent: limit.clampedLeftPercent,
+                         tint: row.isBlocked ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit),
+                         track: Color.white.opacity(0.10), blocked: row.isBlocked).frame(height: UsageLayout.simpleBarHeight)
+                Text(basis.valueText(leftPercent: limit.clampedLeftPercent)).font(UsageLayout.valueFont)
+                    .foregroundStyle(row.isBlocked ? Color.secondary : limit.clampedLeftPercent < 20 ? GaugeStyle.lowColor : Color.primary)
+                    .frame(width: 70, alignment: .trailing)
+                Text(limit.shortReset).font(UsageLayout.captionFont).foregroundStyle(.tertiary).lineLimit(1)
+                    .frame(width: 84, alignment: .leading)
+            } else {
+                Text("枠なし").font(UsageLayout.captionFont).foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+            }
         }
-        .font(.system(size: 12))
+    }
+
+    private func valueLine(label: String, limit: UsageLimit, outer: Bool) -> some View {
+        simpleLine(label: label, limit: limit, outer: outer, dot: true)
     }
 
     private func notReported(_ label: String) -> some View {
-        HStack(spacing: 6) {
-            Color.clear.frame(width: 12, height: 1)
-            Text(label).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
-            Text("枠なし").font(.system(size: 11)).foregroundStyle(.tertiary)
-        }.font(.system(size: 12))
+        simpleLine(label: label, limit: nil, outer: false, dot: false)
     }
 
     private func extraBar(_ limit: UsageLimit) -> some View {
-        HStack(spacing: 6) {
-            Color.clear.frame(width: 12, height: 1)
-            Text(ServiceRowModel.shortLabel(limit.title)).foregroundStyle(.secondary).lineLimit(1)
-                .frame(minWidth: 22, alignment: .leading)
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.10))
-                    Capsule().fill(GaugeStyle.tint(row.color, limit))
-                        .frame(width: proxy.size.width * limit.clampedLeftPercent / 100)
-                }
-            }.frame(height: 3)
-            Text("\(limit.percentInt)% · \(limit.shortReset)").foregroundStyle(.tertiary).lineLimit(1)
-        }
-        .font(.system(size: 11))
+        simpleLine(label: ServiceRowModel.shortLabel(limit.title), limit: limit, outer: false, dot: false)
     }
 }
 
 /// One calm rounded row per usable reset ticket: 「リセット 1」 … 「10/23 05:56 · あと2日」 (JST, sorted).
 struct TicketList: View {
     let expiries: [Date]
+    var titles: [String] = []
+    /// Row label: the ticket type when known (Z.ai), else 「リセット N」.
+    static func label(index: Int, titles: [String]) -> String {
+        index < titles.count && !titles[index].isEmpty ? titles[index] : "リセット \(index + 1)"
+    }
     var now: Date = Date()
 
     static func relative(_ date: Date, now: Date) -> String {
@@ -434,7 +541,7 @@ struct TicketList: View {
         VStack(spacing: 4) {
             ForEach(Array(expiries.enumerated()), id: \.offset) { index, date in
                 HStack(spacing: 6) {
-                    Text("リセット \(index + 1)").foregroundStyle(.secondary)
+                    Text(Self.label(index: index, titles: titles)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 8)
                     Text(Self.stamp(date)).foregroundStyle(.secondary).monospacedDigit()
                     Text("·").foregroundStyle(.tertiary)

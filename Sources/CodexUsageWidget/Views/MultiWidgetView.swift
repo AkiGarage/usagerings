@@ -56,6 +56,8 @@ struct MultiPanelContent: View {
     @ObservedObject var preferences: PanelPreferences
     var claudeChoice: ClaudeAccountPolicy.Decision? = nil
     static let baseWidth: CGFloat = 480
+    /// Top-right 更新 time and −/%/+/☀/▯/⚙ controls: 11pt → 14pt (≈1.27×, Aki t1662u).
+    static let headerControlFontSize: CGFloat = 14
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsSettings = false
 
@@ -66,10 +68,15 @@ struct MultiPanelContent: View {
                     Text("残り使用量").font(.system(size: 15, weight: .semibold))
                     Spacer()
                     Text("更新 \(snapshot.updatedAt.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                        .font(.system(size: Self.headerControlFontSize)).foregroundStyle(.secondary).monospacedDigit()
                     controls
                 }
-                .padding(.bottom, 2)
+                HStack(spacing: 8) {
+                    UsageModeControls()
+                    Spacer(minLength: 4)
+                    UsageDirectionHint()
+                }
+                .padding(.bottom, 4)
                 ForEach(ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames,
                                              splitAntigravityAccounts: preferences.splitAntigravityAccounts,
                                              accountPreferences: preferences.accountPreferences)) { row in
@@ -93,13 +100,13 @@ struct MultiPanelContent: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Button { preferences.zoomOut() } label: { Image(systemName: "minus") }
                 .disabled(preferences.zoom <= PanelPreferences.zoomRange.lowerBound)
                 .help("Zoom out")
                 .accessibilityLabel("Zoom out")
             Button("\(preferences.percent)%") { preferences.resetZoom() }
-                .monospacedDigit().frame(minWidth: 36)
+                .monospacedDigit().frame(minWidth: 46)
                 .help("Reset zoom to 100% (⌘0)")
                 .accessibilityLabel("Reset zoom to 100 percent")
             Button { preferences.zoomIn() } label: { Image(systemName: "plus") }
@@ -129,8 +136,8 @@ struct MultiPanelContent: View {
             }
         }
         .buttonStyle(.borderless)
-        .font(.system(size: 11))
-        .controlSize(.mini)
+        .font(.system(size: Self.headerControlFontSize))
+        .controlSize(.small)
     }
 
     private var appearanceAction: String {
@@ -147,11 +154,22 @@ struct PanelSettingsView: View {
     var snapshot: MultiUsageSnapshot = .placeholder
     @AppStorage(ClaudeSSHSettings.enabledKey) private var enabled = false
     @AppStorage(ClaudeSSHSettings.hostKey) private var host = ""
+    @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
+    @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
+    @State private var showsAcknowledgements = false
 
     var body: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings").font(.headline)
+            Picker("表示基準", selection: $basisRaw) {
+                ForEach(UsageBasis.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }.pickerStyle(.segmented)
+            Picker("表示形式", selection: $styleRaw) {
+                ForEach(UsageStyle.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }.pickerStyle(.segmented)
+            Text("全サブスクのパネル・詳細カードに反映（パネル上部の［表示］［基準］やタブの右クリックでも切替）。残り：バーは右から左へ減ります。使用量：オレンジのバーが左から右へ増えます。詳細は5時間枠・週の枠をペース付きのバーで表示します。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Toggle("iPhoneへiCloudで使用状況を同期", isOn: Binding(
                 get: { preferences.cloudSyncEnabled },
                 set: { preferences.setCloudSyncEnabled($0) }
@@ -170,6 +188,8 @@ struct PanelSettingsView: View {
             Divider()
             AccountSettingsView(snapshot: snapshot, preferences: preferences)
             Divider()
+            ClaudeCLIAccountsSettingsView()
+            Divider()
             Toggle("Read remote Claude B limits over SSH", isOn: $enabled)
             TextField("SSH host or user@host", text: $host)
                 .textFieldStyle(.roundedBorder)
@@ -182,6 +202,9 @@ struct PanelSettingsView: View {
             }
             Text("SSH changes apply on the next refresh.")
                 .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Button("謝辞・ライセンス（Acknowledgements）") { showsAcknowledgements = true }
+                .sheet(isPresented: $showsAcknowledgements) { AcknowledgementsView() }
         }
         .padding(16)
         }

@@ -59,6 +59,13 @@ if ! /usr/bin/otool -l "$APP_BINARY" | /usr/bin/grep -F 'path @executable_path/.
   /usr/bin/install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP_BINARY"
 fi
 # Local builds use ad-hoc signing. Supply your own identity when needed.
+# Stable identity keeps the designated requirement (and Keychain "Always Allow") across rebuilds;
+# ad-hoc ("-") changes the cdhash every build so macOS asks for cliproxyapi-management again.
+# Override with USAGERINGS_SIGN_IDENTITY (use "-" to force ad-hoc).
+if [[ -z "${USAGERINGS_SIGN_IDENTITY:-}" ]]; then
+  USAGERINGS_SIGN_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+    | /usr/bin/awk '/"Apple Development:/ { print $2; exit }')"
+fi
 SIGN_IDENTITY="${USAGERINGS_SIGN_IDENTITY:--}"
 /usr/bin/codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null
 

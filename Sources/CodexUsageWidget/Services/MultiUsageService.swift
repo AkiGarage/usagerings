@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct MultiUsageService: Sendable {
     private let cliProxyClient: CLIProxyClient
@@ -6,19 +7,33 @@ struct MultiUsageService: Sendable {
     private let commandRunner: CodexUsageService.CommandRunner?
     private let zaiTicketClient: ZaiResetTicketClient?
     private let claudeRateLimitMonitor: ClaudeRateLimitMonitor?
+    private let claudeCLI: ClaudeCLIUsage?
 
     init(
         cliPath: String = "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
         commandRunner: CodexUsageService.CommandRunner? = nil,
         cliProxyClient: CLIProxyClient = CLIProxyClient(),
         zaiTicketClient: ZaiResetTicketClient? = nil,
-        claudeRateLimitMonitor: ClaudeRateLimitMonitor? = nil
+        claudeRateLimitMonitor: ClaudeRateLimitMonitor? = nil,
+        claudeCLI: ClaudeCLIUsage? = nil
     ) {
         self.cliProxyClient = cliProxyClient
         self.cliPath = cliPath
         self.commandRunner = commandRunner
         self.zaiTicketClient = zaiTicketClient ?? (commandRunner == nil ? .live() : nil)
         self.claudeRateLimitMonitor = claudeRateLimitMonitor ?? (commandRunner == nil ? .live() : nil)
+        // Live app: one shared cache so successive refreshes reuse the slow CLI probe.
+        self.claudeCLI = claudeCLI ?? (commandRunner == nil ? Self.sharedClaudeCLI(cliPath) : nil)
+    }
+
+    private static let claudeCLICache = OSAllocatedUnfairLock<[String: ClaudeCLIUsage]>(initialState: [:])
+    private static func sharedClaudeCLI(_ path: String) -> ClaudeCLIUsage {
+        claudeCLICache.withLock { cache in
+            if let existing = cache[path] { return existing }
+            let created = ClaudeCLIUsage.live(cliPath: path)
+            cache[path] = created
+            return created
+        }
     }
 
     /// Never throws: a provider that fails anywhere in the chain resolves
@@ -38,7 +53,15 @@ struct MultiUsageService: Sendable {
         async let deepseek = fetchProviderUnlessDisabled(.deepseek, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
         async let tickets = disabled.contains(.zai) ? nil : zaiTicketClient?.fetch()
         async let blocks = disabled.contains(.claude) ? nil : claudeRateLimitMonitor?.blocks(now: now)
-        let (codexResult, zaiResult, proxy, ticketResult, blockResult) = await (codex, zai, proxySections, tickets, blocks)
+        let (codexResult, zaiResult, proxyRaw, ticketResult, blockResult) = await (codex, zai, proxySections, tickets, blocks)
+        let cliClaude = disabled.contains(.claude) ? nil : claudeCLI?.section(accounts: ClaudeCLIAccountSettings.load(), now: now, timeZone: timeZone)
+        var proxy = proxyRaw
+        if claudeCLI != nil, !disabled.contains(.claude) {
+            let index = proxy.firstIndex { $0.provider == .claude }
+            let merged = ClaudeCLIUsage.merge(cli: cliClaude, proxy: index.map { proxy[$0] })
+            if let index { proxy.remove(at: index) }
+            if let merged { proxy.append(merged) }
+        }
         let sshFailure = disabled.contains(.claude) ? nil : await claudeRateLimitMonitor?.remoteFailureText()
         let proxyWithBlocks = proxy.map { section in
             var section = section

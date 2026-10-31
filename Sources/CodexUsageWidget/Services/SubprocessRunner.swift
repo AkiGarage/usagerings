@@ -15,6 +15,8 @@ struct SubprocessRunner: Sendable {
     let executableURL: URL
     var timeout: TimeInterval = 20
     var killGrace: TimeInterval = 2
+    /// Extra variables merged over the inherited environment (nil = inherit as is; blank value = unset).
+    var environment: [String: String]? = nil
 
     /// Drains block their thread until EOF and the timeout item must fire
     /// while a drain holds another thread, so the queue is concurrent.
@@ -55,6 +57,11 @@ struct SubprocessRunner: Sendable {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
+        if let environment {
+            var merged = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+            for (key, value) in environment where value.isEmpty { merged[key] = nil }  // blank override = unset
+            process.environment = merged
+        }
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe

@@ -76,6 +76,13 @@ enum GeminiAppUsageParser {
     }
 
     static let barMarker = "@@bar "
+    /// Added by the bridge only: when the tab's page was loaded (unix seconds).
+    static let loadedMarker = "@@loaded "
+    static func pageLoadedAt(_ text: String) -> Date? {
+        guard let line = text.split(separator: "\n").last(where: { $0.hasPrefix(loadedMarker) }),
+              let secs = Double(line.dropFirst(loadedMarker.count)) else { return nil }
+        return Date(timeIntervalSince1970: secs)
+    }
     static let leftWords = ["remaining", "left", "available", "残り", "残量", "利用可能"]
 
     private static func progressBars(_ lines: [String]) -> [(context: String, value: Double)] {
@@ -251,13 +258,15 @@ enum GeminiReadPolicy {
     static let interval: TimeInterval = 5 * 60
     /// A shown value older than this (no reads because Gemini isn't in use) is marked stale.
     static let staleAfter: TimeInterval = 10 * 60
-    static let idleLimit: TimeInterval = 120
+    /// No reads once the Mac has had no keyboard/mouse input for 15 minutes.
+    static let idleLimit: TimeInterval = 15 * 60
+    /// Page loaded longer ago than this: its numbers may be old (the tab is never reloaded by us).
+    static let pageOldAfter: TimeInterval = 30 * 60
     /// Local hours with no reads at all (01:00–05:59).
     static let quietHours = 1..<6
 
     struct Signals: Equatable {
         var now: Date
-        var geminiFrontmost: Bool
         var idleSeconds: TimeInterval
         var screenAsleep: Bool
         var hour: Int
@@ -269,10 +278,10 @@ enum GeminiReadPolicy {
         var halted = false
     }
 
-    /// Read only while a Gemini tab is frontmost and Aki is active, at most once per 5 minutes.
-    /// The first frontmost tick after a break (>= 5 min since the last read) reads at once.
+    /// Read in the background (no focus needed) while Aki uses the Mac, at most once per 5 minutes.
+    /// Whether a usage tab is open is checked by the read itself.
     static func shouldRead(_ state: State, _ s: Signals) -> Bool {
-        guard !state.halted, s.geminiFrontmost, !s.screenAsleep, s.idleSeconds < idleLimit,
+        guard !state.halted, !s.screenAsleep, s.idleSeconds < idleLimit,
               !quietHours.contains(s.hour) else { return false }
         guard let last = state.lastRead else { return true }
         let since = s.now.timeIntervalSince(last)
@@ -293,9 +302,27 @@ protocol ChromeUsageBridge: Sendable {
     func usageTabText() async -> Result<String, ChromeReadError>?
     /// Drop every queued, not yet started Chrome request (menu toggle-off).
     func invalidatePending()
+    /// Close only UsageRings' own hidden Chrome window (menu toggle-off). Never any other window.
+    func closeDedicatedWindow() async
 }
 
-enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, timedOut, failed }
+/// UsageRings' own hidden Chrome window holding only the usage tab. Found by its window name,
+/// so it survives Chrome restarts; recreated at most once per hour if Aki closes it.
+import os
+let geminiLog = Logger(subsystem: "com.akigarage.usagerings", category: "gemini")
+func frontName() -> String { NSWorkspace.shared.frontmostApplication?.localizedName ?? "?" }
+
+enum GeminiDedicatedWindow {
+    static let name = "UsageRings Gemini（自動・閉じても可）"
+    static let reopenInterval: TimeInterval = 3600
+    static let lastOpenKey = "geminiDedicatedWindowOpenedAt"
+    static func mayOpen(lastOpen: Date?, now: Date) -> Bool {
+        guard let lastOpen else { return true }
+        return now.timeIntervalSince(lastOpen) >= reopenInterval || now < lastOpen
+    }
+}
+
+enum ChromeReadError: Error, Equatable { case notAllowed, javascriptDisabled, timedOut, failed, tabAsleep }
 
 enum GeminiUsageURL {
     static let base = "https://gemini.google.com/usage"
@@ -370,18 +397,132 @@ struct LiveChromeBridge: ChromeUsageBridge {
         }
     }
 
-    private static func geminiInFront() -> Bool {
-        // In use right now: awake screen and recent input, not just the front app.
+    /// Aki is at the Mac: awake screen and recent input. Chrome need not be in front.
+    private static func userPresent() -> Bool {
         let anyInput = CGEventType(rawValue: ~0)!
-        guard CGDisplayIsAsleep(CGMainDisplayID()) == 0,
-              CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput) < GeminiReadPolicy.idleLimit,
-              let frontApp = NSWorkspace.shared.frontmostApplication, frontApp.bundleIdentifier == bundleID,
-              frontApp.processIdentifier == session.target?.pid,
-              case let .success(front) = send("core", "getd", direct: property("URL ", of: property("acTa", of: window(1)))) else { return false }
-        return GeminiUsageURL.isGemini(front.stringValue ?? "")
+        return CGDisplayIsAsleep(CGMainDisplayID()) == 0
+            && CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput) < GeminiReadPolicy.idleLimit
     }
 
     func invalidatePending() { Self.epoch.withLock { $0 += 1 } }
+
+    /// (window index, window id) of our own window, by its given name only.
+    private static func findDedicated() -> (Int32, String)? {
+        guard case let .success(names) = send("core", "getd", direct: property("GNam", of: window(nil))),
+              case let .success(ids) = send("core", "getd", direct: property("ID  ", of: window(nil))),
+              names.numberOfItems == ids.numberOfItems, names.numberOfItems > 0 else { return nil }
+        for i in 1...names.numberOfItems where names.atIndex(i)?.stringValue == GeminiDedicatedWindow.name {
+            guard let id = ids.atIndex(i)?.stringValue else { continue }
+            // Re-check by ID (indexes can shift between events) and require exactly one tab.
+            let w = windowByID(id)
+            guard case let .success(n) = send("core", "getd", direct: property("GNam", of: w)),
+                  n.stringValue == GeminiDedicatedWindow.name,
+                  case let .success(tabs) = send("core", "getd", direct: property("ID  ", of: spec("CrTb", form: "indx", every, in: w))),
+                  tabs.numberOfItems == 1 else { continue }
+            return (Int32(i), id)
+        }
+        return nil
+    }
+    private static func windowByID(_ id: String) -> NSAppleEventDescriptor? {
+        spec("cwin", form: "ID  ", NSAppleEventDescriptor(string: id), in: nil)
+    }
+    private static func set(_ p: String, of c: NSAppleEventDescriptor?, _ v: NSAppleEventDescriptor) {
+        _ = send("core", "setd", direct: property(p, of: c), params: ["data": v])
+    }
+
+    /// Creates the hidden window once. Chrome is never activated by us; if it takes the front
+    /// anyway, the previous frontmost app is given the front back immediately.
+    private static func openDedicated() {
+        let front = NSWorkspace.shared.frontmostApplication
+        let made = send("core", "crel", direct: .null(), params: ["kocl": NSAppleEventDescriptor(typeCode: code("cwin"))])
+        defer {
+            if let front, front.bundleIdentifier != bundleID, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID {
+                front.activate()
+            }
+        }
+        geminiLog.notice("dedicated open: front before=\(front?.localizedName ?? "?", privacy: .public) after-make=\(frontName(), privacy: .public)")
+        guard case let .success(w) = made, w.descriptorType != code("null") else { return }
+        set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        set("GNam", of: w, NSAppleEventDescriptor(string: GeminiDedicatedWindow.name))
+        // Unnamed it could never be found again: close this window we just made instead of leaking it.
+        guard case let .success(n) = send("core", "getd", direct: property("GNam", of: w)), n.stringValue == GeminiDedicatedWindow.name else {
+            _ = send("core", "clos", direct: w); return
+        }
+        set("URL ", of: property("acTa", of: w), NSAppleEventDescriptor(string: GeminiUsageURL.base))
+        set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        // Chrome re-shows a hidden window when its navigation commits (seen 10/31: the window popped
+        // up and was closed, so every later read found nothing -> "?"). Hide again once loaded.
+        let tab = property("acTa", of: w)
+        for _ in 0..<30 {
+            Thread.sleep(forTimeInterval: 0.5)
+            if case let .success(l) = send("core", "getd", direct: property("ldng", of: tab)), !l.booleanValue { break }
+        }
+        hideIfVisible(w)
+    }
+    private static func hideIfVisible(_ w: NSAppleEventDescriptor?) {
+        if case let .success(v) = send("core", "getd", direct: property("pvis", of: w)), v.booleanValue {
+            set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        }
+    }
+
+    func closeDedicatedWindow() async {
+        await Self.onQueue(cancelled: ()) {
+            guard Self.status(ask: false) == .granted, let (_, id) = Self.findDedicated() else { return }
+            _ = Self.send("core", "clos", direct: Self.windowByID(id))
+        }
+    }
+
+    /// Reload + read our own window's tab. nil: no own window (caller falls back to a read-only scan).
+    private static func readDedicated(alive: () -> Bool) -> Result<String, ChromeReadError>? {
+        let before = frontName()
+        let r = readDedicatedInner(alive: alive)
+        let outcome: String = switch r { case nil: "none"; case .success: "ok"; case let .failure(e): "\(e)" }
+        geminiLog.notice("dedicated read: \(outcome, privacy: .public) front before=\(before, privacy: .public) after=\(frontName(), privacy: .public)")
+        return r
+    }
+    private static func readDedicatedInner(alive: () -> Bool) -> Result<String, ChromeReadError>? {
+        guard let (_, id) = findDedicated() else {
+            geminiLog.notice("dedicated window not found")
+            let last = UserDefaults.standard.object(forKey: GeminiDedicatedWindow.lastOpenKey) as? Date
+            if GeminiDedicatedWindow.mayOpen(lastOpen: last, now: Date()) {
+                UserDefaults.standard.set(Date(), forKey: GeminiDedicatedWindow.lastOpenKey)
+                openDedicated()
+            }
+            return nil
+        }
+        let w = windowByID(id)
+        // A Chrome restart can restore it visible: hide our own window again (only ours).
+        if case let .success(v) = send("core", "getd", direct: property("pvis", of: w)), v.booleanValue {
+            set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        }
+        let tab = property("acTa", of: w)
+        // Reload only when the tab is confirmed to be exactly the usage page.
+        guard case let .success(u) = send("core", "getd", direct: property("URL ", of: tab)), let url = u.stringValue else { return .failure(.failed) }
+        guard GeminiUsageURL.isUsagePage(url) else {
+            // Drifted to another Gemini page: put our own tab back. A sign-in/verification page: 不明, never auto-login.
+            if GeminiUsageURL.isGemini(url) { set("URL ", of: tab, NSAppleEventDescriptor(string: GeminiUsageURL.base)); return .failure(.tabAsleep) }
+            return .failure(.failed)
+        }
+        // Only this tab of our own window is ever reloaded.
+        _ = send("CrSu", "Rlod", direct: tab)
+        for _ in 0..<40 {
+            guard alive() else { return nil }
+            Thread.sleep(forTimeInterval: 0.5)
+            if case let .success(l) = send("core", "getd", direct: property("ldng", of: tab)), !l.booleanValue { break }
+        }
+        Thread.sleep(forTimeInterval: 3) // the usage numbers render after load
+        hideIfVisible(w) // a reload can re-show it too
+        guard alive() else { return nil }
+        switch send("CrSu", "ExJa", direct: tab, params: ["JvSc": NSAppleEventDescriptor(string: pageScript)]) {
+        case let .success(d):
+            guard let json = d.stringValue, !json.isEmpty else { return .failure(.tabAsleep) }
+            return usageText(fromJSON: json) ?? .failure(.failed)
+        case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
+        case .failure(.code(12)): return .failure(.javascriptDisabled)
+        case .failure(.code(-1712)): return .failure(.timedOut)
+        case .failure: return nil
+        }
+    }
 
     private static func status(ask: Bool) -> ChromeAutomationStatus {
         guard session.target != nil else { return .chromeNotRunning }
@@ -435,7 +576,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
         let event = NSAppleEventDescriptor.appleEvent(
             withEventClass: code(cls), eventID: code(id), targetDescriptor: NSAppleEventDescriptor(processIdentifier: pid),
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
-        event.setParam(direct, forKeyword: keyDirectObject)
+        if direct.descriptorType != code("null") { event.setParam(direct, forKeyword: keyDirectObject) }
         for (k, v) in params { event.setParam(v, forKeyword: code(k)) }
         do {
             let reply = try event.sendEvent(options: sendOptions, timeout: timeoutSeconds)
@@ -467,7 +608,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
     if(!isFinite(v)||!isFinite(mn)||!isFinite(mx)||mx<=mn||v<mn||v>mx)return;var c=e.getAttribute('aria-label')||'',p=e.parentElement,n=0;\
     for(var i=0;i<4&&p&&!n;i++,p=p.parentElement){var x=(p.innerText||'').trim();if(x){c=c+' '+x.slice(0,80);n=1;}}\
     bars.push({c:c.replace(/\\s+/g,' ').slice(0,60),v:Math.round((v-mn)/(mx-mn)*1000)/10});});\
-    return JSON.stringify({u:u,t:t,b:bars});})()
+    var o=(window.performance&&performance.timeOrigin)||0;return JSON.stringify({u:u,t:t,b:bars,o:o});})()
     """
 
     /// Text only when the page itself says it is exactly the usage page.
@@ -479,9 +620,13 @@ struct LiveChromeBridge: ChromeUsageBridge {
         guard let body = obj["t"] as? String else { return .failure(.failed) }
         // Page text can never pose as a progress bar: the marker is only added for real bars.
         var text = GeminiAppUsageParser.normalize(body).replacingOccurrences(of: GeminiAppUsageParser.barMarker.trimmingCharacters(in: .whitespaces), with: "@ @bar")
+            .replacingOccurrences(of: GeminiAppUsageParser.loadedMarker.trimmingCharacters(in: .whitespaces), with: "@ @loaded")
         for bar in obj["b"] as? [[String: Any]] ?? [] {
             guard let c = bar["c"] as? String, let v = (bar["v"] as? NSNumber)?.doubleValue else { continue }
             text += "\n" + GeminiAppUsageParser.barMarker + c.replacingOccurrences(of: "\n", with: " ") + " = " + String(v)
+        }
+        if let o = (obj["o"] as? NSNumber)?.doubleValue, o.isFinite, o > 0 {
+            text += "\n" + GeminiAppUsageParser.loadedMarker + String(Int(o / 1000))
         }
         return .success(text)
     }
@@ -498,8 +643,11 @@ struct LiveChromeBridge: ChromeUsageBridge {
     func usageTabText() async -> Result<String, ChromeReadError>? {
         await Self.onQueue(cancelled: nil) { (alive: () -> Bool) -> Result<String, ChromeReadError>? in
             guard Self.status(ask: false) == .granted else { return .failure(.notAllowed) }
-            // Same queue slot: Gemini must still be the front app and front tab right now.
-            guard Self.geminiInFront() else { return nil }
+            // Same queue slot: Aki must still be at the Mac. The usage tab is read where it is,
+            // in the background: nothing is activated, focused, selected, reloaded or reordered.
+            guard Self.userPresent() else { return nil }
+            if let own = Self.readDedicated(alive: alive) { return own }
+            guard alive() else { return nil }
             let tabs = Self.spec("CrTb", form: "indx", Self.every, in: Self.window(nil))
             guard case let .success(urlDesc) = Self.send("core", "getd", direct: Self.property("URL ", of: tabs)),
                   case let .success(idDesc) = Self.send("core", "getd", direct: Self.property("ID  ", of: tabs)) else { return .failure(.failed) }
@@ -514,9 +662,17 @@ struct LiveChromeBridge: ChromeUsageBridge {
                 let js = NSAppleEventDescriptor(string:
                     Self.pageScript)
                 // Listing tabs can take seconds: re-check toggle and front tab right before executing.
-                guard alive(), Self.geminiInFront() else { return nil }
+                guard alive(), Self.userPresent() else { return nil }
+                // A loading tab (or one Chrome is restoring) is skipped, never scripted mid-load.
+                // Chrome's scripting has no "discarded" property; a discarded tab has no live page,
+                // so its reply comes back empty and is shown as 不明 below, without retrying.
+                if case let .success(l) = Self.send("core", "getd", direct: Self.property("ldng", of: tab)), l.booleanValue {
+                    return .failure(.tabAsleep)
+                }
                 switch Self.send("CrSu", "ExJa", direct: tab, params: ["JvSc": js]) {
-                case let .success(d): return Self.usageText(fromJSON: d.stringValue)
+                case let .success(d):
+                    guard let json = d.stringValue, !json.isEmpty else { return .failure(.tabAsleep) }
+                    return Self.usageText(fromJSON: json)
                 case .failure(.code(-1743)), .failure(.code(-1744)): return .failure(.notAllowed)
                 case .failure(.code(-1712)): return .failure(.timedOut)
                 case .failure(.code(-600)): return nil
@@ -572,7 +728,7 @@ final class GeminiAppUsageMonitor {
     var startText: String {
         if !isEnabled { return "オフ（メニューで「Gemini の使用量を読む」をオン）" }
         if state.halted { return "不明（確認ページかエラーのため停止中。メニューでオフ→オンで再開）" }
-        return "不明（Gemini を使うと読みます）"
+        return "不明（gemini.google.com/usage のタブを開いておくと5分ごとに読みます）"
     }
 
     func start() {
@@ -595,7 +751,11 @@ final class GeminiAppUsageMonitor {
         generation += 1
         let gen = generation
         setHalted(false)
-        guard on else { bridge.invalidatePending(); publish(cachedOrUnknown("オフ")); return }
+        guard on else {
+            bridge.invalidatePending(); publish(cachedOrUnknown("オフ"))
+            if !isEnabled { await bridge.closeDedicatedWindow() }
+            return
+        }
         let current = await bridge.automationStatus(ask: false)
         guard gen == generation, isEnabled else { return } // toggled again meanwhile: never ask
         let status = current == .notDetermined ? await bridge.automationStatus(ask: true) : current
@@ -629,19 +789,10 @@ final class GeminiAppUsageMonitor {
         guard bridge.chromeRunning else { return }
         let hour = Calendar.current.component(.hour, from: now)
         let asleep = screenAsleep(), idle = idleSeconds()
-        let base = GeminiReadPolicy.Signals(now: now, geminiFrontmost: true, idleSeconds: idle, screenAsleep: asleep, hour: hour)
-        // Cheap local checks first; only then ask Chrome for its front tab URL.
-        guard bridge.chromeFrontmost, GeminiReadPolicy.shouldRead(state, base) else { return }
-        guard await bridge.automationStatus(ask: false) == .granted, current() else { return }
-        let front = await bridge.activeTabURL().map(GeminiUsageURL.isGemini) ?? false
-        guard current() else { return }
-        var signals = base; signals.geminiFrontmost = front && bridge.chromeFrontmost
+        let signals = GeminiReadPolicy.Signals(now: now, idleSeconds: idle, screenAsleep: asleep, hour: hour)
+        // Cheap local checks first; Chrome is asked nothing unless a read is due.
         guard GeminiReadPolicy.shouldRead(state, signals) else { return }
-        state.lastRead = now
-        defaults.set(now.timeIntervalSince1970, forKey: Self.lastReadKey)
-        // Re-check right before reading the body: Aki may have switched app or tab meanwhile.
-        guard bridge.chromeFrontmost, await bridge.activeTabURL().map(GeminiUsageURL.isGemini) ?? false,
-              bridge.chromeFrontmost, current() else { return }
+        guard await bridge.automationStatus(ask: false) == .granted, current() else { return }
         // Monotonic guard: a wall-clock jump forward can never shorten spacing within this run.
         let up = uptime()
         if let last = lastReadUptime, up - last < GeminiReadPolicy.interval { return }
@@ -663,6 +814,8 @@ final class GeminiAppUsageMonitor {
             publish(cachedOrUnknown("不明（Chrome の「Apple Events からの JavaScript を許可」がオフ）"))
         case .failure(.timedOut):
             publish(cachedOrUnknown("不明（Chrome の応答がありません）"))
+        case .failure(.tabAsleep):
+            publish(cachedOrUnknown("不明（usage タブがスリープ中か読み込み中。タブを一度開くと読めます）"))
         case .failure:
             setHalted(true)
             publish(cachedOrUnknown("不明（Chrome から読めませんでした。読み取りを停止）"))
@@ -675,19 +828,89 @@ final class GeminiAppUsageMonitor {
                 Self.saveDiagnostic(GeminiAppUsageParser.redactedSample(text))
                 publish(cachedOrUnknown("不明（使用量の数字を読み取れませんでした）"))
             case let outcome:
-                if let fresh = GeminiAppUsageParser.section(from: outcome, observedAt: now) {
+                if var fresh = GeminiAppUsageParser.section(from: outcome, observedAt: now) {
+                    let loaded = GeminiAppUsageParser.pageLoadedAt(text)
+                    fresh = Self.resolvingResets(fresh, pageLoaded: loaded ?? now, now: now)
                     save(fresh, at: now)
+                    if fresh.windows.isEmpty {
+                        publish(fresh)
+                        return
+                    }
+                    if let note = Self.pageAgeNote(loaded: loaded, now: now) {
+                        fresh.isStale = true
+                        fresh.failureText = note
+                    }
                     publish(fresh)
                 }
             }
         }
     }
 
+    /// Turns the page's reset text into a date (relative to when the tab was loaded). The page never
+    /// updates by itself, so once a shown reset time has passed the old % is meaningless: drop it.
+    static func resolvingResets(_ section: ProviderSection, pageLoaded: Date, now: Date,
+                                calendar: Calendar = .current) -> ProviderSection {
+        var out = section
+        var passed: [String] = []
+        out.windows = section.windows.compactMap { w in
+            guard let at = resetDate(w.resetText, after: pageLoaded, calendar: calendar) else { return w }
+            if at <= now { passed.append(w.title); return nil }
+            var r = w; r.resetAt = at; return r
+        }
+        if !passed.isEmpty {
+            out.isStale = true
+            out.failureText = "不明/要更新（タブ表示のリセット時刻を過ぎました。タブを再読込すると最新）"
+        }
+        return out
+    }
+
+    /// "Resets at 4:10 PM", "Resets Nov 2", "16:10にリセット", "11月2日にリセット" → next such moment after `base`.
+    static func resetDate(_ text: String, after base: Date, calendar: Calendar = .current) -> Date? {
+        func firstMatch(_ pattern: String) -> [String]? {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+            return (1..<m.numberOfRanges).map { i in
+                Range(m.range(at: i), in: text).map { String(text[$0]) } ?? ""
+            }
+        }
+        var hour: Int?, minute: Int?
+        if let g = firstMatch(#"(\d{1,2}):(\d{2})\s*([AP]M)?"#), var h = Int(g[0]), let mi = Int(g[1]) {
+            let ap = g[2].uppercased()
+            if ap == "PM", h < 12 { h += 12 }
+            if ap == "AM", h == 12 { h = 0 }
+            hour = h; minute = mi
+        }
+        let months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]
+        var mo: Int?, d: Int?
+        if let g = firstMatch(#"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b"#) {
+            mo = months.firstIndex(of: g[0].lowercased()).map { $0 + 1 }; d = Int(g[1])
+        } else if let g = firstMatch(#"(\d{1,2})月(\d{1,2})日"#) {
+            mo = Int(g[0]); d = Int(g[1])
+        }
+        // Date and time together ("11月4日の7:39", "Nov 4, 7:39 AM"), date only, or time only.
+        if let mo, let d {
+            return calendar.nextDate(after: base.addingTimeInterval(-86_400),
+                                     matching: DateComponents(month: mo, day: d, hour: hour ?? 0, minute: minute ?? 0),
+                                     matchingPolicy: .nextTime)
+        }
+        guard let hour, let minute else { return nil }
+        return calendar.nextDate(after: base, matching: DateComponents(hour: hour, minute: minute), matchingPolicy: .nextTime)
+    }
+
+    /// The tab is never reloaded by us, so a page loaded long ago may show old numbers.
+    static func pageAgeNote(loaded: Date?, now: Date) -> String? {
+        guard let loaded, now.timeIntervalSince(loaded) > GeminiReadPolicy.pageOldAfter else { return nil }
+        let mins = Int(now.timeIntervalSince(loaded) / 60)
+        let age = mins >= 120 ? "\(mins / 60)時間前" : "\(mins)分前"
+        let f = DateFormatter(); f.locale = Locale(identifier: "ja_JP"); f.dateFormat = "M/d HH:mm"
+        return "タブを \(f.string(from: loaded))（\(age)）に開いたときの値で古い可能性。タブを再読込すると最新"
+    }
+
     /// A fresh value that has not been re-read for a while is shown as stale with its time.
     private func markStaleIfOld(_ now: Date) {
         guard !section.isStale, let observed = section.windows.first?.observedAt,
               now.timeIntervalSince(observed) > GeminiReadPolicy.staleAfter else { return }
-        publish(cachedOrUnknown("使用中でないため更新停止"))
+        publish(cachedOrUnknown("しばらく読めていません（Mac 未使用・深夜・タブなし）"))
     }
 
     /// Redacted lines of the last unreadable page, local only (~/Library/Application Support/UsageRings).
@@ -703,7 +926,9 @@ final class GeminiAppUsageMonitor {
     private func publish(_ s: ProviderSection) { section = s; onChange?(s) }
 
     private func save(_ s: ProviderSection, at date: Date) {
-        let rows = s.windows.map { ["title": $0.title, "left": $0.leftPercent, "reset": $0.resetText] as [String: Any] }
+        let rows = s.windows.map { var r: [String: Any] = ["title": $0.title, "left": $0.leftPercent, "reset": $0.resetText]
+            if let at = $0.resetAt { r["resetAt"] = at.timeIntervalSince1970 }
+            return r }
         defaults.set(["at": date.timeIntervalSince1970, "windows": rows], forKey: Self.cacheKey)
     }
 
@@ -718,7 +943,16 @@ final class GeminiAppUsageMonitor {
             guard let title = row["title"] as? String, let left = row["left"] as? Double else { return nil }
             var w = UsageLimit(title: title, leftPercent: left, resetText: row["reset"] as? String ?? "")
             w.observedAt = observed
+            // Older caches have no resetAt: resolve the page text against when it was read.
+            w.resetAt = (row["resetAt"] as? Double).map(Date.init(timeIntervalSince1970:))
+                ?? Self.resetDate(w.resetText, after: observed)
+            // The page's reset has passed since we read it (also checked at launch): the old % is meaningless.
+            if let at = w.resetAt, at <= clock() { return nil }
             return w
+        }
+        if windows.isEmpty {
+            return ProviderSection(provider: .gemini, windows: [], stats: [],
+                                   failureText: "不明/要更新（前回読んだ値はリセット時刻を過ぎました。タブを再読込すると最新）")
         }
         let f = DateFormatter(); f.locale = Locale(identifier: "ja_JP"); f.dateFormat = "M/d HH:mm"
         var s = ProviderSection(provider: .gemini, windows: windows, stats: [],
