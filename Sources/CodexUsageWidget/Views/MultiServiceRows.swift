@@ -449,8 +449,15 @@ struct ServiceRowView: View {
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 ForEach(row.notes, id: \.self) { note in
-                    Text(note).font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 6) {
+                        Text(note).font(.system(size: 11)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if note == "Gemini読み取り: ウィンドウなし" {
+                            Button("作り直す") { NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil) }
+                                .controlSize(.mini)
+                                .help("UsageRings専用のGemini読み取りウィンドウを非表示で作り直します（Chromeは前面に出ず、他のタブには触れません）")
+                        }
+                    }
                 }
                 if let failure = row.failureText {
                     Text(failure).font(.system(size: 11)).foregroundStyle(GaugeStyle.lowColor)
