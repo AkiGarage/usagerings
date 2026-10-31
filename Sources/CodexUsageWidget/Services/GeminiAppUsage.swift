@@ -450,6 +450,19 @@ struct LiveChromeBridge: ChromeUsageBridge {
         }
         set("URL ", of: property("acTa", of: w), NSAppleEventDescriptor(string: GeminiUsageURL.base))
         set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        // Chrome re-shows a hidden window when its navigation commits (seen 10/31: the window popped
+        // up and was closed, so every later read found nothing -> "?"). Hide again once loaded.
+        let tab = property("acTa", of: w)
+        for _ in 0..<30 {
+            Thread.sleep(forTimeInterval: 0.5)
+            if case let .success(l) = send("core", "getd", direct: property("ldng", of: tab)), !l.booleanValue { break }
+        }
+        hideIfVisible(w)
+    }
+    private static func hideIfVisible(_ w: NSAppleEventDescriptor?) {
+        if case let .success(v) = send("core", "getd", direct: property("pvis", of: w)), v.booleanValue {
+            set("pvis", of: w, NSAppleEventDescriptor(boolean: false))
+        }
     }
 
     func closeDedicatedWindow() async {
@@ -498,6 +511,7 @@ struct LiveChromeBridge: ChromeUsageBridge {
             if case let .success(l) = send("core", "getd", direct: property("ldng", of: tab)), !l.booleanValue { break }
         }
         Thread.sleep(forTimeInterval: 3) // the usage numbers render after load
+        hideIfVisible(w) // a reload can re-show it too
         guard alive() else { return nil }
         switch send("CrSu", "ExJa", direct: tab, params: ["JvSc": NSAppleEventDescriptor(string: pageScript)]) {
         case let .success(d):
