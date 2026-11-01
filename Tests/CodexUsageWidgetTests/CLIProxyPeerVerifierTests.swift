@@ -21,15 +21,64 @@ final class CLIProxyPeerVerifierTests: XCTestCase {
         XCTAssertFalse(LibprocCLIProxyPeerVerifier(port: port).isTrustedListener())
     }
 
-    func testExecutableMustHaveExactBasenameFromAbsolutePath() {
+    func testExecutableMustBeAtKnownInstallPath() {
         for path in ["/opt/homebrew/opt/cliproxyapi/bin/cliproxyapi",
                      "/opt/homebrew/Cellar/cliproxyapi/1.2.3/bin/cliproxyapi",
+                     "/opt/homebrew/Cellar/cliproxyapi/8.0.30/bin/cliproxyapi",
+                     "/usr/local/Cellar/cliproxyapi/8.0.30/bin/cliproxyapi",
                      "/usr/local/bin/cliproxyapi"] {
-            XCTAssertTrue(LibprocCLIProxyPeerVerifier.isExpectedExecutable(path))
+            XCTAssertTrue(LibprocCLIProxyPeerVerifier.isExpectedExecutable(path), path)
         }
         for path in ["", "cliproxyapi", "/tmp/cliproxyapi-fake", "/tmp/cliproxyapi/python3"] {
-            XCTAssertFalse(LibprocCLIProxyPeerVerifier.isExpectedExecutable(path))
+            XCTAssertFalse(LibprocCLIProxyPeerVerifier.isExpectedExecutable(path), path)
         }
+    }
+
+    // UR-01: same name, different location must be rejected.
+    func testSameNameAtUnexpectedPathIsRejected() {
+        for path in ["/tmp/cliproxyapi",
+                     "/Users/x/Downloads/cliproxyapi",
+                     "/Users/x/.local/bin/cliproxyapi",
+                     "/opt/homebrew/Cellar/cliproxyapi/../../../tmp/cliproxyapi",
+                     "/opt/homebrew/Cellar/cliproxyapi/1.0/bin/x/cliproxyapi",
+                     "/opt/homebrew/Cellar/cliproxyapi//bin/cliproxyapi",
+                     "/opt/homebrew/Cellar/other/1.0/bin/cliproxyapi",
+                     "/private/var/folders/aa/T/cliproxyapi",
+                     "/opt/homebrew/Cellar/cliproxyapi/1.0/bin/cliproxyapi/"] {
+            XCTAssertFalse(LibprocCLIProxyPeerVerifier.isExpectedExecutable(path), path)
+        }
+    }
+
+    func testConfiguredPathIsAcceptedOnlyWhenExact() {
+        let custom = "/Users/x/tools/cliproxyapi"
+        XCTAssertTrue(LibprocCLIProxyPeerVerifier.isExpectedExecutable(custom, configuredPath: custom))
+        XCTAssertFalse(LibprocCLIProxyPeerVerifier.isExpectedExecutable("/tmp/cliproxyapi", configuredPath: custom))
+        XCTAssertFalse(LibprocCLIProxyPeerVerifier.isExpectedExecutable(custom, configuredPath: "relative/cliproxyapi"))
+        let dotted = "/Users/x/tools/../../tmp/cliproxyapi"
+        XCTAssertFalse(LibprocCLIProxyPeerVerifier.isExpectedExecutable(dotted, configuredPath: dotted))
+    }
+
+    func testOwnershipRejectsGroupOrWorldWritableAndSymlinks() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ur01-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("cliproxyapi").path
+        XCTAssertTrue(FileManager.default.createFile(atPath: file, contents: Data([0])))
+        chmod(file, 0o755)
+        XCTAssertTrue(LibprocCLIProxyPeerVerifier.hasSafeOwnership(file))
+        chmod(file, 0o775)
+        XCTAssertFalse(LibprocCLIProxyPeerVerifier.hasSafeOwnership(file))
+        chmod(file, 0o757)
+        XCTAssertFalse(LibprocCLIProxyPeerVerifier.hasSafeOwnership(file))
+        let link = dir.appendingPathComponent("link").path
+        XCTAssertEqual(symlink(file, link), 0)
+        XCTAssertFalse(LibprocCLIProxyPeerVerifier.hasSafeOwnership(link))
+    }
+
+    func testCodeSignatureCheckPassesForSelfAndFailsForMissingPID() {
+        // The xctest host is signed; a nonexistent pid must fail closed.
+        XCTAssertTrue(LibprocCLIProxyPeerVerifier.hasValidCodeSignature(pid: getpid()))
+        XCTAssertFalse(LibprocCLIProxyPeerVerifier.hasValidCodeSignature(pid: 999_999))
     }
 
     func testProcessIdentityRequiresSamePIDAndStartTime() {
