@@ -1,0 +1,20 @@
+stateDiagram-v2
+  title: UsageRings - Antigravity / Grok / Claude via official CLIs (--source cli)
+  [*] --> Waiting
+  Waiting: Waiting for refresh
+  Hidden: Ring off (not read)
+  Asking: Asking the official CLI
+  Pending: Claude - waiting for first value
+  Shown: Ring shows usage
+  Notice: Ring shows a setup/error notice
+  Waiting --> Hidden: refresh runs [ring is off]
+  Waiting --> Asking: refresh runs [ring is on]
+  Asking --> Pending: no cached Claude value yet
+  Asking --> Asking: the CLI times out once, retry
+  Asking --> Shown: the CLI returns usage
+  Pending --> Shown: the CLI returns usage
+  Asking --> Notice: CLI missing / signed out / times out again
+  Pending --> Notice: CLI missing / signed out / times out
+  Shown --> Waiting: you turn the ring on/off, or sign in/out of the CLI
+  Notice --> Waiting: you turn the ring on/off, or install / sign in to the CLI
+  Hidden --> Waiting: you turn the ring on, or the CLI changes
