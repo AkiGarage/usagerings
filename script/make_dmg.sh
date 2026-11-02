@@ -24,6 +24,12 @@ case "$MODE" in
     /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$SPARKLE"
     /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
     /usr/bin/codesign --verify --strict --deep "$APP"
+    while IFS= read -r code; do
+      if ! /usr/bin/codesign -dv "$code" 2>&1 | /usr/bin/grep -q '^Authority=Developer ID Application:'; then
+        echo "make_dmg: not Developer ID signed: ${code#$APP/}" >&2
+        exit 3
+      fi
+    done < <(echo "$APP"; /usr/bin/find "$APP/Contents" \( -name "*.framework" -o -name "*.xpc" -o -name "*.app" -o -name "*.dylib" -o -name Autoupdate \) -print)
     ;;
   *)
     echo "usage: make_dmg.sh [adhoc|developer-id]" >&2

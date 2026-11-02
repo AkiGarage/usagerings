@@ -14,7 +14,6 @@ Probe ==
 
 OpenDownload ==
     /\ gate = "guide"
-    /\ opens < 2
     /\ opens' = opens + 1
     /\ gate' = "deferred"
     /\ UNCHANGED <<installed, lastProbe>>
@@ -43,8 +42,9 @@ UserRemoves ==
 Next == Probe \/ OpenDownload \/ Later \/ Relaunch \/ UserInstalls \/ UserRemoves
 
 Spec == Init /\ [][Next]_vars
+OpensBound == opens <= 2
 
-TypeOK == gate \in States /\ installed \in BOOLEAN /\ lastProbe \in {"none", "yes", "no"} /\ opens \in 0..2
+TypeOK == gate \in States /\ installed \in BOOLEAN /\ lastProbe \in {"none", "yes", "no"} /\ opens \in Nat
 ReadyOnlyAfterYes == gate = "ready" => lastProbe = "yes"
 GuideOnlyAfterNo == gate = "guide" => lastProbe = "no"
 CheckingHasNoProbe == gate = "checking" => lastProbe = "none"

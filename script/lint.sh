@@ -27,12 +27,18 @@ scan "CLIProxyAPI references are banned" '[Cc][Ll][Ii][Pp][Rr][Oo][Xx][Yy]|8317|
 scan "provider reads must use --source cli and must not read the Keychain" '"--source", *"(web|oauth|cookie|auto|api)"|kSecClassGenericPassword|SecItemCopyMatching' Sources
 scan "README must not claim sections work without CodexBarCLI" 'work independently when that helper is missing|独立して動作します' README.md README.ja.md
 
-path_hits="$(grep -rlE 'Contents/Helpers/CodexBarCLI' Sources 2>/dev/null | grep -v 'Support/CodexBarRequirement.swift$' || true)"
+path_hits="$(grep -rlE 'CodexBar\.app|Helpers/CodexBarCLI' Sources Tests 2>/dev/null | grep -v 'Support/CodexBarRequirement.swift$' || true)"
 if [[ -n "$path_hits" ]]; then
   echo "$path_hits" >&2
   fail "the CodexBarCLI path must come only from CodexBarRequirement.cliPath"
 fi
-grep -q 'codexBarGuide.start()' Sources/CodexUsageWidget/App/AppDelegate.swift 2>/dev/null || fail "AppDelegate must run the CodexBar first-run guide"
+python3 - Sources/CodexUsageWidget/App/AppDelegate.swift <<'PY' || fail "AppDelegate must run codexBarGuide.start() as the first line after the non-demo check in applicationDidFinishLaunching"
+import re, sys
+src = open(sys.argv[1]).read()
+body = re.search(r"func applicationDidFinishLaunching\(.*?\n    \}\n", src, re.S)
+ok = body and re.search(r"\n        if !demoMode\.isEnabled \{\n            updateController = NanoUpdateController\(\)\n            codexBarGuide\.start\(\)\n        \}", body.group(0))
+sys.exit(0 if ok and src.count("codexBarGuide.start()") == 1 else 1)
+PY
 
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue

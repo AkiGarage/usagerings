@@ -30,12 +30,10 @@ enum CodexBarGateMachine {
     static func next(_ state: CodexBarGate, _ event: CodexBarGateEvent) -> CodexBarGate {
         switch (state, event) {
         case (.checking, .probed(let installed)),
-             (.guide, .probed(let installed)),
-             (.deferred, .probed(let installed)):
+             (.guide, .probed(let installed)):
             return installed ? .ready : .guide
-        case (.guide, .openDownload):
-            return .guide
-        case (.guide, .later):
+        case (.guide, .openDownload),
+             (.guide, .later):
             return .deferred
         default:
             return state
@@ -71,7 +69,6 @@ final class CodexBarGuideController {
             case .alertFirstButtonReturn:
                 openURL(CodexBarRequirement.downloadURL)
                 send(.openDownload)
-                send(.later)
             case .alertSecondButtonReturn:
                 send(.probed(installed: probe()))
             default:

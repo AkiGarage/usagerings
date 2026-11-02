@@ -22,10 +22,12 @@ management_url() { echo 'let u = "http://127.0.0.1:9000/v8/management/x"' >> "$1
 missing_target() { mv "$1/docs" "$1/docs-gone"; }
 web_source() { echo 'let a = ["--source", "web"]' >> "$1/Sources/CodexUsageWidget/Services/MultiUsageService.swift"; }
 cli_path_literal() { echo 'let p = "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI"' >> "$1/Sources/CodexUsageWidget/Services/MultiUsageService.swift"; }
+guide_moved() { python3 -c "import sys;p=sys.argv[1];s=open(p).read().replace('            codexBarGuide.start()\n','',1).replace('        persona.start()','        persona.start()\n        codexBarGuide.start()',1);open(p,'w').write(s)" "$1/Sources/CodexUsageWidget/App/AppDelegate.swift"; }
+test_path_literal() { echo 'let q = "/Applications/CodexBar.app"' >> "$1/Tests/CodexUsageWidgetTests/CodexBarRequirementTests.swift"; }
 guide_removed() { sed -i.bak 's/codexBarGuide.start()/codexBarGuide.state/' "$1/Sources/CodexUsageWidget/App/AppDelegate.swift"; }
 readme_claim() { echo 'Other sections can work independently when that helper is missing.' >> "$1/README.md"; }
 
-for case in trailing_comment block_comment management_url missing_target web_source readme_claim cli_path_literal guide_removed; do
+for case in trailing_comment block_comment management_url missing_target web_source readme_claim cli_path_literal guide_removed guide_moved test_path_literal; do
   expect_fail "$case" "$case"
 done
 bash "$repo/script/lint.sh"

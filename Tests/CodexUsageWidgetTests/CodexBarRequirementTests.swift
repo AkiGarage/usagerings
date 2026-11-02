@@ -22,6 +22,12 @@ final class CodexBarRequirementTests: XCTestCase {
         }
     }
 
+    func testDeferredIgnoresEverything() {
+        for event in events {
+            XCTAssertEqual(CodexBarGateMachine.next(.deferred, event), .deferred)
+        }
+    }
+
     func testReadyIsAbsorbing() {
         for event in events {
             XCTAssertEqual(CodexBarGateMachine.next(.ready, event), .ready)
