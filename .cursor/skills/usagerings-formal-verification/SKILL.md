@@ -1,6 +1,6 @@
 ---
 name: usagerings-formal-verification
-description: Use before and after any change to how UsageRings reads provider usage (MultiUsageService fetchAll, sourceArguments, the Claude section, retries, CodexBarCLI arguments). Checks that only the official provider CLI is ever used, disabled providers are never fetched, and retries stay bounded.
+description: Use before and after any change to how UsageRings reads provider usage (MultiUsageService fetchAll, sourceArguments, the Claude section, retries, CodexBarCLI arguments) or how MultiUsageStore refreshes, merges, retains stale values and handles resets. Checks that only the official provider CLI is ever used, disabled providers are never fetched, and retries stay bounded.
 ---
 
 # UsageRings usage-reading verification
@@ -27,7 +27,7 @@ Plus `script/lint.sh`, which bans proxy, cookie, web and Keychain reads in the s
 | ClaudeCacheEmpty → pending | MultiUsageService.claudePendingSection |
 | CliTimesOutRetry / GiveUp, BoundedRetries | MultiUsageService retry once on launch failure (RetrySafetyTests) |
 | CliOk / CliFails, Shown/FailedOnly… | ProviderSection windows vs failureText |
-Sync commit: db3cf06. Move it forward only after confirming that the table still describes the code at the new commit.
+Sync commit: 2e2abb4 (2e2abb4 only swapped the CLI path literal for CodexBarRequirement.cliPath; model unchanged). Move it forward only after confirming that the table still describes the code at the new commit.
 
 ## Bounds and what is left out
 One provider instance, one retry, the cli states ok/missing/signedOut/timeout. Not covered: what the CLI output means (that is parser tests), multi-account Antigravity, the UI drawing, real network timing.
@@ -37,3 +37,24 @@ If TLC fails, replay the statechart path against the real code as a SourcePolicy
 
 ## When the change is intended
 Update the spec, the coverage table and the tests together, rerun all three checks, regenerate the chart with /statechart, and move the sync commit.
+
+## Refresh and display model (UsageRefresh)
+Rules in plain Japanese:
+1. 別アカウントの数字を表示しない (NoCrossAccount)
+2. 古い応答が新しい表示を上書きしない (StaleNeverOverwritesNewer)
+3. 取得失敗を 0% や成功として表示しない (FailureNeverShownAsSuccess)
+4. リセット前の古い応答が新しい期間の表示を上書きしない (OldPeriodNeverOverwritesNew, RetainedNeverFromPastPeriod)
+5. スリープ復帰や更新の重なりでも取得は同時に1本だけ (AtMostOneFetch)
+
+Run: `docs/formal/check-refresh.sh`. It must print PASS for UsageRefresh and PASS ... caught for every Fault-*.cfg. Each fault config turns off one real guard and TLC must report the matching violation; if a fault is not caught, the invariant is too weak.
+
+| Model | Code |
+|---|---|
+| Start with SingleFlight | MultiUsageStore.refresh guard !isRefreshing |
+| Complete, NewDisp ok | MultiUsageStore.apply merge of the fetched sections |
+| Retained, RemapById | retainingStaleValues remaps old windows by account id |
+| DropStaleAtReset, ExpireStale | isRetainable resetAt >= now, scheduleExpiry |
+| FailIsFailure | non-transient errors keep failureText with empty windows |
+| Reset, Sleep, Wake, Reorder | ResetRefreshPlanner, wake and clock-change replans, account order changes |
+Bounds: 2 accounts, 4 requests, 2 periods. Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
+Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit d88b464.
