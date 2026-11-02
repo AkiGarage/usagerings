@@ -126,7 +126,7 @@ final class ZaiResetTicketsTests: XCTestCase {
             let provider = arguments[2]
             let data = Data("[{\"provider\":\"\(provider)\",\"usage\":{\"primary\":{\"usedPercent\":25,\"windowMinutes\":300}}}]".utf8)
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: data, stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client(), zaiTicketClient: client)
+        }, zaiTicketClient: client)
         let snapshot = await service.fetchAll(now: now)
         let section = try XCTUnwrap(snapshot.sections.first { $0.provider == .zai })
         XCTAssertNil(section.failureText)

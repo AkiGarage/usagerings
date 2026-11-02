@@ -10,7 +10,7 @@ final class MultiAccountProviderTests: XCTestCase {
             }
             XCTAssertTrue(arguments.contains("--all-accounts"))
             return .init(terminationStatus: 0, stdout: Data("[]".utf8), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client())
+        })
         return await service.fetchAll()
     }
 

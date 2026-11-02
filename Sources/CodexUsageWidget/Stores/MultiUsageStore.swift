@@ -8,7 +8,6 @@ struct ResetKey: Hashable { let provider: ProviderID; let at: Date }
 /// retries while the provider still echoes the passed reset or fails. Pure, for tests.
 enum ResetRefreshPlanner {
     struct Attempts: Equatable { var count = 0; var last: Date? }
-    /// Fire times relative to the reset (aligned with `CLIProxyClient.resetRetryDelays`).
     static let offsets: [TimeInterval] = [5, 36, 127]
     /// Minimum spacing from the previous attempt for the same reset (sleep/wake catch-up).
     static let gaps: [TimeInterval] = [0, 31, 91]

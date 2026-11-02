@@ -24,6 +24,8 @@ jobs:
           persist-credentials: false
       - name: Swift version
         run: swift --version
+      - name: Lint
+        run: ./script/lint.sh
       - name: Build
         run: swift build
       - name: Test

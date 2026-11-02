@@ -161,7 +161,7 @@ struct CodexUsageTextParser {
             throw CodexUsageError.invalidJSON
         }
         if let timestamp = usage.updatedAt {
-            guard let observed = CLIProxyParser.date(timestamp) else { throw CodexUsageError.invalidJSON }
+            guard let observed = UsageText.date(timestamp) else { throw CodexUsageError.invalidJSON }
             session?.observedAt = observed
             weekly?.observedAt = observed
         }

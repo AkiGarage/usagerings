@@ -43,20 +43,6 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertTrue(section.forAccount(1).stats.contains { $0.valueText.hasPrefix("CodexBar CLI · B") })
     }
 
-    func testOneFailingAccountKeepsTheOtherAndProxyStaysFallback() async {
-        let usage = cli(CallLog(), failB: true)
-        await usage.refreshNow([a, b], timeZone: .current)
-        let result = usage.section(accounts: [a, b], now: Date(), timeZone: .current, salt: salt)
-        XCTAssertEqual(result?.section.forAccount(0).windows.count, 2)
-        XCTAssertEqual(result?.section.forAccount(1).failureText?.hasPrefix("取得失敗"), true)
-
-        let none = ClaudeCLIUsage(runner: { _, _ in .init(terminationStatus: 1, stdout: Data(), stderr: Data()) })
-        await none.refreshNow([a], timeZone: .current)
-        let proxy = ProviderSection(provider: .claude, windows: [], stats: [], failureText: "x")
-        XCTAssertNil(none.section(accounts: [a], now: Date(), timeZone: .current, salt: salt))
-        XCTAssertEqual(ClaudeCLIUsage.merge(cli: nil, proxy: proxy)?.stats.last?.valueText, "CLIProxyAPI（予備）")
-    }
-
     func testOldCacheExpiresToProxy() async {
         let usage = cli(CallLog())
         await usage.refreshNow([a], timeZone: .current)
@@ -108,25 +94,6 @@ final class ClaudeCLIUsageTests: XCTestCase {
         // The old run's late result for A was dropped.
         let back = usage.section(accounts: [a], now: t0, timeZone: .current, salt: salt)
         XCTAssertNil(back, "A's stale-generation value must not be stored")
-    }
-
-    func testProxyLabelsCarryOverByUniqueMaskedEmail() {
-        let proxyA = AccountID(provider: .claude, source: "proxy-account-id", value: "pa", salt: salt)
-        let proxyB = AccountID(provider: .claude, source: "proxy-account-id", value: "pb", salt: salt)
-        var proxy = ProviderSection(provider: .claude, windows: [
-            { var w = UsageLimit(title: "aki***@e*** · 5h", leftPercent: 50, resetText: "", detailText: nil, projectionText: nil, markerPercent: nil); w.accountIndex = 0; return w }(),
-            { var w = UsageLimit(title: "bob***@e*** · 5h", leftPercent: 50, resetText: "", detailText: nil, projectionText: nil, markerPercent: nil); w.accountIndex = 1; return w }(),
-        ], stats: [], failureText: nil)
-        proxy.accounts = [ProviderAccount(index: 0, id: proxyA), ProviderAccount(index: 1, id: proxyB)]
-        let aliases = ClaudeCLIUsage.proxyAliases(cli: [0: "bob***@e***", 1: "zzz***@e***"], proxy: proxy)
-        XCTAssertEqual(aliases[0], [proxyB])
-        XCTAssertNil(aliases[1])
-        XCTAssertTrue(ClaudeCLIUsage.proxyAliases(cli: [0: "bob***@e***", 1: "bob***@e***"], proxy: proxy).isEmpty,
-                      "ambiguous CLI match is never guessed")
-        let merged = a.accountID(salt: salt).merging(proxyB)
-        XCTAssertEqual(merged, a.accountID(salt: salt))
-        XCTAssertTrue(merged.aliases.contains(proxyB.rawValue))
-        XCTAssertEqual(ClaudeCLIUsage.maskedEmail(Data(#"[{"provider":"claude","usage":{"identity":{"accountEmail":"bobby@example.com"}}}]"#.utf8)), "bob***@e***")
     }
 
     func testOldProxyLabelMigratesToFolderAccount() {

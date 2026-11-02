@@ -565,8 +565,7 @@ final class RingDetailCardTests: XCTestCase {
             }
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
         }
-        let store = MultiUsageStore(service: MultiUsageService(commandRunner: runner,
-                                                               cliProxyClient: CLIProxyFixtures.client()),
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: runner),
                                     snapshotURLs: [])
         let name = "RingDetailCardTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))

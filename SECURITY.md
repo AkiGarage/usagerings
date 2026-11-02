@@ -4,6 +4,6 @@ Report vulnerabilities through this repository's **Security → Advisories → R
 
 If private reporting is unavailable, open a GitHub issue requesting a private reporting channel without including sensitive details. Maintainers can arrange a private GitHub security advisory.
 
-UsageRings stores settings and display data locally, but usage retrieval contacts configured services. The CLIProxyAPI management connection is loopback-only. Remote Claude SSH monitoring is off by default and requires an explicit host and a trusted host key. See the [README](README.md#privacy) for local files and network behavior.
+UsageRings stores settings and display data locally, but usage retrieval contacts configured services. Provider usage is read through official provider CLIs via CodexBarCLI; UsageRings uses no browser cookies and stores no keys in the Keychain. Remote Claude SSH monitoring is off by default and requires an explicit host and a trusted host key. See the [README](README.md#privacy) for local files and network behavior.
 
 Build CI runs on GitHub-hosted macOS with read-only repository permissions and no publishing steps. Never add credentials to issue attachments, test fixtures, logs, or screenshots. Synthetic test credentials are not production credentials.

@@ -70,18 +70,6 @@ struct AccountID: Hashable, Sendable {
         return copy
     }
 
-    static func cliProxy(_ credential: CLIProxyCredential, provider: ProviderID,
-                         salt: Data = AccountIdentitySalt.load()) -> Self {
-        var sources: [(String, String)] = []
-        for (source, value) in [("proxy-account-id", credential.accountID), ("proxy-user-id", credential.userID)] {
-            if let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
-                sources.append((source, value))
-            }
-        }
-        // auth_index may be renumbered: use it only when no stable identity exists.
-        if sources.isEmpty { sources.append(("proxy-auth-index", credential.authIndex)) }
-        return candidates(sources, provider: provider, salt: salt)!
-    }
 
     static func codexBar(_ entry: [String: Any], provider: ProviderID,
                          salt: Data = AccountIdentitySalt.load()) -> Self? {

@@ -27,7 +27,7 @@ final class OpenCodeAvailabilityTests: XCTestCase {
         let counters = Data(#"[{"usage":{"cost":0,"tokens_input":0,"tokens_output":0}}]"#.utf8)
         let service = MultiUsageService(commandRunner: { _ in
             .init(terminationStatus: 0, stdout: counters, stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client())
+        })
         let snapshot = await service.fetchAll()
         for provider in [ProviderID.codex, .zai, .minimax, .kimi, .deepseek] {
             let section = try XCTUnwrap(snapshot.sections.first { $0.provider == provider })

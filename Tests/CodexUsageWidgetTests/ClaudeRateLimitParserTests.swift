@@ -213,7 +213,7 @@ final class ClaudeRateLimitParserTests: XCTestCase {
         try write(errorLine(), to: root, name: "event", modified: event)
         let service = MultiUsageService(commandRunner: { _ in
             CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client(), claudeRateLimitMonitor: ClaudeRateLimitMonitor(accounts: [1: [root]]))
+        }, claudeRateLimitMonitor: ClaudeRateLimitMonitor(accounts: [1: [root]]))
         let snapshot = await service.fetchAll(now: event)
         XCTAssertNotNil(snapshot.sections.first { $0.provider == .claude }?.claudeProfileBlocks[1])
         XCTAssertTrue(snapshot.sections.filter { $0.provider != .claude }.allSatisfy { $0.claudeProfileBlocks.isEmpty })

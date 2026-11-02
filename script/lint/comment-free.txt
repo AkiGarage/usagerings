@@ -1,0 +1,7 @@
+Sources/CodexUsageWidget/Services/MultiUsageService.swift
+Sources/CodexUsageWidget/Services/UsageText.swift
+Tests/CodexUsageWidgetTests/AccountPreferencesTests.swift
+Tests/CodexUsageWidgetTests/CloudSnapshotSenderTests.swift
+Tests/CodexUsageWidgetTests/MultiUsageServiceTests.swift
+Tests/CodexUsageWidgetTests/MultiUsageStoreTests.swift
+Tests/CodexUsageWidgetTests/SourcePolicyTests.swift

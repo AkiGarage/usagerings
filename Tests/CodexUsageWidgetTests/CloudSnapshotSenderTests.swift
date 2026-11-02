@@ -415,18 +415,6 @@ extension CloudSnapshotSenderTests {
 
 @MainActor
 extension CloudSnapshotSenderTests {
-    func testProviderParsersRetainObservationAndResetTimes() throws {
-        let now = Date(timeIntervalSince1970: 1_700_001_000)
-        let codex = Data(#"[{"provider":"codex","usage":{"updatedAt":"2023-11-14T22:13:20.000Z","primary":{"usedPercent":20},"secondary":null}}]"#.utf8)
-        let parsed = try CodexUsageTextParser.parseJSON(codex, now: now)
-        XCTAssertEqual(parsed.session?.observedAt, Date(timeIntervalSince1970: 1_700_000_000))
-        let grok = Data(#"{"config":{"creditUsagePercent":25,"currentPeriod":{"end":"2023-11-15T00:00:00Z"}}}"#.utf8)
-        guard case .quota(let limit) = try CLIProxyParser.grok(grok, label: "private", weekly: true, now: now) else {
-            return XCTFail("Expected quota")
-        }
-        XCTAssertEqual(limit.leftPercent, 75)
-        XCTAssertEqual(limit.resetAt, ISO8601DateFormatter().date(from: "2023-11-15T00:00:00Z"))
-    }
 }
 
 @MainActor

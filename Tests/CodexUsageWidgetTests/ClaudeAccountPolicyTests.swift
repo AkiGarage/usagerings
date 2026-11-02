@@ -208,7 +208,6 @@ final class ClaudeAccountPolicyReviewTests: XCTestCase {
         XCTAssertEqual(d.state, .allLimited); XCTAssertEqual(d.selected, "b")
     }
 
-    // R5: profile order a,b regardless of CLIProxy index order
     func testMappedAccountsAreInProfileOrder() {
         var w0 = UsageLimit(title: "x · Weekly", leftPercent: 50, resetText: ""); w0.accountIndex = 0; w0.resetAt = h(20)
         var w1 = UsageLimit(title: "y · Weekly", leftPercent: 50, resetText: ""); w1.accountIndex = 1; w1.resetAt = h(20)

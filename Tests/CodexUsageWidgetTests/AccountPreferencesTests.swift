@@ -299,24 +299,6 @@ final class AccountPreferencesTests: XCTestCase {
         }
     }
 
-    func testClaudeRetainsFailedAccountsWithAccountScopedNotices() async throws {
-        let client = CLIProxyClient(transport: AccountFailureTransport(), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
-        let sections = await client.fetchSections()
-        let section = try XCTUnwrap(sections.first { $0.provider == .claude })
-        XCTAssertEqual(section.accounts.count, 2)
-        XCTAssertTrue(section.accounts.allSatisfy { $0.id != nil })
-        let rows = ServiceRowModel.rows(for: section)
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertNil(rows[0].failureText)
-        XCTAssertNotNil(rows[1].failureText)
-        XCTAssertEqual(rows[0].five?.leftPercent, 79)
-        XCTAssertNil(rows[1].primary)
-        XCTAssertEqual(section.stats.compactMap(\.accountIndex), [1])
-        let bars = CollapsedUsageBar.bars(for: snapshot([section])).filter { $0.provider == .claude }
-        XCTAssertEqual(bars.count, 2)
-        XCTAssertNotNil(RingDetailCardModel.make(bar: bars[1], now: Date()))
-    }
-
     func testClaudeProfileWarningsNeverBindToQuotaAccountOrderOrPreferences() throws {
         let block = ClaudeBlock(kind: .session, resetAt: Date().addingTimeInterval(3600), timeZoneKnown: true)
         let first = AccountID(provider: .claude, source: "id", value: "one")
@@ -366,9 +348,12 @@ final class AccountPreferencesTests: XCTestCase {
             func lines() async -> [String] { [] }
             func failureText() async -> String? { "SSH host unreachable" }
         }
-        let service = MultiUsageService(commandRunner: { _ in
-            .init(terminationStatus: 1, stdout: Data(), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client(),
+        let claudeAccount = #"[{"provider":"claude","usage":{"accountEmail":"synthetic@example.test","primary":{"usedPercent":20,"windowMinutes":300}}},{"provider":"claude","usage":{"accountEmail":"second@example.test","primary":{"usedPercent":40,"windowMinutes":300}}}]"#
+        let service = MultiUsageService(commandRunner: { arguments in
+            arguments[2] == "claude"
+                ? .init(terminationStatus: 0, stdout: Data(claudeAccount.utf8), stderr: Data())
+                : .init(terminationStatus: 1, stdout: Data(), stderr: Data())
+        },
            claudeRateLimitMonitor: ClaudeRateLimitMonitor(accounts: [:], remote: Unreachable()))
         let snapshot = await service.fetchAll()
         let section = try XCTUnwrap(snapshot.sections.first { $0.provider == .claude })
@@ -403,7 +388,7 @@ final class AccountPreferencesTests: XCTestCase {
                 XCTAssertTrue(arguments.contains("--all-accounts"))
                 let json = arguments[2] == "codex" ? payload : "[]"
                 return .init(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
-            }, cliProxyClient: CLIProxyFixtures.client())
+            })
             return await service.fetchAll().sections.first { $0.provider == .codex }
         }
         let initialResult = await fetch([first, second])
@@ -437,7 +422,7 @@ final class AccountPreferencesTests: XCTestCase {
                  "primary":{"usedPercent":25,"windowMinutes":300,"resetDescription":"Balance available"}}}]
             """
             return .init(terminationStatus: 1, stdout: Data(payload.utf8), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client())
+        })
         let snapshot = await service.fetchAll()
         for provider in [ProviderID.codex, .zai, .minimax, .kimi, .deepseek] {
             let section = try XCTUnwrap(snapshot.sections.first { $0.provider == provider })
@@ -503,13 +488,3 @@ final class AccountPreferencesTests: XCTestCase {
     }
 }
 
-private struct AccountFailureTransport: CLIProxyTransport {
-    func send(_ request: URLRequest) async throws -> (Data, Int) {
-        if request.url?.lastPathComponent == "credentials" {
-            return (Data(#"{"files":[{"provider":"claude","auth_index":"one"},{"provider":"claude","auth_index":"two"}]}"#.utf8), 200)
-        }
-        let body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
-        if body?["authIndex"] as? String == "two" { return (Data(), 500) }
-        return (CLIProxyFixtures.envelope(CLIProxyFixtures.claude), 200)
-    }
-}
