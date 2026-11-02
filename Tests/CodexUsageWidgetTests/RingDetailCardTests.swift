@@ -90,6 +90,89 @@ final class RingDetailCardTests: XCTestCase {
 
     // MARK: - RingDetailCardModel
 
+    @MainActor
+    func testCodexCardHidesRawStatsButKeepsWeeklyResetAndExtras() throws {
+        let weekly = UsageLimit(title: "Weekly", leftPercent: 49,
+                                resetText: "Resets 10/23 12:00 (2d)")
+        let tickets = ["5時間リセット", "週リセット"].enumerated().map { index, title in
+            CodexExtrasParser.Ticket(title: title, status: "available", resetType: nil,
+                                     grantedAt: nil, expiresAt: noonJST.addingTimeInterval(Double(index + 1) * 86_400))
+        }
+        let extras = CodexExtrasParser.Extras(creditsText: "1,284 credits", availableCount: 2,
+                                              ticketExpiries: [], tickets: tickets)
+        let stats = [
+            ProviderStat(title: "5h", valueText: "Not reported"),
+            ProviderStat(title: "Credits", valueText: "1,284 credits"),
+            ProviderStat(title: "Reset tickets", valueText: "2 available"),
+            ProviderStat(title: "Reset ticket", valueText: "5時間リセット · 使用可"),
+            ProviderStat(title: "Reset ticket", valueText: "週リセット · 使用可"),
+            ProviderStat(title: "Reset ticket expiry", valueText: "2026-10-22T03:00:00Z"),
+            ProviderStat(title: "Reset ticket expiry", valueText: "2026-10-23T03:00:00Z"),
+            ProviderStat(title: "Reset tickets updated", valueText: "12:00"),
+            ProviderStat(title: "Account", valueText: "synthetic-private-account")
+        ]
+        let bar = CollapsedUsageBar(id: "codex-0", label: "A", title: "Codex A", providerColor: .white,
+                                    limit: weekly, windows: [weekly], codexExtras: extras,
+                                    stats: stats, provider: .codex, accountIndex: 0)
+        let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: noonJST, sourceTimeZone: jst))
+        XCTAssertTrue(model.stats.isEmpty)
+        XCTAssertEqual(model.rows.map(\.label), ["週の枠"])
+        XCTAssertEqual(model.rows.map(\.percentText), ["残り 49%"])
+        XCTAssertEqual(model.resetText, "10/23 12:00 JST（あと2日）")
+        XCTAssertEqual(model.resetLabel, "週の枠")
+        XCTAssertEqual(model.extras?.creditsText, extras.creditsText)
+        XCTAssertEqual(model.extras?.availableCount, 2)
+        // Aki t1660u: 期限 lines are back, without the 完全リセット title or 使用可 label.
+        XCTAssertEqual(model.extras?.tickets.map(\.expiresText), ["期限 10/22 12:00 JST", "期限 10/23 12:00 JST"])
+        XCTAssertEqual(model.extras?.tickets.map(\.title), [nil, nil])
+        XCTAssertEqual(model.extras?.tickets.map(\.statusText), [nil, nil])
+
+        if let path = ProcessInfo.processInfo.environment["CODEX_HOVER_PNG"] {
+            let renderer = ImageRenderer(content: RingDetailCardView(model: model)
+                .padding(16).background(Color(white: 0.10)).environment(\.colorScheme, .dark))
+            renderer.scale = 3
+            let image = try XCTUnwrap(renderer.cgImage)
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+    }
+
+    func testDeepSeekAndOtherStatsOnlyProvidersHideInternalStats() throws {
+        let balance = ProviderStat(title: "Balance", valueText: "$23.50")
+        let hiddenStats = [
+            ProviderStat(title: "Account", valueText: "synthetic-private-account"),
+            ProviderStat(title: "5h", valueText: "Not reported"),
+            ProviderStat(title: "Reset tickets updated", valueText: "12:00"),
+            ProviderStat(title: "Reset ticket expiry", valueText: "2026-10-23T03:00:00Z")
+        ]
+        for provider in [ProviderID.deepseek, .minimax, .kimi] {
+            let bar = CollapsedUsageBar(id: provider.rawValue, label: "D", title: provider.displayName,
+                                        providerColor: .white, limit: nil, stats: [balance] + hiddenStats,
+                                        provider: provider)
+            let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: noonJST))
+            XCTAssertEqual(model.stats, [balance])
+            XCTAssertTrue(model.rows.isEmpty)
+            XCTAssertNil(model.resetText)
+            XCTAssertEqual(MultiCollapsedUsageView.accessibilitySummary(for: bar, rows: []),
+                           "\(provider.displayName): Balance: $23.50")
+        }
+    }
+
+    func testFilteredStatsDoNotCreateEmptyCardsOrLeakThroughAccessibility() {
+        for provider in [ProviderID.codex, .claude, .grok, .zai, .antigravity, .minimax, .kimi, .deepseek] {
+            var bar = CollapsedUsageBar(id: provider.rawValue, label: "?", title: provider.displayName,
+                                        providerColor: .white, limit: nil,
+                                        stats: [ProviderStat(title: "Account", valueText: "synthetic-private-account")],
+                                        provider: provider)
+            XCTAssertNil(RingDetailCardModel.make(bar: bar, now: noonJST), provider.rawValue)
+            XCTAssertEqual(MultiCollapsedUsageView.accessibilitySummary(for: bar, rows: []),
+                           "\(bar.ringName): No data")
+            bar.failureText = "Usage unavailable"
+            XCTAssertEqual(RingDetailCardModel.make(bar: bar, now: noonJST)?.failureText, "Usage unavailable")
+        }
+    }
+
     func testCardModelBuildsTitleResetAndRows() {
         let now = noonJST
         let fiveHour = UsageLimit(title: "ali***@e*** · 5h", leftPercent: 30,
@@ -160,18 +243,10 @@ final class RingDetailCardTests: XCTestCase {
         let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: noonJST))
         XCTAssertEqual(model.extras?.creditsText, "61,003 credits")
         XCTAssertEqual(model.extras?.availableCount, 2)
-        XCTAssertEqual(model.extras?.tickets.compactMap(\.title), Optional([
-            "Expired available", "Early available", "Same-time used", "Same-time available",
-            "Later available", "Later used", "No expiry first", "No expiry second",
-        ]))
-        XCTAssertEqual(model.extras?.tickets[0].expiresText, "期限 11:59 JST")
-        XCTAssertEqual(model.extras?.tickets[1].expiresText, "期限 12:30 JST")
-        XCTAssertEqual(model.extras?.tickets[2].expiresText, "期限 10/22 09:00 JST")
-        XCTAssertNil(model.extras?.tickets[6].expiresText)
-        XCTAssertEqual(model.extras?.tickets.map(\.isGreyedOut),
-                       Optional([true, false, true, false, false, true, false, true]))
-        XCTAssertEqual(model.extras?.tickets[0].statusText, "期限切れ")
-        XCTAssertEqual(model.extras?.tickets[1].statusText, "使用可")
+        // Aki t1660u: expiry order kept, titles dropped, rows with nothing left to show are removed.
+        XCTAssertEqual(model.extras?.tickets.map(\.id), [6, 3, 2, 4, 1, 7])
+        XCTAssertTrue(model.extras?.tickets.allSatisfy { $0.title == nil } == true)
+        XCTAssertFalse(model.extras?.tickets.contains { $0.statusText == "使用可" } == true)
     }
 
     // MARK: - CollapsedUsageBar windows plumbing
@@ -404,19 +479,20 @@ final class RingDetailCardTests: XCTestCase {
     }
 
     @MainActor
-    func testSnapshotRefreshRetiresCardWhenHoveredRingLosesData() async throws {
+    func testSnapshotRefreshMarksHoveredCardStaleAfterFailure() async throws {
         var codexHasData = true
         let fixture = try await makeHoveredFixture {
-            codexHasData ? Self.codexWindow(usedPercent: 19) : Self.codexFailure
+            codexHasData ? Self.codexWindow(usedPercent: 19) : "fixture-timeout"
         }
         XCTAssertEqual(fixture.controller.highlight.barID, "codex")
 
         codexHasData = false
         fixture.store.refresh()
-        // The subscription must retire the card instead of showing stale numbers.
-        try await waitUntil("card retires after the hovered ring loses data") {
-            fixture.controller.highlight.barID == nil
+        try await waitUntil("card indicates retained data is stale") {
+            fixture.controller.currentModel?.failureText?.contains("Stale") == true
         }
+        XCTAssertEqual(fixture.controller.highlight.barID, "codex")
+        XCTAssertEqual(fixture.controller.currentModel?.rows.first?.leftPercent, 81)
     }
 
     @MainActor
@@ -484,10 +560,12 @@ final class RingDetailCardTests: XCTestCase {
             case "zai": json = Self.zaiWindow
             default: json = Self.claudeWindow
             }
+            if json == "fixture-timeout" {
+                return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
+            }
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
         }
-        let store = MultiUsageStore(service: MultiUsageService(commandRunner: runner,
-                                                               cliProxyClient: CLIProxyFixtures.client()),
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: runner),
                                     snapshotURLs: [])
         let name = "RingDetailCardTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -533,7 +611,7 @@ final class RingDetailCardTests: XCTestCase {
     }
 
     private static func codexWindow(usedPercent: Int) -> String {
-        #"[{"provider":"codex","usage":{"primary":null,"secondary":{"usedPercent":\#(usedPercent),"windowMinutes":10080,"resetsAt":"2026-10-22T06:38:56Z"}},"credits":{"remaining":61003.32,"balanceReadSucceeded":true}}]"#
+        #"[{"provider":"codex","usage":{"primary":null,"secondary":{"usedPercent":\#(usedPercent),"windowMinutes":10080,"resetsAt":"2099-10-22T06:38:56Z"}},"credits":{"remaining":61003.32,"balanceReadSucceeded":true}}]"#
     }
 
     private static let codexFailure = #"[{"provider":"codex","error":{"code":1,"kind":"provider","message":"synthetic-sensitive-message"}}]"#

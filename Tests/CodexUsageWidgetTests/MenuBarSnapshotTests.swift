@@ -30,11 +30,13 @@ final class MenuBarSnapshotTests: XCTestCase {
         for (percent, tone) in [(35.0, UsageTone.healthy), (34, .warning), (20, .warning), (19, .critical), (0, .critical)] {
             let bar = CollapsedUsageBar.bars(for: fixture(claudeB: percent))[2]
             XCTAssertEqual(bar.limit?.tone, tone)
-            XCTAssertEqual(bar.isWarning, percent < 35)
+            // 0% locks (gray + lock icon) instead of showing a warning.
+            XCTAssertEqual(bar.isBlocked, percent == 0)
+            XCTAssertEqual(bar.isWarning, percent < 35 && percent > 0)
             XCTAssertEqual(bar.fillColor == bar.providerColor, percent >= 35)
         }
         let empty = CollapsedUsageBar.bars(for: .placeholder)
-        XCTAssertEqual(empty.count, 8)
+        XCTAssertEqual(empty.count, 12)
         XCTAssertTrue(empty.allSatisfy { $0.limit == nil && !$0.isWarning })
         XCTAssertEqual(CollapsedUsageBar.detailText(for: try XCTUnwrap(empty.last)), "No data")
     }

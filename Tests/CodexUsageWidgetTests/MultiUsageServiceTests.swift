@@ -10,17 +10,18 @@ final class MultiUsageServiceTests: XCTestCase {
     }
 
     func testFetchAllAssemblesAllProvidersInOrder() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .allSuccess), cliProxyClient: CLIProxyFixtures.client())
+        let service = MultiUsageService(commandRunner: commandRunner(for: .allSuccess))
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
-        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .antigravity])
+        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
 
         let codex = snapshot.sections[0]
         XCTAssertEqual(codex.windows.map(\.title), ["Weekly"])
         XCTAssertEqual(codex.windows.map(\.leftPercent), [81])
-        XCTAssertEqual(codex.codexExtras?.creditsText, "61,003 credits")
-        XCTAssertEqual(codex.codexExtras?.availableCount, 2)
-        XCTAssertEqual(codex.codexExtras?.tickets.compactMap(\.status),
+        XCTAssertNil(codex.codexExtras)
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.creditsText, "61,003 credits")
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.availableCount, 2)
+        XCTAssertEqual(codex.forAccount(0).codexExtras?.tickets.compactMap(\.status),
                        Optional(["available", "used", "available"]))
         XCTAssertTrue(snapshot.sections.filter { $0.provider != .codex }.allSatisfy { $0.codexExtras == nil })
         XCTAssertEqual(
@@ -43,26 +44,24 @@ final class MultiUsageServiceTests: XCTestCase {
         XCTAssertEqual(zai.windows.map(\.leftPercent), [90, 99.6])
 
         let claude = snapshot.sections[1]
-        XCTAssertEqual(claude.windows.map(\.title), ["ali***@e*** · 5h", "ali***@e*** · Weekly", "bob***@s*** · 5h", "bob***@s*** · Weekly"])
-        XCTAssertEqual(claude.windows.map(\.leftPercent), [79, 64, 79, 64])
-        XCTAssertEqual(snapshot.globalLowestWindow?.title, "ali***@e*** · Weekly")
-        XCTAssertEqual(snapshot.globalLowestWindow?.clampedLeftPercent, 64)
+        XCTAssertEqual(claude.windows.map(\.title), ["5h", "Weekly"])
+        XCTAssertEqual(claude.windows.map(\.leftPercent), [79, 64])
     }
 
     func testOneProviderFailingLeavesOthersIntact() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .zaiFails), cliProxyClient: CLIProxyFixtures.client())
+        let service = MultiUsageService(commandRunner: commandRunner(for: .zaiFails))
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
-        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .antigravity])
+        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
         XCTAssertNil(snapshot.sections[0].failureText)
         XCTAssertNotNil(snapshot.sections[3].failureText)
         XCTAssertFalse(snapshot.sections[3].failureText!.contains("synthetic-sensitive-message"))
         XCTAssertNil(snapshot.sections[1].failureText)
-        XCTAssertEqual(snapshot.sections[1].windows.count, 4)
+        XCTAssertEqual(snapshot.sections[1].windows.count, 2)
     }
 
     func testCodexAccountFieldsNeverReachSections() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .codexCarriesAccount), cliProxyClient: CLIProxyFixtures.client())
+        let service = MultiUsageService(commandRunner: commandRunner(for: .codexCarriesAccount))
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
         let encoded = String(
@@ -77,7 +76,7 @@ final class MultiUsageServiceTests: XCTestCase {
     }
 
     func testBalanceReadFailureReportsNotReadable() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .balanceReadFails), cliProxyClient: CLIProxyFixtures.client())
+        let service = MultiUsageService(commandRunner: commandRunner(for: .balanceReadFails))
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
         XCTAssertEqual(
@@ -93,7 +92,7 @@ final class MultiUsageServiceTests: XCTestCase {
 
     private func commandRunner(for fixture: Fixture) -> CodexUsageService.CommandRunner {
         { arguments in
-            XCTAssertTrue(["codex", "zai"].contains(arguments[2]))
+            XCTAssertTrue(["codex", "zai", "minimax", "kimi", "deepseek", "claude", "grok", "antigravity"].contains(arguments[2]))
             let provider = arguments[2]
             var json: String
             switch provider {
@@ -111,6 +110,10 @@ final class MultiUsageServiceTests: XCTestCase {
                     )
                 }
                 json = Self.zai
+            case "minimax", "kimi":
+                json = AdditionalCodexBarFixtures.quota(provider)
+            case "deepseek":
+                json = AdditionalCodexBarFixtures.balance
             default:
                 json = Self.claude
             }

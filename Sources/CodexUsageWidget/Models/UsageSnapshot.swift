@@ -28,6 +28,17 @@ struct UsageLimit: Equatable, Sendable {
     let projectionText: String?
     let markerPercent: Double?
     var accountIndex: Int? = nil
+    /// Machine-readable reset time when the source reports one.
+    var resetAt: Date? = nil
+    /// Time the source actually obtained this value, including cached proxy values.
+    var observedAt: Date? = nil
+
+    // Observation age does not change the displayed limit's identity or values.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.title == rhs.title && lhs.leftPercent == rhs.leftPercent && lhs.resetText == rhs.resetText &&
+        lhs.detailText == rhs.detailText && lhs.projectionText == rhs.projectionText &&
+        lhs.markerPercent == rhs.markerPercent && lhs.accountIndex == rhs.accountIndex && lhs.resetAt == rhs.resetAt
+    }
 
     init(
         title: String,
@@ -43,6 +54,13 @@ struct UsageLimit: Equatable, Sendable {
         self.detailText = detailText
         self.projectionText = projectionText
         self.markerPercent = markerPercent
+    }
+
+    static let staleMaxAge: TimeInterval = 5 * 60 * 60
+
+    func isRetainable(at now: Date) -> Bool {
+        guard let observedAt, now.timeIntervalSince(observedAt) < Self.staleMaxAge else { return false }
+        return resetAt.map { $0 >= now } ?? true
     }
 
     var clampedLeftPercent: Double {

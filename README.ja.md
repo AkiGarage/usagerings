@@ -18,18 +18,28 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 | プロバイダー | データ取得元 | 必要な設定 |
 | --- | --- | --- |
 | OpenAI Codex | CodexBarCLI | CodexBarのインストールとCodex設定 |
-| Claude Code | ローカルのCLIProxyAPI。制限表示はClaude Codeログでも補完 | CLIProxyAPIの有効なClaudeアカウント |
-| Google Antigravity | ローカルのCLIProxyAPI | プロジェクトIDのある有効なAntigravityアカウント |
+| Claude Code | CodexBarCLI（`--source cli`）。制限表示はClaude Codeログでも補完 | CodexBarCLIで読めるログイン済みのClaude Code |
+| Google Antigravity | CodexBarCLI（`--source cli`）。公式の `agy -p /usage` 報告を読むだけで、プロンプトは送らず枠も使いません | ログイン済みのAntigravity CLI（`agy` 1.1.11以降） |
 | Z.ai / GLM Coding Plan | CodexBarCLI。追加情報はZ.aiのリセット券API | CodexBarのZ.ai設定 |
-| Grok | ローカルのCLIProxyAPI | 有効なGrokアカウント |
+| MiniMax / Kimi | CodexBarCLI | CodexBarで対象プロバイダーを設定 |
+| DeepSeek | CodexBarCLI | CodexBarのDeepSeek設定。残高・使用実績を表示（割合の上限は表示しません） |
+| Grok | CodexBarCLI（`--source cli`）。公式Grok Build CLIの利用状況を読みます | ログイン済みのGrok Build CLI（`grok`） |
 
 **macOS 14以降**に対応します。ビルドには **Swift 5.9以降**を含むXcode Command Line Toolsと、固定バージョンのSparkleを取得するインターネット接続が必要です。使用する開発ツールを`xcode-select`で選択してください。
 
-**CodexとGLMの使用量表示には、現在もCodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがなくても、ほかの取得元が設定済みなら対応する項目は独立して動作します。
+**すべての項目（Codex・Claude・Antigravity・Grok・GLM・MiniMax・Kimi・DeepSeek）の表示にCodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがない場合は、各項目にその旨を表示します。
 
-Claude・Antigravity・Grokには、既存のCLIProxyAPI（`http://127.0.0.1:8317/v8/management/`）と、macOS Keychainのサービス名 `cliproxyapi-management` の汎用パスワード項目に保存した管理キーが必要です。これらは別途設定してください。UsageRingsにプロキシのインストールやアカウントへのログイン画面はありません。設定が足りない場合はパネルに表示します。
+Antigravity、Grok、ClaudeはCodexBarCLIの `--source cli` だけで読みます。各社公式のCLIを使い、ブラウザーのCookieやWeb経由の取得は使いません。UsageRingsはこれらのCLIのインストールやログイン画面を持ちません。設定が足りない場合はパネルに表示します。
+
+UsageRingsが読む鍵: GLMのリセット券用にCodexBarの `~/.config/codexbar/config.json`（または `~/.codexbar/config.json`）にあるZ.aiのAPIキーだけです。Keychainに鍵は保存せず、アカウントのパスワードを求めたり読んだりもしません。
 
 GLMのリセット券詳細は追加機能です。標準のCodexBar設定にあるglobalリージョンのZ.ai APIキーを利用します。この詳細取得は、設定ファイル・API接続先の上書きや複数トークンアカウントに対応していません。
+
+Antigravityは初期状態ではモデル枠ごとにアカウントをまとめて表示します。分ける場合は、パネルの **歯車（Settings）** またはタブの **表示** メニューで **Antigravityをアカウント別に表示** を有効にしてください。パネル・リング・hover詳細にすぐ反映され、アカウントが1つの場合は従来の表示を保ちます。
+
+**Settings → アカウント** では、各アカウントのラベル編集・クリア・表示切替ができます。カスタムラベルは、伏せ字のアカウント名表示とは独立して、パネル行・リングのツールチップ・詳細カードに表示されます。**Primary** を選ぶと、そのproviderの縮小リングを1アカウントに絞れます。他の表示中アカウントはパネルに残り、初期状態は **すべて表示** です。Primaryが非表示・未取得の間は、表示中の先頭アカウントを使います。非表示にしたアカウントもSettingsから戻せます。ラベルはReturnまたは欄を離れた時に保存し、前後の空白を除いた80文字以内の値を欄に戻します。設定はインストールごとに生成してUserDefaultsに保持するランダムsaltを使った、providerごとのSHA256識別子で保存し、生のID・メールアドレス・認証情報は保存しません。旧識別子はアカウントを確認できた時に移行し、取得元がIDを返すようになった場合も一致する別名ハッシュで設定を引き継ぎます。90日を超えて確認できないアカウントの設定とPrimaryは、providerの取得成功時に復旧用アーカイブへ移し、有効設定から外します。取得失敗時はそのproviderの設定を保持します。provider不明の旧設定は、全providerを正常取得できた時だけ期限切れを判定します。取得元が複数アカウントの安定した識別子を返さない場合、そのアカウントの設定保存はできません。
+
+Claudeの補助ログは使用量アカウントのIDを返しません。そのため、**Claude logs A/B** の制限警告は、アカウントのリング・ラベル・表示切替・Primary設定とは独立して表示します。取得順が変わっても、警告を別のアカウントに結び付けません。
 
 ## ビルドとインストール
 
@@ -62,15 +72,15 @@ USAGERINGS_SIGN_IDENTITY='Your signing identity' ./script/build_and_run.sh usage
 
 ## プライバシー
 
-設定と表示用スナップショットは **ローカルにのみ保存**します。UsageRings独自のクラウドアカウント、アクセス解析、クラウドへのアップロードはありません。HTTPサーバーやLAN向けサーバーも公開しません。
+設定と表示用スナップショットは初期状態ではローカルに保存します。iPhone向けiCloud同期は初期状態でオフです。有効にすると、対応する使用率・リセット時刻とランダムな端末・アカウント識別子を本人のiCloudのprivate databaseに送ります。認証情報、アカウント名、ログ、残高は送りません。このビルドには同期に必要な署名・entitlement・container設定はまだ含まれていません。UsageRings独自のクラウドアカウント、アクセス解析、HTTP/LANサーバーはありません。
 
-最新の使用量を取得する通信は必要です。CodexBarCLIは各プロバイダーへ接続し、認証付きのローカルプロキシは各サービスへの要求を仲介します。GLMのリセット券はZ.aiへ直接問い合わせます。リモートClaude監視を有効にすると、指定したホストへのSSH通信も発生します。「ローカルのみ」は保存・処理の説明であり、オフライン動作という意味ではありません。
+最新の使用量を取得する通信は必要です。CodexBarCLIは各プロバイダーへ接続し、認証付きのローカルプロキシは各サービスへの要求を仲介します。GLMのリセット券はZ.aiへ直接問い合わせます。リモートClaude監視を有効にすると、指定したホストへのSSH通信も発生します。
 
-ローカルClaude監視は `~/.claude/projects`、`~/.claude-a/projects`、`~/.claude-b/projects` の最近のログ末尾を、ファイル数・サイズを制限して読みます。SSHでは制限イベントの文面・時刻・モデル識別子に絞った情報を受け取ります。Codexの表示用スナップショットは `~/Library/Application Support/CodexUsageWidget-Multi/` と、macOSのユーザーごとの一時ディレクトリ（`$TMPDIR`）内の `UsageRings` フォルダ（権限0700、ファイルは0600）に保存し、プロバイダー・使用枠の診断JSONも同じフォルダに保存します。このバージョンは共有の `/private/tmp` に書き込みません（古いビルドが残したファイルは自動では消しません）。SSHでのリモートClaude監視に失敗した場合は、Claudeの欄に接続先を含まない短い理由（「Remote Claude logs」）を表示します。これらは個人の利用情報として扱い、ログや画像を共有する前に内容を確認してください。
+ローカルClaude監視は `~/.claude/projects`、`~/.claude-a/projects`、`~/.claude-b/projects` の最近のログ末尾を、ファイル数・サイズを制限して読みます。SSHでは制限イベントの文面・時刻・モデル識別子に絞った情報を受け取ります。Codexの表示用スナップショットは `~/Library/Application Support/CodexUsageWidget-Multi/` と、macOSのユーザーごとの一時ディレクトリ（`$TMPDIR`）内の `UsageRings` フォルダ（権限0700、ファイルは0600）に保存し、プロバイダー・使用枠の診断JSONも同じフォルダに保存します。このバージョンは共有の `/private/tmp` に書き込みません（古いビルドが残したファイルは自動では消しません）。SSHでのリモートClaude監視に失敗した場合は、独立した「Claude logs B」の欄に接続先を含まない短い理由を表示します。これらは個人の利用情報として扱い、ログや画像を共有する前に内容を確認してください。
 
 ## アプリ本体は小さめ
 
-開発者が比較したアプリ本体の参考サイズは、**CodexBarが163 MB、UsageRingsが7.3 MB**です。特定のビルドのディスク上のサイズであり、RAM使用量や全ビルドでの保証値ではありません。UsageRings側の値には、引き続き必要なCodexBarCLIのインストールや、任意のCLIProxyAPIサービスを含みません。UsageRingsは小さな表示に用途を絞っており、CodexBarの幅広いアカウント管理機能を置き換えるものではありません。
+開発者が比較したアプリ本体の参考サイズは、**CodexBarが163 MB、UsageRingsが7.3 MB**です。特定のビルドのディスク上のサイズであり、RAM使用量や全ビルドでの保証値ではありません。UsageRings側の値には、引き続き必要なCodexBarCLIのインストールや、読み取りに使う各CLI（agy、grok、claude）を含みません。UsageRingsは小さな表示に用途を絞っており、CodexBarの幅広いアカウント管理機能を置き換えるものではありません。
 
 ## スクリーンショット
 

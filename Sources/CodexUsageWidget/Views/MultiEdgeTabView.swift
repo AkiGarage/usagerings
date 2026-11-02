@@ -55,6 +55,12 @@ struct MultiEdgeTabView: View {
         .onChange(of: preferences.orientation, initial: true) {
             updateCollapsedSize()
         }
+        .onChange(of: preferences.splitAntigravityAccounts) {
+            updateCollapsedSize()
+        }
+        .onChange(of: preferences.accountPreferences) {
+            updateCollapsedSize()
+        }
         .onChange(of: presentation.menuBarHeight, initial: true) {
             updateCollapsedSize()
         }
@@ -78,6 +84,8 @@ struct MultiEdgeTabView: View {
                                 barZoom: preferences.barZoom,
                                 menuBarHeight: presentation.menuBarHeight,
                                 orientation: preferences.orientation,
+                                splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                accountPreferences: preferences.accountPreferences,
                                 highlightedBarID: ringHighlight.barID)
     }
 
@@ -93,9 +101,9 @@ struct MultiEdgeTabView: View {
         store.opacityHUDPercent != nil
     }
 
-    private var displayPercent: Int {
+    var displayPercent: Int {
         store.opacityHUDPercent
-            ?? Int((store.snapshot.globalLowestWindow?.clampedLeftPercent ?? 0).rounded())
+            ?? Int((collapsedSnapshot.globalLowestWindow?.clampedLeftPercent ?? 0).rounded())
     }
 
     private var expandedTextColor: Color {
@@ -105,24 +113,34 @@ struct MultiEdgeTabView: View {
         return .primary.opacity(0.94)
     }
 
+    var displayTone: UsageTone { collapsedSnapshot.globalLowestWindow?.tone ?? .critical }
+
     private var tabTint: Color {
         if isShowingOpacity {
             return opacityColor
         }
-        return color(for: store.snapshot.globalLowestWindow?.tone ?? .critical)
+        return color(for: displayTone)
     }
 
     private var accessibilityText: String {
-        let providers = store.snapshot.sections.map { section in
-            if let failureText = section.failureText {
-                return "\(section.provider.displayName) \(failureText)"
+        let rows = ServiceRowModel.rows(for: store.snapshot,
+                                       splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                       accountPreferences: preferences.accountPreferences)
+        let providers = rows.map { row in
+            if let failureText = row.failureText {
+                return "\(row.name) \(failureText)"
             }
-            let windows = section.windows.map {
+            let windows = ([row.five, row.week].compactMap { $0 } + row.extras).map {
                 "\($0.title.lowercased()) \(Int($0.clampedLeftPercent.rounded()))% left"
             }
-            return "\(section.provider.displayName) \(windows.joined(separator: ", "))"
+            return "\(row.name) \(windows.joined(separator: ", "))"
         }
         return "Multi usage tab, \(providers.joined(separator: ", "))"
+    }
+
+    private var collapsedSnapshot: MultiUsageSnapshot {
+        MultiUsageSnapshot(sections: store.snapshot.sections.compactMap { preferences.accountPreferences.collapsedSection($0) },
+                           codexSnapshot: nil, updatedAt: store.snapshot.updatedAt)
     }
 
     private func color(for tone: UsageTone) -> Color {
@@ -140,7 +158,9 @@ struct MultiEdgeTabView: View {
         presentation.collapsedSize = MultiCollapsedUsageView.size(for: store.snapshot,
                                                                   barZoom: preferences.barZoom,
                                                                   menuBarHeight: presentation.menuBarHeight,
-                                                                  orientation: preferences.orientation)
+                                                                  orientation: preferences.orientation,
+                                                                  splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                                                  accountPreferences: preferences.accountPreferences)
     }
 }
 

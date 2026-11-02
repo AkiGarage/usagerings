@@ -27,10 +27,16 @@ final class ZaiResetTicketsTests: XCTestCase {
         let model = try XCTUnwrap(card(ZaiResetTickets.parse(Self.fixture)))
         let extras = try XCTUnwrap(model.extras)
         XCTAssertEqual(extras.availableCount, 2)
-        XCTAssertEqual(extras.tickets.map(\.title), ["5時間リセット", "週リセット", "5時間リセット", "5時間リセット"])
-        XCTAssertEqual(extras.tickets.map(\.statusText), ["期限切れ", "使用可", "使用不可", "使用可"])
-        XCTAssertEqual(extras.tickets.map(\.isGreyedOut), [true, false, true, false])
-        XCTAssertTrue(extras.tickets[1].expiresText?.contains("10/22 09:00") == true)
+        // Aki t1655u: expired tickets are hidden and valid ones carry no 使用可 label.
+        // Aki t1660u: one line each — the type rides in parentheses after the expiry.
+        XCTAssertEqual(extras.tickets.map(\.title), [nil, nil, nil])
+        XCTAssertEqual(extras.tickets.map { $0.expiresText?.hasSuffix("）") }, [true, true, true])
+        XCTAssertTrue(extras.tickets[0].expiresText?.hasSuffix("JST（週リセット）") == true)
+        XCTAssertTrue(extras.tickets[1].expiresText?.hasSuffix("JST（5時間リセット）") == true)
+        XCTAssertEqual(extras.tickets.map(\.statusText), [nil, "使用不可", nil])
+        XCTAssertEqual(extras.tickets.map(\.isGreyedOut), [false, true, false])
+        XCTAssertFalse(extras.tickets.contains { $0.statusText == "期限切れ" || $0.statusText == "使用可" })
+        XCTAssertTrue(extras.tickets[0].expiresText?.contains("10/22 09:00") == true)
         XCTAssertNil(model.ticketFailureText)
     }
 
@@ -64,7 +70,7 @@ final class ZaiResetTicketsTests: XCTestCase {
         let model = try XCTUnwrap(card(.loaded(tickets)))
         XCTAssertEqual(model.extras?.availableCount, 1)
         let texts = model.extras?.tickets.compactMap(\.expiresText) ?? []
-        XCTAssertTrue(texts.contains("期限 10/28 21:13 JST"), "\(texts)")
+        XCTAssertTrue(texts.contains("期限 10/28 21:13 JST（5時間リセット）"), "\(texts)")
         XCTAssertFalse(texts.contains { $0.contains("時帯未確認") })
     }
 
@@ -80,7 +86,7 @@ final class ZaiResetTicketsTests: XCTestCase {
     func testExpiryAtNowIsAlreadyUnavailable() {
         let model = card(.loaded([.init(title: "週リセット", available: true, expiresAt: now)]))
         XCTAssertEqual(model?.extras?.availableCount, 0)
-        XCTAssertEqual(model?.extras?.tickets.first?.statusText, "期限切れ")
+        XCTAssertEqual(model?.extras?.tickets.count, 0)  // expired at now -> hidden
     }
 
     func testClientUsesOneFixedReadOnlyRequestAndReturnsParsedInventory() async throws {
@@ -120,7 +126,7 @@ final class ZaiResetTicketsTests: XCTestCase {
             let provider = arguments[2]
             let data = Data("[{\"provider\":\"\(provider)\",\"usage\":{\"primary\":{\"usedPercent\":25,\"windowMinutes\":300}}}]".utf8)
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: data, stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client(), zaiTicketClient: client)
+        }, zaiTicketClient: client)
         let snapshot = await service.fetchAll(now: now)
         let section = try XCTUnwrap(snapshot.sections.first { $0.provider == .zai })
         XCTAssertNil(section.failureText)

@@ -7,6 +7,8 @@ struct ClaudeBlock: Equatable, Sendable, Codable {
     let timeZoneKnown: Bool
 
     func isActive(at date: Date) -> Bool { resetAt > date }
+    /// Locked, but the source gave no unlock time.
+    var resetUnknown: Bool { resetAt == .distantFuture }
 }
 
 enum ClaudeRateLimitParser {
@@ -88,12 +90,14 @@ enum ClaudeRateLimitParser {
 
     /// Always-dated recovery label for the locked ring: ("10/22", "02:00") in Asia/Tokyo.
     static func recoveryLines(resetAt: Date) -> (date: String, time: String) {
+        if resetAt == .distantFuture { return ("解除", "不明") }
         let parts = format(resetAt, includeDate: true).split(separator: " ")
         return (String(parts.first ?? ""), String(parts.last ?? ""))
     }
 
     static func cardLine(block: ClaudeBlock, now: Date) -> String {
         let label = block.kind == .session ? "5時間枠" : "週"
+        if block.resetUnknown { return "\(label)の制限中・解除時刻不明" }
         let time = format(block.resetAt, includeDate: block.kind == .weekly || block.resetAt.timeIntervalSince(now) > 86400)
         return "\(label)の制限中・\(time)に復帰" + (block.timeZoneKnown ? "" : "（時帯未確認）")
     }

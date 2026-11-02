@@ -23,7 +23,7 @@ final class CollapsedAccessibilityTests: XCTestCase {
         ], codexSnapshot: nil, updatedAt: Date())
         let bar = try XCTUnwrap(CollapsedUsageBar.bars(for: snapshot).first { $0.id == "claude-0" })
         XCTAssertEqual(MultiCollapsedUsageView.accessibilitySummary(for: bar, rows: ServiceRowModel.rows(for: snapshot)),
-                       "Claude A: Weekly: 0% left, Resets tomorrow")
+                       "Claude A: 週の制限中・解除時刻不明", "0% with an unparseable reset locks with unknown unlock time")
     }
 
     func testMissingQuotaDoesNotAnnounceZero() throws {
@@ -42,5 +42,10 @@ final class CollapsedAccessibilityTests: XCTestCase {
         XCTAssertFalse(text.contains("80%"))
         XCTAssertTrue(text.contains("制限中"))
         XCTAssertTrue(text.contains("復帰"))
+        var stale = bar
+        stale.isStale = true
+        let staleText = MultiCollapsedUsageView.accessibilitySummary(for: stale, rows: [])
+        XCTAssertTrue(staleText.contains("Stale"))
+        XCTAssertTrue(staleText.contains("復帰"))
     }
 }

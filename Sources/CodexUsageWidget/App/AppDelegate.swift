@@ -64,9 +64,12 @@ final class NanoUpdateController {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    /// Right-click menu item; no （開いている Chrome タブから） suffix (Aki t1661u).
+    nonisolated static let geminiReadingMenuTitle = "Gemini の使用量を読む"
     private let persona: any AppPersona
     private let demoMode: DemoMode
     private let defaults: UserDefaults
+    private let codexBarGuide = CodexBarGuideController()
     private let showDemoShowcase: Bool
     private let demoHoverRing: Int?
     private let tabPresentation = EdgeTabPresentationState()
@@ -116,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         createTabPanel()
         if !demoMode.isEnabled {
             updateController = NanoUpdateController()
+            codexBarGuide.start()
         }
         persona.start()
         if let ring = demoHoverRing {
@@ -363,11 +367,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSMenu.popUpContextMenu(makeTabMenu(), with: event, for: view)
     }
 
+    @objc private func recreateGeminiWindow() {
+        NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil)
+    }
+
     func makeTabMenu() -> NSMenu {
         let menu = NSMenu()
         let toggleTitle = panel?.isVisible == true ? "Hide Panel" : "Show Panel"
         menu.addItem(NSMenuItem(title: toggleTitle, action: #selector(togglePanel), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Refresh", action: #selector(refreshUsage), keyEquivalent: ""))
+        if GeminiDedicatedWindow.lastFound == false {
+            let g = NSMenuItem(title: "Gemini読み取りウィンドウを作り直す", action: #selector(recreateGeminiWindow), keyEquivalent: "")
+            g.target = self
+            menu.addItem(g)
+        }
         if updateController?.isAvailable == true {
             menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: ""))
         }
@@ -378,6 +391,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 action: #selector(togglePanelOrientation), keyEquivalent: "")
             orientationToggle.target = self
             menu.addItem(orientationToggle)
+            menu.addItem(.separator())
+            let style = UsageStyle(rawValue: UserDefaults.standard.string(forKey: UsageStyle.key) ?? "") ?? .defaultValue
+            for option in UsageStyle.allCases {
+                let i = NSMenuItem(title: "\(option.title)表示", action: #selector(selectUsageStyle(_:)), keyEquivalent: "")
+                i.target = self; i.representedObject = option.rawValue; i.state = option == style ? .on : .off
+                menu.addItem(i)
+            }
+            let basis = UsageBasis(rawValue: UserDefaults.standard.string(forKey: UsageBasis.key) ?? "") ?? .defaultValue
+            for option in UsageBasis.allCases {
+                let i = NSMenuItem(title: "\(option.title)で表示", action: #selector(selectUsageBasis(_:)), keyEquivalent: "")
+                i.target = self; i.representedObject = option.rawValue; i.state = option == basis ? .on : .off
+                menu.addItem(i)
+            }
+            menu.addItem(.separator())
             let view = NSMenuItem(title: "表示", action: nil, keyEquivalent: "")
             let sub = NSMenu()
             func item(_ title: String, _ action: Selector, enabled: Bool = true) {
@@ -416,8 +443,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             accounts.target = self
             accounts.state = preferences.showAccountNames ? .on : .off
             sub.addItem(accounts)
+            let splitAntigravity = NSMenuItem(title: "Antigravityをアカウント別に表示",
+                                              action: #selector(toggleAntigravityAccounts), keyEquivalent: "")
+            splitAntigravity.target = self
+            splitAntigravity.state = preferences.splitAntigravityAccounts ? .on : .off
+            sub.addItem(splitAntigravity)
             view.submenu = sub
             menu.addItem(view)
+            if let multi = persona as? MultiProviderPersona, let on = multi.geminiReadingEnabled {
+                // Only this explicit click may show the macOS Automation dialog (once).
+                let gemini = NSMenuItem(title: Self.geminiReadingMenuTitle,
+                                        action: #selector(toggleGeminiReading), keyEquivalent: "")
+                gemini.target = self
+                gemini.state = on ? .on : .off
+                menu.addItem(gemini)
+            }
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: persona.quitMenuItemTitle, action: #selector(quitApp), keyEquivalent: "q"))
@@ -440,6 +480,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let preferences = persona.panelPreferences else { return }
         preferences.showAccountNames.toggle()
     }
+    @objc private func toggleGeminiReading() {
+        guard let multi = persona as? MultiProviderPersona, let on = multi.geminiReadingEnabled else { return }
+        multi.setGeminiReading(!on)
+    }
+    @objc private func toggleAntigravityAccounts() {
+        persona.panelPreferences?.splitAntigravityAccounts.toggle()
+    }
+    @objc private func selectUsageStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, UsageStyle(rawValue: raw) != nil else { return }
+        UserDefaults.standard.set(raw, forKey: UsageStyle.key)
+    }
+
+    @objc private func selectUsageBasis(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, UsageBasis(rawValue: raw) != nil else { return }
+        UserDefaults.standard.set(raw, forKey: UsageBasis.key)
+    }
+
     @objc private func selectAppearance(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let appearance = PanelAppearance(rawValue: raw) else { return }

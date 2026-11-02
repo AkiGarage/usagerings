@@ -18,18 +18,28 @@ The dashboard refreshes about once a minute. Individual providers can cache resu
 | Provider | Data source | Required setup |
 | --- | --- | --- |
 | OpenAI Codex | CodexBarCLI | CodexBar installed and its Codex provider configured |
-| Claude Code | Local CLIProxyAPI; local Claude Code logs supplement limit notices | An enabled Claude account in CLIProxyAPI |
-| Google Antigravity | Local CLIProxyAPI | An enabled Antigravity account with a project ID |
+| Claude Code | CodexBarCLI (`--source cli`); local Claude Code logs supplement limit notices | Claude Code signed in and readable by CodexBarCLI |
+| Google Antigravity | CodexBarCLI (`--source cli`), which reads the official `agy -p /usage` report; no prompt is sent and no quota is spent | Antigravity CLI (`agy` 1.1.11 or later) installed and signed in |
 | Z.ai / GLM Coding Plan | CodexBarCLI; Z.ai reset-ticket API for optional detail | CodexBar's Z.ai provider configured |
-| Grok | Local CLIProxyAPI | An enabled Grok account |
+| MiniMax / Kimi | CodexBarCLI | The corresponding provider configured in CodexBar |
+| DeepSeek | CodexBarCLI | DeepSeek configured in CodexBar; balance and usage details without a quota percentage |
+| Grok | CodexBarCLI (`--source cli`), which reads the official Grok Build CLI billing report | Grok Build CLI (`grok`) installed and signed in |
 
 Requires **macOS 14 or later**. Building requires Xcode Command Line Tools with **Swift 5.9 or later** and internet access to resolve the pinned Sparkle dependency. The command-line tools must be selected with `xcode-select`.
 
-**CodexBarCLI is still required for the Codex and GLM usage sections.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Other sections can work independently when that helper is missing.
+**CodexBarCLI is required for every section: Codex, Claude, Antigravity, Grok, GLM, MiniMax, Kimi, and DeepSeek.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Without it, every section reports the missing helper.
 
-For Claude, Antigravity, and Grok, UsageRings expects an existing CLIProxyAPI service at `http://127.0.0.1:8317/v8/management/` and its management key in a macOS Keychain generic-password item with the service name `cliproxyapi-management`. Configure these separately; UsageRings does not install the proxy or provide an account-sign-in screen. Missing setup is reported in the panel.
+Antigravity, Grok, and Claude are read only through CodexBarCLI with `--source cli`, so UsageRings uses the providers' own official CLIs, never browser cookies or web fallbacks. UsageRings does not install those CLIs or provide an account-sign-in screen. Missing setup is reported in the panel.
+
+Keys UsageRings reads: only the Z.ai API key from CodexBar's `~/.config/codexbar/config.json` (or `~/.codexbar/config.json`) for GLM reset tickets. UsageRings stores no keys in the Keychain and never asks for or reads your account passwords.
 
 Optional GLM reset-ticket details use the default CodexBar configuration's global-region Z.ai API key. Custom config/API-host overrides and multiple token accounts are not supported by that detail reader.
+
+Antigravity keeps accounts together within each model group by default. To split them, enable **Antigravityをアカウント別に表示** in the panel's **gear (Settings)** or the tab's **表示** menu. The panel, rings, and hover details update immediately; a single account keeps its existing display.
+
+In **Settings → アカウント**, give each account a custom label, clear it, or hide/show the account. Custom labels appear in panel rows, ring tooltips, and detail cards independently of the masked account-name toggle. **Primary** limits that provider's collapsed rings to one account; the other visible accounts remain in the panel. The default is **すべて表示** (show all). A hidden or temporarily missing primary falls back to the first visible account, and hidden accounts remain editable in Settings. Labels save on Return or when leaving the field, then show the trimmed value (up to 80 characters). Preferences use provider-scoped SHA256 identifiers with a random per-install salt stored in local UserDefaults, never raw account IDs, emails, or credentials. Older identifiers migrate when the account is seen; matching identity aliases preserve choices when a source starts reporting an ID. After 90 days unseen, choices and Primary selections are archived outside the active preferences on a successful provider fetch; failed fetches never expire that provider’s choices. Legacy entries whose provider is unknown require a complete successful inventory before expiry. If a source supplies multiple accounts without stable identifiers, their settings are unavailable until the source reports an identifier.
+
+Claude log profiles do not report a quota-account ID. Their **Claude logs A/B** limit notices remain separate from account rings, labels, visibility, and Primary selection, so response ordering cannot attach a log warning to the wrong account.
 
 ## Build and install
 
@@ -62,15 +72,15 @@ This optional reader supports a Linux host with Bash, GNU command-line tools, Py
 
 ## Privacy
 
-UsageRings stores its settings and display snapshots **locally only**. It has no UsageRings-hosted account, analytics service, or cloud upload. It does not expose an HTTP/LAN server.
+UsageRings stores settings and display snapshots locally by default. The optional iPhone sync setting is off by default; when enabled, supported usage percentages, reset times and random device/account identifiers are sent to the user's private iCloud database. It does not send credentials, account names, logs or balances. CloudKit requires matching signing, entitlements and container configuration, which are not yet included in this build. It has no UsageRings-hosted account, analytics service, or HTTP/LAN server.
 
-Fetching current usage still requires network access: CodexBarCLI communicates with its providers, the local authenticated proxy brokers provider requests, and GLM reset-ticket details contact Z.ai directly. Enabling remote Claude monitoring adds SSH traffic to the host you configure. “Local-only” describes storage and processing, not offline operation.
+Fetching current usage still requires network access: CodexBarCLI communicates with its providers, the local authenticated proxy brokers provider requests, and GLM reset-ticket details contact Z.ai directly. Enabling remote Claude monitoring adds SSH traffic to the host you configure.
 
-Local Claude monitoring reads bounded recent log tails from `~/.claude/projects`, `~/.claude-a/projects`, and `~/.claude-b/projects`. Remote monitoring returns filtered quota-event text, timestamps, and model identifiers. Local Codex display snapshots are written to `~/Library/Application Support/CodexUsageWidget-Multi/` and a per-user `UsageRings` folder inside the macOS per-user temporary directory (`$TMPDIR`, mode 0700; files 0600), which also holds a provider/window diagnostic JSON file. This version writes nothing to the shared `/private/tmp`; files left there by older builds are not removed automatically. If remote Claude monitoring over SSH fails, the Claude section shows a short "Remote Claude logs" reason without host details. Treat these files as personal usage information and sanitize logs or screenshots before sharing them.
+Local Claude monitoring reads bounded recent log tails from `~/.claude/projects`, `~/.claude-a/projects`, and `~/.claude-b/projects`. Remote monitoring returns filtered quota-event text, timestamps, and model identifiers. Local Codex display snapshots are written to `~/Library/Application Support/CodexUsageWidget-Multi/` and a per-user `UsageRings` folder inside the macOS per-user temporary directory (`$TMPDIR`, mode 0700; files 0600), which also holds a provider/window diagnostic JSON file. This version writes nothing to the shared `/private/tmp`; files left there by older builds are not removed automatically. If remote Claude monitoring over SSH fails, the separate "Claude logs B" notice shows a short reason without host details. Treat these files as personal usage information and sanitize logs or screenshots before sharing them.
 
 ## A lighter app bundle
 
-The maintainer's reference app-bundle comparison is **CodexBar: 163 MB** versus **UsageRings: 7.3 MB**. These are on-disk bundle sizes from a particular build, not RAM measurements or a guarantee for every build. The UsageRings figure excludes the still-required CodexBarCLI installation and optional CLIProxyAPI service. UsageRings focuses on the floating display and does not replace CodexBar's broader account-management features.
+The maintainer's reference app-bundle comparison is **CodexBar: 163 MB** versus **UsageRings: 7.3 MB**. These are on-disk bundle sizes from a particular build, not RAM measurements or a guarantee for every build. The UsageRings figure excludes the still-required CodexBarCLI installation and the provider CLIs (agy, grok, claude) it reads through. UsageRings focuses on the floating display and does not replace CodexBar's broader account-management features.
 
 ## Screenshots
 

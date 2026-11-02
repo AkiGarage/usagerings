@@ -89,7 +89,7 @@ enum CodexExtrasParser {
             extras.ticketsUpdatedAt = reset.updatedAt
         }
         if let email = entry.usage?.accountEmail, !email.isEmpty {
-            extras.maskedAccount = CLIProxyParser.mask(email)
+            extras.maskedAccount = UsageText.mask(email)
         }
         return extras
     }

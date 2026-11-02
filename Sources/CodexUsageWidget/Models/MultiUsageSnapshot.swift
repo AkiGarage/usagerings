@@ -5,7 +5,12 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
     case claude
     case grok
     case zai
+    case minimax
+    case kimi
+    case deepseek
     case antigravity
+    /// Gemini app (gemini.google.com) quota, read from Aki's open usage tab only.
+    case gemini
 
     var id: String { rawValue }
 
@@ -21,6 +26,14 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
             "Claude Code"
         case .antigravity:
             "Antigravity"
+        case .minimax:
+            "MiniMax"
+        case .kimi:
+            "Kimi"
+        case .deepseek:
+            "DeepSeek"
+        case .gemini:
+            "Gemini"
         }
     }
 }
@@ -30,6 +43,37 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
 struct ProviderStat: Equatable, Codable, Sendable {
     let title: String
     let valueText: String
+    var accountIndex: Int? = nil
+}
+
+enum UsageFailureReason: Equatable, Sendable {
+    case timeout, launchFailure, transport, logout, other
+
+    var isTransient: Bool { self == .timeout || self == .launchFailure || self == .transport }
+}
+
+func staleFailureText(_ failure: String?) -> String {
+    if let failure, failure.hasPrefix("Stale · last successful reading") { return failure }
+    return ["Stale · last successful reading", failure].compactMap { $0 }.joined(separator: " · ")
+}
+
+/// Keeps accounts with missing quota visible without using masked labels as identity.
+struct ProviderAccount: Equatable, Sendable {
+    let index: Int
+    var failureText: String? = nil
+    var codexExtras: CodexExtrasParser.Extras? = nil
+    var id: AccountID? = nil
+    var isStale = false
+    var failureReason: UsageFailureReason? = nil
+}
+
+struct ClaudeProfileNotice: Equatable, Sendable, Identifiable {
+    let profile: Int
+    let block: ClaudeBlock?
+    let failureText: String?
+
+    var id: String { "claude-profile-\(profile)" }
+    var name: String { "Claude logs \(ProviderSection.accountSuffix(profile))" }
 }
 
 struct ProviderSection: Equatable, Sendable, Identifiable {
@@ -37,13 +81,66 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
     var windows: [UsageLimit]
     var stats: [ProviderStat]
     var failureText: String?
-    /// Parsed Codex credits and reset tickets for the ring hover card.
-    /// Other providers and Codex responses without extras leave this nil.
+    /// Codex extras for legacy snapshots or a section projected by forAccount.
+    /// Account-aware snapshots store extras on each ProviderAccount.
     var codexExtras: CodexExtrasParser.Extras? = nil
     var zaiResetTickets: ZaiResetTickets? = nil
-    var claudeBlocks: [Int: ClaudeBlock] = [:]
+    /// Log profile slots (A/B), with no verified link to a quota account.
+    var claudeProfileBlocks: [Int: ClaudeBlock] = [:]
+    var accounts: [ProviderAccount] = []
+    var claudeRemoteFailureText: String? = nil
+    /// Fetch evidence, independent of display messages such as "no configured accounts".
+    var accountInventoryComplete: Bool? = nil
+    var isStale = false
+    var failureReason: UsageFailureReason? = nil
+
+    var claudeProfileNotices: [ClaudeProfileNotice] {
+        let profiles = Set(claudeProfileBlocks.keys).union(claudeRemoteFailureText == nil ? [] : [1])
+        return profiles.sorted().map {
+            ClaudeProfileNotice(profile: $0, block: claudeProfileBlocks[$0],
+                                failureText: $0 == 1 ? claudeRemoteFailureText : nil)
+        }
+    }
 
     var id: String { provider.id }
+
+    var accountIndices: [Int] {
+        Set(accounts.map(\.index) + windows.compactMap(\.accountIndex)
+            + stats.compactMap(\.accountIndex)).sorted()
+    }
+
+    var displayAccounts: [ProviderAccount] {
+        let indices = accountIndices.isEmpty ? [0] : accountIndices
+        return indices.map { index in
+            accounts.first { $0.index == index }
+                ?? ProviderAccount(index: index, id: indices.count == 1 && (!windows.isEmpty || !stats.isEmpty)
+                    ? .singleton(provider) : nil)
+        }
+    }
+
+    func accountID(at index: Int) -> AccountID? {
+        displayAccounts.first { $0.index == index }?.id
+    }
+
+    func forAccount(_ index: Int) -> Self {
+        var section = self
+        section.windows = windows.filter { ($0.accountIndex ?? 0) == index }
+        section.stats = stats.filter { ($0.accountIndex ?? 0) == index }
+        let account = accounts.first { $0.index == index }
+        section.isStale = isStale || (account?.isStale ?? false)
+        section.failureText = isStale ? failureText : (account == nil ? failureText : account?.failureText)
+        if section.isStale { section.failureText = staleFailureText(section.failureText) }
+        section.codexExtras = accounts.isEmpty ? (index == 0 ? codexExtras : nil) : account?.codexExtras
+        if index != 0 { section.zaiResetTickets = nil }
+        section.accounts = account.map { [$0] } ?? []
+        section.claudeProfileBlocks = [:]
+        section.claudeRemoteFailureText = nil
+        return section
+    }
+
+    static func accountSuffix(_ index: Int) -> String {
+        index < 26 && index >= 0 ? String(UnicodeScalar(65 + index)!) : String(index + 1)
+    }
 
     var lowestLeftWindow: UsageLimit? {
         windows.min { $0.clampedLeftPercent < $1.clampedLeftPercent }
@@ -54,9 +151,11 @@ struct MultiUsageSnapshot: Equatable, Sendable {
     let sections: [ProviderSection]
     let codexSnapshot: UsageSnapshot?
     let updatedAt: Date
+    /// Providers the user turned off; their rings are not drawn even as placeholders.
+    var hiddenProviders: Set<ProviderID> = []
 
     /// Display order shared by the tablet (left to right) and the window (top to bottom).
-    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .antigravity]
+    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity, .gemini]
 
     static func ordered(_ sections: [ProviderSection]) -> [ProviderSection] {
         sections.enumerated().sorted { lhs, rhs in

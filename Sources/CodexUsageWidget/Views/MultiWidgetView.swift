@@ -8,7 +8,7 @@ struct MultiWidgetView: View {
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
             MultiPanelContent(snapshot: store.snapshot, errorMessage: store.errorMessage,
-                              preferences: preferences)
+                              preferences: preferences, claudeChoice: store.claudeChoice)
                 .background(GeometryReader { proxy in
                     Color.clear.onChange(of: proxy.size, initial: true) { _, size in
                         onContentSizeChange(size)
@@ -54,7 +54,10 @@ struct MultiPanelContent: View {
     let snapshot: MultiUsageSnapshot
     var errorMessage: String?
     @ObservedObject var preferences: PanelPreferences
+    var claudeChoice: ClaudeAccountPolicy.Decision? = nil
     static let baseWidth: CGFloat = 480
+    /// Top-right 更新 time and −/%/+/☀/▯/⚙ controls: 11pt → 14pt (≈1.27×, Aki t1662u).
+    static let headerControlFontSize: CGFloat = 14
     @Environment(\.colorScheme) private var colorScheme
     @State private var showsSettings = false
 
@@ -65,12 +68,22 @@ struct MultiPanelContent: View {
                     Text("残り使用量").font(.system(size: 15, weight: .semibold))
                     Spacer()
                     Text("更新 \(snapshot.updatedAt.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                        .font(.system(size: Self.headerControlFontSize)).foregroundStyle(.secondary).monospacedDigit()
                     controls
                 }
-                .padding(.bottom, 2)
-                ForEach(ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames)) { row in
+                HStack(spacing: 8) {
+                    UsageModeControls()
+                    Spacer(minLength: 4)
+                    UsageDirectionHint()
+                }
+                .padding(.bottom, 4)
+                ForEach(ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames,
+                                             splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                                             accountPreferences: preferences.accountPreferences)) { row in
                     ServiceRowView(row: row)
+                }
+                if let claudeChoice, let selected = claudeChoice.selected {
+                    ClaudeChoiceLine(decision: claudeChoice, selected: selected)
                 }
                 if let errorMessage {
                     Text(errorMessage).font(.system(size: 11)).foregroundStyle(.red)
@@ -87,13 +100,13 @@ struct MultiPanelContent: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Button { preferences.zoomOut() } label: { Image(systemName: "minus") }
                 .disabled(preferences.zoom <= PanelPreferences.zoomRange.lowerBound)
                 .help("Zoom out")
                 .accessibilityLabel("Zoom out")
             Button("\(preferences.percent)%") { preferences.resetZoom() }
-                .monospacedDigit().frame(minWidth: 36)
+                .monospacedDigit().frame(minWidth: 46)
                 .help("Reset zoom to 100% (⌘0)")
                 .accessibilityLabel("Reset zoom to 100 percent")
             Button { preferences.zoomIn() } label: { Image(systemName: "plus") }
@@ -118,13 +131,13 @@ struct MultiPanelContent: View {
             .popover(isPresented: $showsSettings) {
                 // Bind to the same suite as the panel: demo mode never reads or
                 // writes the production SSH host.
-                ClaudeSSHSettingsView()
+                PanelSettingsView(preferences: preferences, snapshot: snapshot)
                     .defaultAppStorage(preferences.defaults)
             }
         }
         .buttonStyle(.borderless)
-        .font(.system(size: 11))
-        .controlSize(.mini)
+        .font(.system(size: Self.headerControlFontSize))
+        .controlSize(.small)
     }
 
     private var appearanceAction: String {
@@ -136,13 +149,47 @@ struct MultiPanelContent: View {
     }
 }
 
-struct ClaudeSSHSettingsView: View {
+struct PanelSettingsView: View {
+    @ObservedObject var preferences: PanelPreferences
+    var snapshot: MultiUsageSnapshot = .placeholder
     @AppStorage(ClaudeSSHSettings.enabledKey) private var enabled = false
     @AppStorage(ClaudeSSHSettings.hostKey) private var host = ""
+    @AppStorage(UsageBasis.key, store: .standard) private var basisRaw = UsageBasis.defaultValue.rawValue
+    @AppStorage(UsageStyle.key, store: .standard) private var styleRaw = UsageStyle.defaultValue.rawValue
+    @State private var showsAcknowledgements = false
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings").font(.headline)
+            Picker("表示基準", selection: $basisRaw) {
+                ForEach(UsageBasis.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }.pickerStyle(.segmented)
+            Picker("表示形式", selection: $styleRaw) {
+                ForEach(UsageStyle.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }.pickerStyle(.segmented)
+            Text("全サブスクのパネル・詳細カードに反映（パネル上部の［表示］［基準］やタブの右クリックでも切替）。残り：バーは右から左へ減ります。使用量：オレンジのバーが左から右へ増えます。詳細は5時間枠・週の枠をペース付きのバーで表示します。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Toggle("iPhoneへiCloudで使用状況を同期", isOn: Binding(
+                get: { preferences.cloudSyncEnabled },
+                set: { preferences.setCloudSyncEnabled($0) }
+            )).disabled(preferences.cloudSyncStopping)
+            Text(preferences.cloudSyncStopping ? "送信の終了を待っています。" : "初期設定はオフです。オンにすると対応する使用率とリセット時刻を自分のiCloudに保存します。利用には対応するiCloud設定が必要です。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Divider()
+            Toggle("アカウント名を一部伏せて表示", isOn: $preferences.showAccountNames)
+            Toggle("Antigravityをアカウント別に表示", isOn: $preferences.splitAntigravityAccounts)
+            Divider()
+            ProviderVisibilitySettingsView(preferences: preferences)
+            Divider()
+            Toggle("Claudeの使う順番を自動で決める（claude-ab）", isOn: $preferences.claudeAutoSwitch)
+            Text("週の制限が先にリセットされる方を優先し、5時間制限中だけもう一方を使います。claude-a / claude-b のログイン中メールと一致したアカウントだけが対象です。オフにすると従来どおり a → b の順です。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Divider()
+            AccountSettingsView(snapshot: snapshot, preferences: preferences)
+            Divider()
+            ClaudeCLIAccountsSettingsView()
+            Divider()
             Toggle("Read remote Claude B limits over SSH", isOn: $enabled)
             TextField("SSH host or user@host", text: $host)
                 .textFieldStyle(.roundedBorder)
@@ -153,11 +200,121 @@ struct ClaudeSSHSettingsView: View {
                 Text("Enter a hostname or user@hostname without spaces, ports, or SSH options.")
                     .font(.caption).foregroundStyle(.orange)
             }
-            Text("Changes apply on the next refresh.")
+            Text("SSH changes apply on the next refresh.")
                 .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Button("謝辞・ライセンス（Acknowledgements）") { showsAcknowledgements = true }
+                .sheet(isPresented: $showsAcknowledgements) { AcknowledgementsView() }
         }
         .padding(16)
-        .frame(width: 340)
+        }
+        .frame(width: 390, height: 520)
+    }
+}
+
+struct AccountSettingsView: View {
+    let snapshot: MultiUsageSnapshot
+    @ObservedObject var preferences: PanelPreferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("アカウント").font(.headline)
+            Text("表示をオフにするとパネルとリングから隠れます。Primaryを選ぶと縮小表示はそのアカウントのリングだけになります。非表示・未取得時は表示中の先頭を使います。")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Claude logsの警告はアカウントを特定できないため、表示・Primary設定と独立して表示します。")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(snapshot.sections) { section in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(section.provider.displayName).font(.subheadline.bold())
+                    Picker("Primary", selection: Binding(
+                        get: { preferences.accountPreferences.primaryAccounts[section.provider.rawValue] ?? "" },
+                        set: { preferences.setPrimaryAccount(AccountID(digest: $0), for: section.provider) }
+                    )) {
+                        Text("すべて表示").tag("")
+                        ForEach(section.displayAccounts, id: \.index) { account in
+                            if let id = account.id {
+                                Text(accountName(account, in: section)).tag(id.rawValue)
+                            }
+                        }
+                        if let saved = preferences.accountPreferences.primaryAccounts[section.provider.rawValue],
+                           !section.displayAccounts.contains(where: { $0.id?.rawValue == saved }) {
+                            Text("選択中のアカウント（未取得）").tag(saved)
+                        }
+                    }
+                    ForEach(section.displayAccounts, id: \.index) { account in
+                        if let id = account.id {
+                            AccountSettingsRow(id: id, name: accountName(account, in: section), preferences: preferences)
+                                .id(id)
+                        } else {
+                            Text("\(accountName(account, in: section))：識別情報がないため設定を保存できません")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func accountName(_ account: ProviderAccount, in section: ProviderSection) -> String {
+        let base = "\(section.provider.displayName) \(ProviderSection.accountSuffix(account.index))"
+        if let label = preferences.accountPreferences.label(for: account.id) { return "\(base) · \(label)" }
+        if preferences.showAccountNames,
+           let masked = ServiceRowModel.rows(for: section.forAccount(account.index), showAccounts: true).first?.account {
+            return "\(base) · \(masked)"
+        }
+        return base
+    }
+}
+
+struct AccountSettingsRow: View {
+    let id: AccountID
+    let name: String
+    @ObservedObject var preferences: PanelPreferences
+    @State private var label: String
+    @FocusState private var labelFocused: Bool
+
+    init(id: AccountID, name: String, preferences: PanelPreferences) {
+        self.id = id
+        self.name = name
+        self.preferences = preferences
+        _label = State(initialValue: preferences.accountPreferences.label(for: id) ?? "")
+    }
+
+    private func saveLabel() {
+        if label != (preferences.accountPreferences.label(for: id) ?? "") {
+            preferences.setAccountLabel(label, for: id)
+        }
+        label = preferences.accountPreferences.label(for: id) ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(name, isOn: Binding(
+                get: { preferences.accountPreferences.isVisible(id) },
+                set: { preferences.setAccountVisible($0, for: id) }
+            ))
+            HStack {
+                TextField("カスタムラベル", text: $label)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("\(name)のラベル")
+                    .focused($labelFocused)
+                    .onSubmit { saveLabel() }
+                    .onChange(of: labelFocused) { _, focused in
+                        if !focused { saveLabel() }
+                    }
+                    .onChange(of: preferences.accountPreferences.label(for: id)) { _, stored in
+                        label = stored ?? ""
+                    }
+                    .onChange(of: id) { _, _ in
+                        label = preferences.accountPreferences.label(for: id) ?? ""
+                    }
+                Button("クリア") {
+                    label = ""
+                    saveLabel()
+                }
+                .disabled(label.isEmpty)
+            }
+        }
     }
 }
 
@@ -200,6 +357,11 @@ private struct MultiSectionView: View {
                         .monospacedDigit()
                         .foregroundStyle(isInformational ? .secondary : .primary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if stat.title == "Gemini読み取り" && stat.valueText == "ウィンドウなし" {
+                        Button("作り直す") { NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil) }
+                            .controlSize(.small)
+                            .help("UsageRings専用のGemini読み取りウィンドウを非表示で作り直します（Chromeは前面に出ず、他のタブには触れません）")
+                    }
                 }
                 .font(.system(size: 12))
                 .accessibilityElement(children: .combine)
@@ -221,6 +383,7 @@ private struct MultiWindowRow: View {
         case .antigravity: color = CollapsedUsageBar.antigravityColor
         case .zai: color = CollapsedUsageBar.glmColor
         case .grok: color = CollapsedUsageBar.grokColor
+        case .minimax, .kimi, .deepseek, .gemini: color = ServiceRowModel.color(for: provider, account: 0)
         }
         return CollapsedUsageBar(id: limit.title, label: "", title: limit.title,
                                  providerColor: color, limit: limit)
@@ -276,6 +439,7 @@ private struct RingGrid: View {
                         .monospacedDigit()
                     }
                     .frame(width: 104, height: 104)
+                    .opacity(bar.isStale ? 0.55 : 1)
                     HStack(spacing: 4) {
                         Circle().fill(bar.providerColor).frame(width: 7, height: 7)
                         Text(bar.ringName).font(.system(size: 13, weight: .semibold)).lineLimit(1)
@@ -283,8 +447,50 @@ private struct RingGrid: View {
                     }
                     Text(bar.resetShort).font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                    if bar.isStale {
+                        Text("Stale").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                 }
                 .accessibilityElement(children: .combine)
+            }
+        }
+    }
+}
+
+struct ClaudeChoiceLine: View {
+    let decision: ClaudeAccountPolicy.Decision
+    let selected: String
+
+    var title: String {
+        let name = selected.count == 1 && selected == selected.lowercased() ? "claude-\(selected)" : "Claude \(selected)"
+        return decision.state == .allLimited ? "Claudeは両方制限中：いまはCodexを使用（次は\(name)）" : "Claudeの切り替え：いまは\(name)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            Text(decision.reason).font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct ProviderVisibilitySettingsView: View {
+    @ObservedObject var preferences: PanelPreferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("表示するサービス").font(.headline)
+            Text("契約しているもの・見たいものだけオンにします。オフにしたサービスは取得もしません。最初は、使用量が取れたサービスだけ自動でオンになります。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(MultiUsageSnapshot.displayOrder) { provider in
+                Toggle(provider.displayName, isOn: Binding(
+                    get: { preferences.isProviderVisible(provider) },
+                    set: { preferences.setProviderVisible($0, for: provider) }
+                ))
             }
         }
     }

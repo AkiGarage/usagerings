@@ -15,7 +15,17 @@ final class MultiProviderPersona: AppPersona {
         if demoMode.isEnabled {
             store = MultiUsageStore(demoSnapshot: UsageRingsDemoFixture.snapshot())
         } else {
-            store = MultiUsageStore()
+            let live = MultiUsageStore(preferences: preferences)
+            store = live
+            preferences.onProviderVisibilityChange = { [weak live] turnedOn in
+                live?.providerVisibilityChanged(turnedOn: turnedOn)
+            }
+            preferences.onClaudeAutoSwitchChange = { [weak live] enabled in
+                live?.claudeAutoSwitchChanged(enabled: enabled)
+            }
+            preferences.onCloudSyncChange = { [weak live] enabled in
+                await live?.cloudSyncChanged(enabled: enabled)
+            }
         }
     }
 
@@ -37,6 +47,13 @@ final class MultiProviderPersona: AppPersona {
     }
 
     func start() { store.start() }
+    /// nil when there is no live Gemini reader (demo mode or before start).
+    var geminiReadingEnabled: Bool? { store.geminiMonitor?.isEnabled }
+    func setGeminiReading(_ on: Bool) {
+        if on { preferences.setProviderVisible(true, for: .gemini) }
+        guard let monitor = store.geminiMonitor else { return }
+        Task { @MainActor in await monitor.setEnabled(on) }
+    }
     func stop() { store.stop() }
     func refresh() { store.refresh() }
     func showOpacityHUD(percent: Int) { store.showOpacityHUD(percent: percent) }

@@ -51,6 +51,30 @@ final class PanelPreferences: ObservableObject {
     static let barZoomRange = 0.6...2.5
     static let barZoomGestureStep = 0.05
     let defaults: UserDefaults
+    static let cloudSyncKey = "cloudSnapshotSyncEnabledV1"
+    @Published private(set) var cloudSyncEnabled: Bool
+    @Published private(set) var cloudSyncStopping = false
+    var onCloudSyncChange: ((Bool) async -> Void)?
+    private var cloudSyncTask: Task<Void, Never>?
+
+    func setCloudSyncEnabled(_ enabled: Bool) {
+        guard !cloudSyncStopping, enabled != cloudSyncEnabled else { return }
+        let previous = cloudSyncTask
+        if enabled {
+            cloudSyncEnabled = true
+            defaults.set(true, forKey: Self.cloudSyncKey)
+            cloudSyncTask = Task { await previous?.value; await onCloudSyncChange?(true) }
+        } else {
+            cloudSyncStopping = true
+            defaults.set(false, forKey: Self.cloudSyncKey)
+            cloudSyncTask = Task {
+                await previous?.value
+                await onCloudSyncChange?(false)
+                cloudSyncEnabled = false
+                cloudSyncStopping = false
+            }
+        }
+    }
     @Published private(set) var zoom: Double
     @Published private(set) var barZoom: Double
     @Published var orientation: PanelOrientation {
@@ -68,9 +92,36 @@ final class PanelPreferences: ObservableObject {
     @Published var showAccountNames: Bool {
         didSet { defaults.set(showAccountNames, forKey: Self.showAccountNamesKey) }
     }
+    static let splitAntigravityAccountsKey = "multiSplitAntigravityAccounts"
+    @Published var splitAntigravityAccounts: Bool {
+        didSet { defaults.set(splitAntigravityAccounts, forKey: Self.splitAntigravityAccountsKey) }
+    }
+    static let accountPreferencesKey = "multiAccountPreferencesV1"
+    static let accountPreferencesBackupKey = "multiAccountPreferencesV1Backup"
+    static let accountPreferencesArchiveKey = "multiAccountPreferencesArchiveV1"
+    @Published private(set) var accountPreferences: AccountPreferences
+    private let canSaveAccountPreferences: Bool
+    static let providerVisibilityKey = "multiProviderVisibilityV1"
+    /// Explicit per-provider choice. Missing = automatic (shown once the provider reports data).
+    @Published private(set) var providerVisibility: [String: Bool]
+    var onProviderVisibilityChange: ((_ turnedOn: Bool) -> Void)?
+    static let claudeAutoSwitchKey = "multiClaudeAutoSwitchV1"
+    /// Let UsageRings decide which Claude profile claude-ab tries first. Default on.
+    @Published var claudeAutoSwitch: Bool {
+        didSet {
+            defaults.set(claudeAutoSwitch, forKey: Self.claudeAutoSwitchKey)
+            onClaudeAutoSwitchChange?(claudeAutoSwitch)
+        }
+    }
+    var onClaudeAutoSwitchChange: ((Bool) -> Void)?
+    /// Providers with no explicit choice and no data yet are re-probed at most this often.
+    static let autoProbeInterval: TimeInterval = 30 * 60
+    private var lastAutoProbe: [ProviderID: Date] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        cloudSyncEnabled = defaults.bool(forKey: Self.cloudSyncKey)
+        _ = AccountIdentitySalt.load(defaults: defaults)
         let stored = defaults.object(forKey: Self.zoomKey) as? Double ?? 1
         zoom = Self.clamped(stored)
         let storedBarZoom = defaults.object(forKey: Self.barZoomKey) as? Double ?? 1
@@ -78,6 +129,104 @@ final class PanelPreferences: ObservableObject {
         orientation = PanelOrientation(rawValue: defaults.string(forKey: Self.orientationKey) ?? "") ?? .horizontal
         appearance = PanelAppearance(rawValue: defaults.string(forKey: Self.appearanceKey) ?? "") ?? .system
         showAccountNames = defaults.bool(forKey: Self.showAccountNamesKey)
+        splitAntigravityAccounts = defaults.bool(forKey: Self.splitAntigravityAccountsKey)
+        claudeAutoSwitch = defaults.object(forKey: Self.claudeAutoSwitchKey) as? Bool ?? true
+        providerVisibility = (defaults.dictionary(forKey: Self.providerVisibilityKey) as? [String: Bool] ?? [:])
+            .filter { ProviderID(rawValue: $0.key) != nil }
+        if let data = defaults.data(forKey: Self.accountPreferencesKey) {
+            do {
+                accountPreferences = try JSONDecoder().decode(AccountPreferences.self, from: data)
+                canSaveAccountPreferences = true
+            } catch {
+                if defaults.object(forKey: Self.accountPreferencesBackupKey) == nil {
+                    defaults.set(data, forKey: Self.accountPreferencesBackupKey)
+                }
+                accountPreferences = AccountPreferences()
+                canSaveAccountPreferences = false
+            }
+        } else {
+            accountPreferences = AccountPreferences()
+            canSaveAccountPreferences = true
+        }
+    }
+
+    func setAccountLabel(_ label: String, for id: AccountID) {
+        accountPreferences.setLabel(label, for: id)
+        saveAccounts()
+    }
+
+    func setAccountVisible(_ visible: Bool, for id: AccountID) {
+        accountPreferences.setVisible(visible, for: id)
+        saveAccounts()
+    }
+
+    func setPrimaryAccount(_ id: AccountID?, for provider: ProviderID) {
+        accountPreferences.setPrimary(id, for: provider)
+        saveAccounts()
+    }
+
+    func isProviderVisible(_ provider: ProviderID) -> Bool { providerVisibility[provider.rawValue] == true }
+
+    /// Hidden providers are not fetched at all.
+    var disabledProviders: Set<ProviderID> {
+        Set(ProviderID.allCases.filter { providerVisibility[$0.rawValue] == false })
+    }
+
+    /// Providers to skip on this refresh: explicit off, plus undecided providers probed recently.
+    /// Calling this marks the undecided providers that will be probed now.
+    func providersToSkip(now: Date = Date()) -> Set<ProviderID> {
+        var skip = disabledProviders
+        for provider in ProviderID.allCases where providerVisibility[provider.rawValue] == nil {
+            if let last = lastAutoProbe[provider], now.timeIntervalSince(last) < Self.autoProbeInterval {
+                skip.insert(provider)
+            } else {
+                lastAutoProbe[provider] = now
+            }
+        }
+        return skip
+    }
+
+    func setProviderVisible(_ visible: Bool, for provider: ProviderID) {
+        guard providerVisibility[provider.rawValue] != visible else { return }
+        providerVisibility[provider.rawValue] = visible
+        defaults.set(providerVisibility, forKey: Self.providerVisibilityKey)
+        onProviderVisibilityChange?(visible)
+    }
+
+    /// Automatic default: a provider with no explicit choice is turned on (and remembered)
+    /// the first time it reports configured usage data. Never turns anything off.
+    func reconcileProviders(in snapshot: MultiUsageSnapshot) {
+        var changed = false
+        for section in snapshot.sections where providerVisibility[section.provider.rawValue] == nil
+            && Self.hasConfiguredData(section) {
+            providerVisibility[section.provider.rawValue] = true
+            changed = true
+        }
+        if changed { defaults.set(providerVisibility, forKey: Self.providerVisibilityKey) }
+    }
+
+    static func hasConfiguredData(_ section: ProviderSection) -> Bool {
+        !section.windows.isEmpty || section.accounts.contains { $0.id != nil && $0.failureText == nil }
+    }
+
+    func reconcileAccounts(in snapshot: MultiUsageSnapshot, now: Date = Date()) {
+        guard canSaveAccountPreferences else { return }
+        var updated = accountPreferences
+        let archived = updated.reconcile(snapshot, now: now, salt: AccountIdentitySalt.load(defaults: defaults))
+        guard updated != accountPreferences else { return }
+        if !archived.observations.isEmpty, let data = try? JSONEncoder().encode(archived) {
+            // Keep expired choices recoverable outside the active preferences.
+            var archive = defaults.array(forKey: Self.accountPreferencesArchiveKey) as? [Data] ?? []
+            archive.append(data)
+            defaults.set(archive, forKey: Self.accountPreferencesArchiveKey)
+        }
+        accountPreferences = updated
+        saveAccounts()
+    }
+
+    private func saveAccounts() {
+        guard canSaveAccountPreferences, let data = try? JSONEncoder().encode(accountPreferences) else { return }
+        defaults.set(data, forKey: Self.accountPreferencesKey)
     }
 
     var percent: Int { Int((zoom * 100).rounded()) }

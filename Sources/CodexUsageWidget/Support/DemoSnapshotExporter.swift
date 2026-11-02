@@ -90,11 +90,16 @@ enum DemoSnapshotExporter {
 
         let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
         let cardFiles: [(String, String)] = [
-            ("hover-codex.png", "codex"),
+            ("hover-codex.png", "codex-0"),
+            ("hover-codex-1.png", "codex-1"),
             ("hover-claude-0.png", "claude-0"),
             ("hover-claude-1.png", "claude-1"),
-            ("hover-grok.png", "grok"),
+            ("hover-grok.png", "grok-0"),
+            ("hover-grok-1.png", "grok-1"),
             ("hover-zai.png", "zai"),
+            ("hover-minimax.png", "minimax"),
+            ("hover-kimi.png", "kimi"),
+            ("hover-deepseek.png", "deepseek"),
             ("hover-antigravity-argon.png", "antigravity-Gemini 4 Argon"),
             ("hover-antigravity-gemini-models.png", "antigravity-Gemini Models"),
             ("hover-antigravity-claude-gpt.png", "antigravity-Claude and GPT models")
@@ -118,6 +123,34 @@ enum DemoSnapshotExporter {
                 .background(Color(white: 0.12))
                 .environment(\.colorScheme, .dark)
             outputs.append((filename, try renderImagePNG(card, appearance: .dark)))
+        }
+
+        preferences.splitAntigravityAccounts = true
+        let splitPanel = MultiPanelContent(snapshot: snapshot, preferences: preferences)
+            .background(Color(white: 0.10))
+            .clipShape(panelBackground)
+            .environment(\.colorScheme, .dark)
+        outputs.append(("panel-antigravity-split.png", try renderHostedPNG(splitPanel, appearance: .dark)))
+        let settings = PanelSettingsView(preferences: preferences)
+            .defaultAppStorage(exportDefaults)
+            .background(Color(white: 0.10))
+        outputs.append(("settings-antigravity-split.png", try renderHostedPNG(settings, appearance: .dark)))
+        for orientation in PanelOrientation.allCases {
+            let size = MultiCollapsedUsageView.size(for: snapshot, barZoom: 2.5, menuBarHeight: 45,
+                                                     orientation: orientation, splitAntigravityAccounts: true)
+            let rings = MultiCollapsedUsageView(snapshot: snapshot, barZoom: 2.5, menuBarHeight: 45,
+                                                orientation: orientation, splitAntigravityAccounts: true).padding(16)
+            outputs.append(("rings-\(orientation.rawValue)-antigravity-split.png",
+                            try renderImagePNG(rings, size: CGSize(width: size.width + 32, height: size.height + 32),
+                                               appearance: .dark)))
+        }
+        for bar in CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil, splitAntigravityAccounts: true)
+            where bar.id == "antigravity-0-Gemini 4 Argon" || bar.id == "antigravity-1-Gemini 4 Argon" {
+            guard let model = RingDetailCardModel.make(bar: bar, now: now) else {
+                throw DemoLaunchError.unableToRender(bar.id)
+            }
+            let card = RingDetailCardView(model: model).padding(14).background(Color(white: 0.12))
+            outputs.append(("hover-\(bar.id).png", try renderImagePNG(card, appearance: .dark)))
         }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -4,7 +4,7 @@ import SwiftUI
 struct CollapsedUsageBar: Identifiable {
     let id: String
     let label: String
-    let title: String
+    var title: String
     let providerColor: Color
     let limit: UsageLimit?
     /// Every window the provider reports for this account; the ring's own arc is `limit`.
@@ -15,6 +15,12 @@ struct CollapsedUsageBar: Identifiable {
     var zaiResetTickets: ZaiResetTickets? = nil
     var block: ClaudeBlock? = nil
     var blockedSymbolName: String = Self.blockedSymbol
+    var stats: [ProviderStat] = []
+    var failureText: String? = nil
+    var provider: ProviderID? = nil
+    var accountIndex: Int? = nil
+    var accountID: AccountID? = nil
+    var isStale = false
     var isBlocked: Bool { block?.isActive(at: Date()) == true }
     static let blockedSymbol = "lock.fill"
     static let blockedPauseSymbol = "pause.circle.fill"
@@ -34,7 +40,7 @@ struct CollapsedUsageBar: Identifiable {
 
     static func detailText(for bar: Self) -> String {
         if let block = bar.block, bar.isBlocked { return ClaudeRateLimitParser.cardLine(block: block, now: Date()) }
-        return bar.limit?.leftText ?? "No data"
+        return bar.limit?.leftText ?? bar.failureText ?? "No data"
     }
 
     /// Claude icon orange (#D97757) and a slightly deeper shade (#C4623F).
@@ -42,14 +48,16 @@ struct CollapsedUsageBar: Identifiable {
     static let claudeBColor = Color(red: 0xC4 / 255, green: 0x62 / 255, blue: 0x3F / 255)
     static let codexColor = Color(red: 0x19 / 255, green: 0xB6 / 255, blue: 0xE6 / 255)
     static let antigravityColor = Color(red: 0x34 / 255, green: 0xA8 / 255, blue: 0x53 / 255)
+    static let geminiColor = Color(red: 0x42 / 255, green: 0x85 / 255, blue: 0xF4 / 255)
     static let criticalColor = Color(red: 0xFF / 255, green: 0x45 / 255, blue: 0x3A / 255)
     static let warningColor = Color(red: 0xFF / 255, green: 0xB0 / 255, blue: 0x20 / 255)
 
     /// Short display name for rings ("Claude A", "GLM", group names for Antigravity).
     var ringName: String {
-        if id.hasPrefix("claude-") { return title.replacingOccurrences(of: " 5h", with: "") }
-        if id == "zai" { return "GLM" }
-        return title
+        guard id.hasPrefix("claude-") || id == "zai" else { return title }
+        var parts = title.components(separatedBy: " · ")
+        if parts[0].hasSuffix(" 5h") { parts[0].removeLast(3) }
+        return parts.joined(separator: " · ")
     }
 
     /// "10/22 14:00 (2d3h)" without the "Resets " prefix.
@@ -65,8 +73,25 @@ struct CollapsedUsageBar: Identifiable {
             ? NSColor(white: 0.88, alpha: 1) : NSColor(white: 0.18, alpha: 1)
     })
 
+    /// Lock any provider ring when one of its quota windows is exhausted (0% left).
+    /// The ring unlocks at the latest reset among exhausted windows; a window without a
+    /// machine-readable reset locks with an unknown unlock time. A reset already in the past
+    /// means the 0% is old data, so it does not lock.
+    static func quotaBlock(_ windows: [UsageLimit], now: Date) -> ClaudeBlock? {
+        // Machine-readable reset first, then the shown reset text ("Resets 10/30 14:00"), else unknown.
+        func unlock(_ w: UsageLimit) -> Date {
+            w.resetAt ?? RingResetFormat.date(fromResetText: w.resetText, now: now) ?? .distantFuture
+        }
+        let exhausted = windows.filter { $0.leftPercent < 0.5 && unlock($0) > now }
+        guard let window = exhausted.max(by: { unlock($0) < unlock($1) }) else { return nil }
+        let kind: ClaudeBlock.Kind = ServiceRowModel.kind(window.title) == .week ? .weekly : .session
+        return ClaudeBlock(kind: kind, resetAt: unlock(window), timeZoneKnown: true)
+    }
+
     static func bars(for snapshot: MultiUsageSnapshot,
-                     blockedPreview: String? = ProcessInfo.processInfo.environment["MULTIUSAGE_PREVIEW_BLOCKED"]) -> [Self] {
+                     blockedPreview: String? = ProcessInfo.processInfo.environment["MULTIUSAGE_PREVIEW_BLOCKED"],
+                     splitAntigravityAccounts: Bool = false,
+                     accountPreferences: AccountPreferences = AccountPreferences()) -> [Self] {
         func windows(_ provider: ProviderID) -> [UsageLimit] {
             snapshot.sections.filter { $0.provider == provider }.flatMap(\.windows)
         }
@@ -82,54 +107,144 @@ struct CollapsedUsageBar: Identifiable {
         }
         // Order (left to right) matches the window (top to bottom):
         // Codex, Claude 5h, Grok, GLM 5h, Antigravity.
-        let codexWindows = windows(.codex)
-        let codexExtras = snapshot.sections.first { $0.provider == .codex }?.codexExtras
-        var bars = [Self(id: "codex", label: "C", title: "Codex", providerColor: codexColor,
-                         limit: lowest(codexWindows), windows: codexWindows, codexExtras: codexExtras)]
+        func accountBars(_ provider: ProviderID, label: String, color: Color, preferFiveHour: Bool = false) -> [Self] {
+            let section = snapshot.sections.first { $0.provider == provider }
+                ?? ProviderSection(provider: provider, windows: [], stats: [], failureText: nil)
+            guard section.accountIndices.count > 1 else {
+                let account = section.forAccount(section.displayAccounts.first?.index ?? 0)
+                return [Self(id: provider.rawValue, label: label, title: provider.displayName,
+                             providerColor: color, limit: preferFiveHour ? fiveHour(section.windows) : lowest(section.windows), windows: section.windows,
+                             codexExtras: account.codexExtras, zaiResetTickets: section.zaiResetTickets,
+                             stats: section.stats, failureText: section.accounts.first?.failureText ?? (section.isStale ? section.failureText : nil), provider: provider,
+                             accountIndex: section.displayAccounts.first?.index ?? 0,
+                             accountID: section.displayAccounts.first?.id)]
+            }
+            return section.accountIndices.map { index in
+                let account = section.forAccount(index)
+                let suffix = ProviderSection.accountSuffix(index)
+                return Self(id: "\(provider.rawValue)-\(index)", label: suffix,
+                            title: "\(provider.displayName) \(suffix)", providerColor: color,
+                            limit: preferFiveHour ? fiveHour(account.windows) : lowest(account.windows), windows: account.windows,
+                            codexExtras: account.codexExtras, zaiResetTickets: index == 0 ? section.zaiResetTickets : nil,
+                            stats: account.stats, failureText: account.failureText, provider: provider,
+                            accountIndex: index, accountID: section.accountID(at: index))
+            }
+        }
+        var bars = accountBars(.codex, label: "C", color: codexColor)
         let claude = windows(.claude)
-        let blocks = snapshot.sections.first { $0.provider == .claude }?.claudeBlocks ?? [:]
-        let accountCount = max(2, (claude.compactMap(\.accountIndex).max() ?? 0) + 1)
-        for index in 0..<accountCount {
+        let claudeSection = snapshot.sections.first { $0.provider == .claude }
+        let claudeIndices = claudeSection?.accountIndices ?? []
+        for index in claudeIndices.isEmpty ? [0, 1] : claudeIndices {
             let label = String(UnicodeScalar(65 + min(index, 25))!)
             let accountWindows = claude.filter { ($0.accountIndex ?? 0) == index }
             let preview = index == 1 && (blockedPreview == "lock" || blockedPreview == "pause")
             bars.append(Self(id: "claude-\(index)", label: label, title: "Claude \(label) 5h",
                              providerColor: index == 0 ? claudeAColor : claudeBColor,
                              limit: fiveHour(accountWindows), windows: accountWindows,
-                             block: preview ? Self.previewBlock : blocks[index],
-                             blockedSymbolName: preview && blockedPreview == "pause" ? Self.blockedPauseSymbol : Self.blockedSymbol))
+                             block: preview ? Self.previewBlock : Self.quotaBlock(accountWindows, now: snapshot.updatedAt),
+                             blockedSymbolName: preview && blockedPreview == "pause" ? Self.blockedPauseSymbol : Self.blockedSymbol,
+                             stats: claudeSection?.forAccount(index).stats ?? [],
+                             failureText: claudeSection?.forAccount(index).failureText,
+                             provider: .claude, accountIndex: index,
+                             accountID: claudeIndices.isEmpty ? nil : claudeSection?.accountID(at: index)))
         }
-        let grokWindows = windows(.grok)
-        bars.append(Self(id: "grok", label: "X", title: "Grok", providerColor: grokColor,
-                         limit: lowest(grokWindows), windows: grokWindows))
-        let zaiWindows = windows(.zai)
-        bars.append(Self(id: "zai", label: "Z", title: "GLM 5h", providerColor: glmColor,
-                         limit: fiveHour(zaiWindows), windows: zaiWindows,
-                         zaiResetTickets: snapshot.sections.first { $0.provider == .zai }?.zaiResetTickets))
-        let required = ["Gemini 4 Argon", "Gemini Models", "Claude and GPT models"]
-        let antigravity = Dictionary(grouping: windows(.antigravity)) { window in
-            let name = window.title.components(separatedBy: " · ")[0]
-            if let exact = required.first(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { return exact }
-            // CLI-style titles ("Gemini weekly", "Claude/GPT 5-hour"): fold into the same group.
-            let short = ServiceRowModel.antigravityName(ServiceRowModel.groupName(window.title))
-            return required.first { ServiceRowModel.antigravityName($0) == short } ?? short
+        let lockedProfiles = Set(bars.filter { $0.provider == .claude && $0.isBlocked }.compactMap(\.accountIndex))
+        for notice in claudeSection?.claudeProfileNotices ?? [] {
+            // That account's quota ring already shows the lock; don't add a second, unlabeled one.
+            let quotaLocked = lockedProfiles.contains(notice.profile)
+            let block = notice.block.flatMap { $0.isActive(at: snapshot.updatedAt) && !quotaLocked ? $0 : nil }
+            guard block != nil || notice.failureText != nil else { continue }
+            bars.append(Self(id: notice.id, label: "!", title: notice.name,
+                             providerColor: claudeBColor, limit: nil, block: block,
+                             failureText: notice.failureText, provider: .claude))
         }
-        // Keep every returned group, including new groups, with Argon ahead of the main pools.
-        let names = Set(antigravity.keys).union(required).sorted { lhs, rhs in
-            func rank(_ name: String) -> Int {
-                if name.localizedCaseInsensitiveContains("argon") { return 0 }
-                if name == "Gemini Models" { return 1 }
-                if name == "Claude and GPT models" { return 2 }
-                return 3
+        bars += accountBars(.grok, label: "X", color: grokColor)
+        var zaiBars = accountBars(.zai, label: "Z", color: glmColor, preferFiveHour: true)
+        if zaiBars.count == 1 { zaiBars[0].title = "GLM 5h" }
+        bars += zaiBars
+        for provider in [ProviderID.minimax, .kimi, .deepseek] {
+            guard snapshot.sections.contains(where: { $0.provider == provider }) else { continue }
+            bars += accountBars(provider, label: String(provider.displayName.prefix(1)),
+                                color: ServiceRowModel.color(for: provider, account: 0))
+        }
+        func antigravityBars(_ windows: [UsageLimit], account: Int? = nil, accountID: AccountID? = nil,
+                            failureText: String? = nil) -> [Self] {
+            let groups = Dictionary(grouping: windows) { ServiceRowModel.antigravityGroupName($0.title) }
+            // Keep every returned group, including new groups, with Argon ahead of the main pools.
+            let names = Set(groups.keys).union(ServiceRowModel.antigravityGroupNames).sorted { lhs, rhs in
+                func rank(_ name: String) -> Int {
+                    if name.localizedCaseInsensitiveContains("argon") { return 0 }
+                    if name == "Gemini Models" { return 1 }
+                    if name == "Claude and GPT models" { return 2 }
+                    return 3
+                }
+                return rank(lhs) == rank(rhs) ? lhs < rhs : rank(lhs) < rank(rhs)
             }
-            return rank(lhs) == rank(rhs) ? lhs < rhs : rank(lhs) < rank(rhs)
+            return names.map { name in
+                let groupWindows = groups[name] ?? []
+                let prefix = account.map { "antigravity-\($0)-" } ?? "antigravity-"
+                let suffix = account.map { " \(ProviderSection.accountSuffix($0))" } ?? ""
+                return Self(id: prefix + name, label: account.map(ProviderSection.accountSuffix) ?? "G",
+                            title: name + suffix, providerColor: antigravityColor,
+                            limit: lowest(groupWindows), windows: groupWindows, failureText: failureText,
+                            provider: .antigravity, accountIndex: account, accountID: accountID)
+            }
         }
-        bars += names.map { name in
-            let groupWindows = antigravity[name] ?? []
-            return Self(id: "antigravity-\(name)", label: "G", title: name, providerColor: antigravityColor,
-                        limit: lowest(groupWindows), windows: groupWindows)
+        let antigravity = snapshot.sections.first(where: { $0.provider == .antigravity })
+        if let section = antigravity, section.accountIndices.count > 1,
+           splitAntigravityAccounts || accountPreferences.primaryAccounts[ProviderID.antigravity.rawValue] != nil ||
+                section.isStale || section.accounts.contains(where: \.isStale) {
+            bars += section.accountIndices.flatMap { index in
+                let account = section.forAccount(index)
+                return antigravityBars(account.windows, account: index, accountID: section.accountID(at: index),
+                                       failureText: account.failureText)
+            }
+        } else {
+            if let antigravity {
+                if let visible = accountPreferences.visibleSection(antigravity) {
+                    var grouped = antigravityBars(visible.windows,
+                        accountID: visible.displayAccounts.count == 1 ? visible.displayAccounts.first?.id : nil,
+                        failureText: visible.accounts.first?.failureText)
+                    if visible.displayAccounts.count > 1 {
+                        let labels = visible.displayAccounts.compactMap { accountPreferences.label(for: $0.id) }
+                        if !labels.isEmpty {
+                            for i in grouped.indices { grouped[i].title += " · " + labels.joined(separator: " / ") }
+                        }
+                    }
+                    bars += grouped
+                }
+            } else { bars += antigravityBars([]) }
         }
-        return bars
+        if snapshot.sections.contains(where: { $0.provider == .gemini }) {
+            bars += accountBars(.gemini, label: "G", color: geminiColor)
+        }
+        return bars.filter { bar in
+            if let provider = bar.provider, snapshot.hiddenProviders.contains(provider) { return false }
+            guard accountPreferences.isVisible(bar.accountID) else { return false }
+            guard let provider = bar.provider,
+                  accountPreferences.primaryAccounts[provider.rawValue] != nil,
+                  let section = snapshot.sections.first(where: { $0.provider == provider }) else { return true }
+            return bar.accountIndex == nil || bar.accountIndex == accountPreferences.primaryIndex(in: section)
+        }.map { bar in
+            var bar = bar
+            // Same lock as Claude for every other provider (Codex, GLM, Grok, DeepSeek, Antigravity, Gemini…).
+            if bar.block == nil, bar.provider != .claude {
+                // GLM: only the 5-hour window blocks coding; an exhausted MCP/tool quota is not a lock.
+                let lockable = bar.provider == .zai ? bar.windows.filter { ServiceRowModel.kind($0.title) == .five } : bar.windows
+                bar.block = Self.quotaBlock(lockable, now: snapshot.updatedAt)
+            }
+            if let provider = bar.provider, let section = snapshot.sections.first(where: { $0.provider == provider }) {
+                let account = section.accounts.first { account in
+                    if let id = bar.accountID { return account.id == id }
+                    if let index = bar.accountIndex { return account.index == index }
+                    return section.accounts.count == 1
+                }
+                bar.isStale = section.isStale || (account?.isStale ?? false)
+                if bar.isStale { bar.failureText = staleFailureText(account?.failureText ?? section.failureText) }
+            }
+            if let label = accountPreferences.label(for: bar.accountID) { bar.title += " · \(label)" }
+            return bar
+        }
     }
 }
 
@@ -138,6 +253,8 @@ struct MultiCollapsedUsageView: View {
     var barZoom: Double = 1
     var menuBarHeight: CGFloat = NSStatusBar.system.thickness
     var orientation: PanelOrientation = .horizontal
+    var splitAntigravityAccounts = false
+    var accountPreferences = AccountPreferences()
     /// Ring under the cursor (hover card); nil = none.
     var highlightedBarID: String? = nil
     static let spacing: CGFloat = 5
@@ -166,10 +283,13 @@ struct MultiCollapsedUsageView: View {
 
     static func size(for snapshot: MultiUsageSnapshot, barZoom: Double = 1,
                      menuBarHeight: CGFloat = NSStatusBar.system.thickness,
-                     orientation: PanelOrientation = .horizontal) -> CGSize {
-        let count = CGFloat(CollapsedUsageBar.bars(for: snapshot).count)
+                     orientation: PanelOrientation = .horizontal,
+                     splitAntigravityAccounts: Bool = false,
+                     accountPreferences: AccountPreferences = AccountPreferences()) -> CGSize {
+        let count = CGFloat(CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
+                                                  accountPreferences: accountPreferences).count)
         let layout = layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
-        let width = count * (layout.ringDiameter + spacing) - spacing + layout.horizontalPadding * 2
+        let width = max(1, count) * (layout.ringDiameter + spacing) - spacing + layout.horizontalPadding * 2
         return orientation == .horizontal
             ? CGSize(width: ceil(width), height: layout.tabHeight)
             : CGSize(width: layout.tabHeight, height: ceil(width))
@@ -208,18 +328,23 @@ struct MultiCollapsedUsageView: View {
     var body: some View {
         let layout = Self.layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
         let size = Self.size(for: snapshot, barZoom: barZoom, menuBarHeight: menuBarHeight,
-                             orientation: orientation)
+                             orientation: orientation, splitAntigravityAccounts: splitAntigravityAccounts,
+                             accountPreferences: accountPreferences)
         let stack = orientation == .horizontal
             ? AnyLayout(HStackLayout(spacing: Self.spacing))
             : AnyLayout(VStackLayout(spacing: Self.spacing))
         stack {
-            let rows = ServiceRowModel.rows(for: snapshot)
-            ForEach(CollapsedUsageBar.bars(for: snapshot)) { bar in
+            let rows = ServiceRowModel.rows(for: snapshot,
+                splitAntigravityAccounts: splitAntigravityAccounts || accountPreferences.primaryAccounts["antigravity"] != nil,
+                accountPreferences: accountPreferences)
+            ForEach(CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
+                                          accountPreferences: accountPreferences)) { bar in
                 let arcs = Self.g1(for: bar, rows: rows)
                 // Small sizes drop only the inner arc; the weekly % stays in the gap (see TabG1Gauge).
                 TabG1Gauge(bar: bar, outer: arcs.outer, weekly: arcs.inner,
                            diameter: layout.ringDiameter)
                 .frame(width: layout.ringDiameter, height: layout.ringDiameter)
+                .opacity(bar.isStale ? 0.55 : 1)
                 .overlay {
                     if highlightedBarID == bar.id {
                         // Hover highlight stays inside the ring frame (no layout shift).
@@ -239,8 +364,9 @@ struct MultiCollapsedUsageView: View {
 
     /// Inner arc source: the weekly window of the same service, only when the outer arc is 5h.
     static func weekly(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> ServiceRowModel? {
+        if let exact = rows.first(where: { $0.id.caseInsensitiveCompare(bar.id) == .orderedSame }) { return exact }
         let key: String
-        if bar.id.hasPrefix("claude-") { key = bar.id }
+        if bar.id.hasPrefix("claude-") || bar.id.hasPrefix("codex-") || bar.id.hasPrefix("grok-") { key = bar.id }
         else if bar.id.hasPrefix("antigravity-") { key = "antigravity-" + String(bar.id.dropFirst(12)) }
         else { key = bar.id + "-main" }
         if bar.id.hasPrefix("antigravity-") {
@@ -257,10 +383,15 @@ struct MultiCollapsedUsageView: View {
     }
 
     static func accessibilitySummary(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> String {
-        if bar.isBlocked { return "\(bar.ringName): \(CollapsedUsageBar.detailText(for: bar))" }
+        if bar.isBlocked { return "\(bar.ringName): \(bar.isStale ? "\(bar.failureText ?? "Stale"); " : "")\(CollapsedUsageBar.detailText(for: bar))" }
         let arcs = g1(for: bar, rows: rows)
         let windows = [arcs.outer, arcs.inner].compactMap { $0 }
-        guard !windows.isEmpty else { return "\(bar.ringName): No data" }
+        guard !windows.isEmpty else {
+            if let failure = bar.failureText { return "\(bar.ringName): \(failure)" }
+            let details = RingDetailCardModel.visibleStats(for: bar)
+                .map { "\($0.title): \($0.valueText)" }.joined(separator: "; ")
+            return "\(bar.ringName): \(details.isEmpty ? "No data" : details)"
+        }
         let values = windows.map { limit in
             let label: String
             switch ServiceRowModel.kind(limit.title) {
@@ -270,7 +401,7 @@ struct MultiCollapsedUsageView: View {
             }
             return "\(label): \(limit.leftText), \(limit.resetText)"
         }
-        return "\(bar.ringName): " + values.joined(separator: "; ")
+        return "\(bar.ringName): " + (bar.isStale ? "\(bar.failureText ?? "Stale"); " : "") + values.joined(separator: "; ")
     }
 
     private static func scale(for value: Double) -> CGFloat {
@@ -294,7 +425,7 @@ struct UsageRing<Label: View>: View {
         let fraction = (bar.limit?.clampedLeftPercent ?? 0) / 100
         let dark = colorScheme == .dark
         let base = bar.fillColor
-        let isGrok = bar.id == "grok"
+        let isGrok = bar.id == "grok" || bar.id.hasPrefix("grok-")
         let track = isGrok ? Color.primary.opacity(dark ? 0.16 : 0.12) : bar.providerColor.opacity(dark ? 0.22 : 0.18)
         let gradient = AngularGradient(colors: [base.lighter(dark ? 0.30 : 0.22), base],
                                        center: .center, startAngle: .degrees(0),
@@ -355,7 +486,7 @@ struct TabG1Gauge: View {
         let innerW = max(1.4, diameter * 0.08)
         let gap = max(0.7, diameter * 0.045)
         let showInner = weekly != nil && diameter >= 18
-        let isGrok = bar.id == "grok"
+        let isGrok = bar.id == "grok" || bar.id.hasPrefix("grok-")
         let track = blocked ? Color.secondary.opacity(0.45) : isGrok ? Color.primary.opacity(dark ? 0.16 : 0.12) : bar.providerColor.opacity(dark ? 0.24 : 0.20)
         let showGapText = weekly != nil && diameter >= 12
         let primaryText = outer.map { "\($0.percentInt)" } ?? "?"

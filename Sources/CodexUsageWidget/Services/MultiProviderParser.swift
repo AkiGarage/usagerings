@@ -2,8 +2,7 @@ import Foundation
 
 /// Parses CodexBarCLI usage JSON for non-codex providers into window rows.
 ///
-/// The decoder declares only structural fields, so account and identity
-/// strings in the payload are never materialized.
+/// Account metadata is reduced to a digest; credentials never enter the display model.
 enum MultiProviderParser {
     enum ParseError: LocalizedError, Equatable {
         case emptyPayload
@@ -42,6 +41,16 @@ enum MultiProviderParser {
         var secondary: RawWindow?
         var tertiary: RawWindow?
         var extraRateWindows: [ExtraRateWindow]?
+        var details: [DetailSection]?
+    }
+
+    private struct DetailSection: Decodable {
+        struct Row: Decodable {
+            var label: String
+            var value: String
+        }
+        var title: String?
+        var rows: [Row]
     }
 
     private struct Entry: Decodable {
@@ -68,10 +77,66 @@ enum MultiProviderParser {
         timeZone: TimeZone = .current
     ) throws -> ProviderSection {
         guard !data.isEmpty else { throw ParseError.emptyPayload }
+        guard let objects = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw ParseError.notAnArray
+        }
+        let entries = objects.filter { ($0["provider"] as? String).map { $0 == provider.rawValue } ?? true }
+        guard !entries.isEmpty else { throw ParseError.notAnArray }
+        var section = ProviderSection(provider: provider, windows: [], stats: [], failureText: nil)
+        for (index, entry) in entries.enumerated() {
+            let id = AccountID.codexBar(entry, provider: provider)
+                ?? (entries.count == 1 ? .singleton(provider) : nil)
+            do {
+                let payload = try JSONSerialization.data(withJSONObject: [entry])
+                let parsed = try parseSingle(payload, provider: provider, now: now, timeZone: timeZone)
+                section.windows += parsed.windows.map { window in
+                    var window = window
+                    if entries.count > 1 { window.accountIndex = index }
+                    return window
+                }
+                section.stats += parsed.stats.map { stat in
+                    var stat = stat
+                    if entries.count > 1 { stat.accountIndex = index }
+                    return stat
+                }
+                section.accounts.append(ProviderAccount(index: index, id: id))
+            } catch {
+                if entries.count == 1 { throw error }
+                section.accounts.append(ProviderAccount(index: index, failureText: "Usage unavailable", id: id))
+                section.failureText = "Some accounts unavailable"
+            }
+        }
+        return section
+    }
+
+    private static func parseSingle(
+        _ data: Data,
+        provider: ProviderID,
+        now: Date,
+        timeZone: TimeZone
+    ) throws -> ProviderSection {
+        guard !data.isEmpty else { throw ParseError.emptyPayload }
         guard try !firstEntryReportsError(data) else { throw ParseError.providerError }
 
         let entry = try decodeEntry(data)
         let usage = entry.usage
+
+        // CodexBar encodes DeepSeek's balance availability as a 0/100 primary
+        // window. It is not a quota percentage and must never become a ring.
+        if provider == .deepseek {
+            var stats: [ProviderStat] = []
+            if let balance = usage?.primary?.resetDescription, !balance.isEmpty {
+                stats.append(ProviderStat(title: "Balance", valueText: balance))
+            }
+            let labels: Set<String> = ["Today", "This month", "Last 30 days", "Requests"]
+            for detail in usage?.details ?? [] where detail.title == "Usage" {
+                for row in detail.rows where labels.contains(row.label) && !row.value.isEmpty {
+                    stats.append(ProviderStat(title: row.label, valueText: row.value))
+                }
+            }
+            guard !stats.isEmpty else { throw ParseError.noWindows }
+            return ProviderSection(provider: provider, windows: [], stats: stats, failureText: nil)
+        }
 
         var limits: [UsageLimit] = []
 
@@ -83,13 +148,10 @@ enum MultiProviderParser {
             } else {
                 title = windowTitle(windowMinutes: raw.windowMinutes, fallback: nil)
             }
-            limits.append(
-                UsageLimit(
-                    title: title,
-                    leftPercent: min(max(100 - usedPercent, 0), 100),
-                    resetText: resetText(for: raw, now: now)
-                )
-            )
+            var limit = UsageLimit(title: title, leftPercent: min(max(100 - usedPercent, 0), 100),
+                                   resetText: resetText(for: raw, now: now))
+            limit.resetAt = raw.resetsAt
+            limits.append(limit)
         }
 
         append(usage?.primary)
