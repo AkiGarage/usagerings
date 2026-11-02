@@ -21,9 +21,11 @@ block_comment() { echo 'let y = 6 /* c */' >> "$1/$(head -1 "$1/script/lint/comm
 management_url() { echo 'let u = "http://127.0.0.1:9000/v8/management/x"' >> "$1/Sources/CodexUsageWidget/Services/MultiUsageService.swift"; }
 missing_target() { mv "$1/docs" "$1/docs-gone"; }
 web_source() { echo 'let a = ["--source", "web"]' >> "$1/Sources/CodexUsageWidget/Services/MultiUsageService.swift"; }
+cli_path_literal() { echo 'let p = "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI"' >> "$1/Sources/CodexUsageWidget/Services/MultiUsageService.swift"; }
+guide_removed() { sed -i.bak 's/codexBarGuide.start()/codexBarGuide.state/' "$1/Sources/CodexUsageWidget/App/AppDelegate.swift"; }
 readme_claim() { echo 'Other sections can work independently when that helper is missing.' >> "$1/README.md"; }
 
-for case in trailing_comment block_comment management_url missing_target web_source readme_claim; do
+for case in trailing_comment block_comment management_url missing_target web_source readme_claim cli_path_literal guide_removed; do
   expect_fail "$case" "$case"
 done
 bash "$repo/script/lint.sh"

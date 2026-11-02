@@ -9,7 +9,7 @@ struct MultiUsageService: Sendable {
     private let claudeCLI: ClaudeCLIUsage?
 
     init(
-        cliPath: String = "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
+        cliPath: String = CodexBarRequirement.cliPath,
         commandRunner: CodexUsageService.CommandRunner? = nil,
         zaiTicketClient: ZaiResetTicketClient? = nil,
         claudeRateLimitMonitor: ClaudeRateLimitMonitor? = nil,

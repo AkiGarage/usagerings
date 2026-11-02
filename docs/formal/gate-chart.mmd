@@ -1,0 +1,29 @@
+---
+title: "UsageRings: first-run CodexBar check"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: good
+    lg1: bad
+    lg2: off
+    lg3: busy
+  }
+  class lg0 teal
+  class lg1 orange
+  class lg2 tan
+  class lg3 blue
+  s0: Checking for CodexBar
+  s1: Guide shown: Download / Check Again / Later
+  s2: CodexBar found, app runs
+  s3: Guide closed until next launch
+  [*] --> s0
+  s0 --> s1: look for CodexBarCLI
+  s0 --> s2: look for CodexBarCLI
+  s1 --> s3: you press Later or you press Download (opens CodexBar page)
+  s2 --> s0: app launches again
+  s3 --> s0: app launches again
+  s1 --> s2: look for CodexBarCLI
+  class s0 blue
+  class s1 orange
+  class s2 teal
+  class s3 tan

@@ -6,3 +6,5 @@ Tests/CodexUsageWidgetTests/MultiUsageServiceTests.swift
 Tests/CodexUsageWidgetTests/MultiUsageStoreTests.swift
 Tests/CodexUsageWidgetTests/SourcePolicyTests.swift
 Tests/CodexUsageWidgetTests/RetrySafetyTests.swift
+Sources/CodexUsageWidget/Support/CodexBarRequirement.swift
+Tests/CodexUsageWidgetTests/CodexBarRequirementTests.swift

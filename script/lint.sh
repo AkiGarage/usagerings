@@ -27,6 +27,13 @@ scan "CLIProxyAPI references are banned" '[Cc][Ll][Ii][Pp][Rr][Oo][Xx][Yy]|8317|
 scan "provider reads must use --source cli and must not read the Keychain" '"--source", *"(web|oauth|cookie|auto|api)"|kSecClassGenericPassword|SecItemCopyMatching' Sources
 scan "README must not claim sections work without CodexBarCLI" 'work independently when that helper is missing|独立して動作します' README.md README.ja.md
 
+path_hits="$(grep -rlE 'Contents/Helpers/CodexBarCLI' Sources 2>/dev/null | grep -v 'Support/CodexBarRequirement.swift$' || true)"
+if [[ -n "$path_hits" ]]; then
+  echo "$path_hits" >&2
+  fail "the CodexBarCLI path must come only from CodexBarRequirement.cliPath"
+fi
+grep -q 'codexBarGuide.start()' Sources/CodexUsageWidget/App/AppDelegate.swift 2>/dev/null || fail "AppDelegate must run the CodexBar first-run guide"
+
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   if [[ ! -f "$file" ]]; then

@@ -54,7 +54,7 @@ struct CodexUsageService: Sendable {
     private let commandRunner: CommandRunner?
 
     init(
-        cliPath: String = "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
+        cliPath: String = CodexBarRequirement.cliPath,
         commandRunner: CommandRunner? = nil
     ) {
         self.cliPath = cliPath
