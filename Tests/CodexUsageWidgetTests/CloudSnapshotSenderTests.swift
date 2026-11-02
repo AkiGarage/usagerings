@@ -436,4 +436,11 @@ extension CloudSnapshotSenderTests {
         XCTAssertEqual(sent.readings.first?.remainingPercent, 25)
         XCTAssertFalse(sent.readings.contains { $0.provider == "codex" })
     }
+
+    func testProviderParsersRetainObservationAndResetTimes() throws {
+        let now = Date(timeIntervalSince1970: 1_700_001_000)
+        let codex = Data(#"[{"provider":"codex","usage":{"updatedAt":"2023-11-14T22:13:20.000Z","primary":{"usedPercent":20},"secondary":null}}]"#.utf8)
+        let parsed = try CodexUsageTextParser.parseJSON(codex, now: now)
+        XCTAssertEqual(parsed.session?.observedAt, Date(timeIntervalSince1970: 1_700_000_000))
+    }
 }

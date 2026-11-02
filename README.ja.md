@@ -27,7 +27,7 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 
 **macOS 14以降**に対応します。ビルドには **Swift 5.9以降**を含むXcode Command Line Toolsと、固定バージョンのSparkleを取得するインターネット接続が必要です。使用する開発ツールを`xcode-select`で選択してください。
 
-**Codex・GLM・MiniMax・Kimi・DeepSeekの使用量表示には、CodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがなくても、ほかの取得元が設定済みなら対応する項目は独立して動作します。
+**すべての項目（Codex・Claude・Antigravity・Grok・GLM・MiniMax・Kimi・DeepSeek）の表示にCodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがない場合は、各項目にその旨を表示します。
 
 Antigravity、Grok、ClaudeはCodexBarCLIの `--source cli` だけで読みます。各社公式のCLIを使い、ブラウザーのCookieやWeb経由の取得は使いません。UsageRingsはこれらのCLIのインストールやログイン画面を持ちません。設定が足りない場合はパネルに表示します。
 

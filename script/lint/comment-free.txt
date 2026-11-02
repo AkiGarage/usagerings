@@ -5,3 +5,4 @@ Tests/CodexUsageWidgetTests/CloudSnapshotSenderTests.swift
 Tests/CodexUsageWidgetTests/MultiUsageServiceTests.swift
 Tests/CodexUsageWidgetTests/MultiUsageStoreTests.swift
 Tests/CodexUsageWidgetTests/SourcePolicyTests.swift
+Tests/CodexUsageWidgetTests/RetrySafetyTests.swift

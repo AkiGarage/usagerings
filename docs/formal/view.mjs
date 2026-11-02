@@ -4,7 +4,7 @@ export const state = (v) => ({
   pending: "Claude: waiting for first value", shown: "Ring shows usage", failed: "Ring shows a setup/error notice",
 }[v.phase]);
 export const group = (v) => ({ shown: "good", failed: "bad", hidden: "off" }[v.phase] ?? "busy");
-export const colors = { good: "green", bad: "red", off: "gray", busy: "blue" };
+export const colors = { good: "teal", bad: "orange", off: "tan", busy: "blue" };
 export const step = (a) => ({
   RefreshDisabled: "refresh runs [ring is off]", RefreshEnabled: "refresh runs [ring is on]",
   ClaudeCacheEmpty: "no cached Claude value yet", CliOk: "the CLI returns usage",

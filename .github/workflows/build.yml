@@ -25,7 +25,7 @@ jobs:
       - name: Swift version
         run: swift --version
       - name: Lint
-        run: ./script/lint.sh
+        run: ./script/lint.sh && ./script/lint-selftest.sh
       - name: Build
         run: swift build
       - name: Test

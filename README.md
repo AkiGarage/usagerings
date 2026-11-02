@@ -27,7 +27,7 @@ The dashboard refreshes about once a minute. Individual providers can cache resu
 
 Requires **macOS 14 or later**. Building requires Xcode Command Line Tools with **Swift 5.9 or later** and internet access to resolve the pinned Sparkle dependency. The command-line tools must be selected with `xcode-select`.
 
-**CodexBarCLI is still required for the Codex, GLM, MiniMax, Kimi, and DeepSeek sections.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Other sections can work independently when that helper is missing.
+**CodexBarCLI is required for every section: Codex, Claude, Antigravity, Grok, GLM, MiniMax, Kimi, and DeepSeek.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Without it, every section reports the missing helper.
 
 Antigravity, Grok, and Claude are read only through CodexBarCLI with `--source cli`, so UsageRings uses the providers' own official CLIs, never browser cookies or web fallbacks. UsageRings does not install those CLIs or provide an account-sign-in screen. Missing setup is reported in the panel.
 

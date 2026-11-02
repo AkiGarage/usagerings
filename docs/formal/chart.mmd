@@ -1,20 +1,37 @@
+---
+title: "UsageRings: reading Antigravity / Grok / Claude via official CLIs"
+---
 stateDiagram-v2
-  title: UsageRings - Antigravity / Grok / Claude via official CLIs (--source cli)
-  [*] --> Waiting
-  Waiting: Waiting for refresh
-  Hidden: Ring off (not read)
-  Asking: Asking the official CLI
-  Pending: Claude - waiting for first value
-  Shown: Ring shows usage
-  Notice: Ring shows a setup/error notice
-  Waiting --> Hidden: refresh runs [ring is off]
-  Waiting --> Asking: refresh runs [ring is on]
-  Asking --> Pending: no cached Claude value yet
-  Asking --> Asking: the CLI times out once, retry
-  Asking --> Shown: the CLI returns usage
-  Pending --> Shown: the CLI returns usage
-  Asking --> Notice: CLI missing / signed out / times out again
-  Pending --> Notice: CLI missing / signed out / times out
-  Shown --> Waiting: you turn the ring on/off, or sign in/out of the CLI
-  Notice --> Waiting: you turn the ring on/off, or install / sign in to the CLI
-  Hidden --> Waiting: you turn the ring on, or the CLI changes
+  state "Legend" as legend {
+    lg0: good
+    lg1: bad
+    lg2: off
+    lg3: busy
+  }
+  class lg0 teal
+  class lg1 orange
+  class lg2 tan
+  class lg3 blue
+  s0: Waiting for refresh
+  s1: Asking the official CLI
+  s2: Ring off (not read)
+  s3: Claude: waiting for first value
+  s4: Ring shows a setup/error notice
+  s5: Ring shows usage
+  [*] --> s0
+  s0 --> s2: refresh runs [ring is off]
+  s0 --> s1: refresh runs [ring is on]
+  s1 --> s3: no cached Claude value yet
+  s1 --> s4: CLI missing or signed out or the CLI times out again
+  s1 --> s5: the CLI returns usage
+  s2 --> s0: you turn the ring on/off or you install / sign in / sign out of the CLI
+  s3 --> s4: CLI missing or signed out or the CLI times out again
+  s4 --> s0: you turn the ring on/off or you install / sign in / sign out of the CLI
+  s3 --> s5: the CLI returns usage
+  s5 --> s0: you install / sign in / sign out of the CLI or you turn the ring on/off
+  class s0 blue
+  class s1 blue
+  class s2 tan
+  class s3 blue
+  class s4 orange
+  class s5 teal
