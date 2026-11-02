@@ -18,7 +18,7 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 | プロバイダー | データ取得元 | 必要な設定 |
 | --- | --- | --- |
 | OpenAI Codex | CodexBarCLI | CodexBarのインストールとCodex設定 |
-| Claude Code | ローカルのCLIProxyAPI。制限表示はClaude Codeログでも補完 | CLIProxyAPIの有効なClaudeアカウント |
+| Claude Code | まずCodexBarCLI。読めない時だけローカルのCLIProxyAPI（予備）。制限表示はClaude Codeログでも補完 | CodexBarCLIで読めるClaude Code、またはCLIProxyAPIの有効なClaudeアカウント |
 | Google Antigravity | ローカルのCLIProxyAPI | プロジェクトIDのある有効なAntigravityアカウント |
 | Z.ai / GLM Coding Plan | CodexBarCLI。追加情報はZ.aiのリセット券API | CodexBarのZ.ai設定 |
 | MiniMax / Kimi | CodexBarCLI | CodexBarで対象プロバイダーを設定 |
@@ -29,7 +29,9 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 
 **Codex・GLM・MiniMax・Kimi・DeepSeekの使用量表示には、CodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがなくても、ほかの取得元が設定済みなら対応する項目は独立して動作します。
 
-Claude・Antigravity・Grokには、既存のCLIProxyAPI（`http://127.0.0.1:8317/v8/management/`）と、macOS Keychainのサービス名 `cliproxyapi-management` の汎用パスワード項目に保存した管理キーが必要です。これらは別途設定してください。UsageRingsにプロキシのインストールやアカウントへのログイン画面はありません。設定が足りない場合はパネルに表示します。
+AntigravityとGrokはCLIProxyAPI経由でのみ読みます。ClaudeはCodexBarCLIで読めない時だけ使います。これらには、既存のCLIProxyAPI（`http://127.0.0.1:8317/v8/management/`）と、macOS Keychainのサービス名 `cliproxyapi-management` の汎用パスワード項目に保存した管理キーが必要です。これらは別途設定してください。UsageRingsにプロキシのインストールやアカウントへのログイン画面はありません。設定が足りない場合はパネルに表示します。
+
+UsageRingsが読む鍵: 上記Keychain項目のCLIProxyAPI管理キー（接続先の確認後、ローカルのプロキシにだけ送ります）と、GLMのリセット券用にCodexBarの `~/.config/codexbar/config.json`（または `~/.codexbar/config.json`）にあるZ.aiのAPIキーです。アカウントのパスワードを求めたり読んだりはしません。
 
 GLMのリセット券詳細は追加機能です。標準のCodexBar設定にあるglobalリージョンのZ.ai APIキーを利用します。この詳細取得は、設定ファイル・API接続先の上書きや複数トークンアカウントに対応していません。
 
@@ -78,7 +80,7 @@ USAGERINGS_SIGN_IDENTITY='Your signing identity' ./script/build_and_run.sh usage
 
 ## アプリ本体は小さめ
 
-開発者が比較したアプリ本体の参考サイズは、**CodexBarが163 MB、UsageRingsが7.3 MB**です。特定のビルドのディスク上のサイズであり、RAM使用量や全ビルドでの保証値ではありません。UsageRings側の値には、引き続き必要なCodexBarCLIのインストールや、任意のCLIProxyAPIサービスを含みません。UsageRingsは小さな表示に用途を絞っており、CodexBarの幅広いアカウント管理機能を置き換えるものではありません。
+開発者が比較したアプリ本体の参考サイズは、**CodexBarが163 MB、UsageRingsが7.3 MB**です。特定のビルドのディスク上のサイズであり、RAM使用量や全ビルドでの保証値ではありません。UsageRings側の値には、引き続き必要なCodexBarCLIのインストールや、CLIProxyAPIサービス（AntigravityとGrokに必要、Claudeでは予備）を含みません。UsageRingsは小さな表示に用途を絞っており、CodexBarの幅広いアカウント管理機能を置き換えるものではありません。
 
 ## スクリーンショット
 

@@ -18,7 +18,7 @@ The dashboard refreshes about once a minute. Individual providers can cache resu
 | Provider | Data source | Required setup |
 | --- | --- | --- |
 | OpenAI Codex | CodexBarCLI | CodexBar installed and its Codex provider configured |
-| Claude Code | Local CLIProxyAPI; local Claude Code logs supplement limit notices | An enabled Claude account in CLIProxyAPI |
+| Claude Code | CodexBarCLI first; local CLIProxyAPI only as a fallback; local Claude Code logs supplement limit notices | Claude Code usage readable by CodexBarCLI, or an enabled Claude account in CLIProxyAPI |
 | Google Antigravity | Local CLIProxyAPI | An enabled Antigravity account with a project ID |
 | Z.ai / GLM Coding Plan | CodexBarCLI; Z.ai reset-ticket API for optional detail | CodexBar's Z.ai provider configured |
 | MiniMax / Kimi | CodexBarCLI | The corresponding provider configured in CodexBar |
@@ -29,7 +29,9 @@ Requires **macOS 14 or later**. Building requires Xcode Command Line Tools with 
 
 **CodexBarCLI is still required for the Codex, GLM, MiniMax, Kimi, and DeepSeek sections.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Other sections can work independently when that helper is missing.
 
-For Claude, Antigravity, and Grok, UsageRings expects an existing CLIProxyAPI service at `http://127.0.0.1:8317/v8/management/` and its management key in a macOS Keychain generic-password item with the service name `cliproxyapi-management`. Configure these separately; UsageRings does not install the proxy or provide an account-sign-in screen. Missing setup is reported in the panel.
+Antigravity and Grok are read only through CLIProxyAPI; Claude uses it only when CodexBarCLI has no reading. For these, UsageRings expects an existing CLIProxyAPI service at `http://127.0.0.1:8317/v8/management/` and its management key in a macOS Keychain generic-password item with the service name `cliproxyapi-management`. Configure these separately; UsageRings does not install the proxy or provide an account-sign-in screen. Missing setup is reported in the panel.
+
+Keys UsageRings reads: the CLIProxyAPI management key from that Keychain item (sent only to the local proxy after the peer check), and the Z.ai API key from CodexBar's `~/.config/codexbar/config.json` (or `~/.codexbar/config.json`) for GLM reset tickets. It never asks for or reads your account passwords.
 
 Optional GLM reset-ticket details use the default CodexBar configuration's global-region Z.ai API key. Custom config/API-host overrides and multiple token accounts are not supported by that detail reader.
 
@@ -78,7 +80,7 @@ Local Claude monitoring reads bounded recent log tails from `~/.claude/projects`
 
 ## A lighter app bundle
 
-The maintainer's reference app-bundle comparison is **CodexBar: 163 MB** versus **UsageRings: 7.3 MB**. These are on-disk bundle sizes from a particular build, not RAM measurements or a guarantee for every build. The UsageRings figure excludes the still-required CodexBarCLI installation and optional CLIProxyAPI service. UsageRings focuses on the floating display and does not replace CodexBar's broader account-management features.
+The maintainer's reference app-bundle comparison is **CodexBar: 163 MB** versus **UsageRings: 7.3 MB**. These are on-disk bundle sizes from a particular build, not RAM measurements or a guarantee for every build. The UsageRings figure excludes the still-required CodexBarCLI installation and the CLIProxyAPI service (needed for Antigravity and Grok, a fallback for Claude). UsageRings focuses on the floating display and does not replace CodexBar's broader account-management features.
 
 ## Screenshots
 
