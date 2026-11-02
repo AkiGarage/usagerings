@@ -140,7 +140,7 @@ struct ServiceRowModel: Identifiable {
         let splitAccounts = provider != .antigravity || splitAntigravityAccounts || section.isStale || section.accounts.contains(where: \.isStale)
         if splitAccounts, section.accountIndices.count > 1 {
             return section.accountIndices.flatMap { index in
-                rows(for: section.forAccount(index), showAccounts: showAccounts,
+                Self.rows(for: section.forAccount(index), showAccounts: showAccounts,
                      accountPreferences: accountPreferences).map { row in
                     var row = row
                     if provider == .antigravity {
