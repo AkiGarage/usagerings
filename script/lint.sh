@@ -25,6 +25,7 @@ scan() {
 
 scan "CLIProxyAPI references are banned" '[Cc][Ll][Ii][Pp][Rr][Oo][Xx][Yy]|8317|v[0-9]+/management' Sources Tests script README.md README.ja.md SECURITY.md docs
 scan "provider reads must use --source cli and must not read the Keychain" '"--source", *"(web|oauth|cookie|auto|api)"|kSecClassGenericPassword|SecItemCopyMatching' Sources
+scan "isolated deinit needs Swift 6.2 but CI runs Swift 6.1" '(^|[^a-zA-Z])isolated deinit' Sources Tests
 scan "README must not claim sections work without CodexBarCLI" 'work independently when that helper is missing|独立して動作します' README.md README.ja.md
 
 path_hits="$(grep -rlE 'CodexBar\.app|Helpers/CodexBarCLI' Sources Tests 2>/dev/null | grep -v 'Support/CodexBarRequirement.swift$' || true)"

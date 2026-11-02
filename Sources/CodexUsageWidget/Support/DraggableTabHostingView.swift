@@ -198,8 +198,8 @@ final class DraggableTabHostingView<Content: View>: NSHostingView<Content> {
 /// swallows events. Returns nil if the system refuses the tap.
 @MainActor
 final class GestureEventTap {
-    private var tap: CFMachPort?
-    private var source: CFRunLoopSource?
+    nonisolated(unsafe) private var tap: CFMachPort?
+    nonisolated(unsafe) private var source: CFRunLoopSource?
     private let handler: (NSEvent) -> Void
 
     init?(handler: @escaping (NSEvent) -> Void) {
@@ -236,13 +236,17 @@ final class GestureEventTap {
     }
 
     func invalidate() {
+        teardown()
+    }
+
+    nonisolated private func teardown() {
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
         source = nil
         tap = nil
     }
 
-    isolated deinit {
-        invalidate()
+    deinit {
+        teardown()
     }
 }
