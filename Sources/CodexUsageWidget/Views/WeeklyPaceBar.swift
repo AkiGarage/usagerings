@@ -30,7 +30,7 @@ struct WeeklyPace: Equatable {
         self.now = now
         usedPercent = 100 - limit.clampedLeftPercent
         let reset = limit.resetAt ?? RingResetFormat.date(fromResetText: limit.resetText, now: now)
-        if let reset, reset > now, reset.timeIntervalSince(rawNow) <= period + Self.freshWindowSlack {
+        if let reset, reset > rawNow, reset.timeIntervalSince(rawNow) <= period + Self.freshWindowSlack {
             let start = reset.addingTimeInterval(-period)
             self.reset = reset
             self.start = start
@@ -38,7 +38,7 @@ struct WeeklyPace: Equatable {
             unknownReason = nil
         } else {
             self.reset = nil; start = nil; elapsedPercent = nil
-            unknownReason = reset == nil ? "リセット 不明" : reset! <= now ? "リセット 不明/要更新（時刻を過ぎました）" : (period == Self.fiveHours ? "リセット 不明（5時間より先）" : "リセット 不明（1週間より先）")
+            unknownReason = reset == nil ? "リセット 不明" : reset! <= rawNow ? "リセット 不明/要更新（時刻を過ぎました）" : (period == Self.fiveHours ? "リセット 不明（5時間より先）" : "リセット 不明（1週間より先）")
         }
     }
 
@@ -72,8 +72,9 @@ struct WeeklyPace: Equatable {
     }
     var recoverText: String? { reset.map { Self.recoverText(reset: $0, now: now) } }
     static func recoverText(reset: Date, now: Date) -> String {
-        let wholeMinuteNow = (now.timeIntervalSince1970 / 60).rounded(.down) * 60
-        let total = max(1, Int(((reset.timeIntervalSince1970 - wholeMinuteNow) / 60).rounded(.up)))
+        let resetMinute = Int((reset.timeIntervalSince1970 / 60).rounded(.down))
+        let nowMinute = Int((now.timeIntervalSince1970 / 60).rounded(.down))
+        let total = max(1, resetMinute - nowMinute)
         let days = total / 1440, hours = total % 1440 / 60, minutes = total % 60
         let span = (days > 0 ? "\(days)日" : "") + (days > 0 || hours > 0 ? "\(hours)時間" : "") + "\(minutes)分"
         return "あと\(span)で回復（\(day(reset)) JST）"

@@ -177,7 +177,7 @@ struct RingDetailCardModel: Equatable {
     var isStale = false
 
     func orderedRows(_ kind: ServiceRowModel.Kind) -> [Row] { rows.filter { $0.kind == kind } }
-    func simpleShowsRecoveryPerRow(now: Date) -> Bool { rows.contains { $0.recoverText(now: now) != nil } }
+    func simpleShowsRecoveryPerRow(now: Date) -> Bool { !rows.isEmpty && rows.allSatisfy { $0.recoverText(now: now) != nil } }
     /// In 詳細 mode a 5h/weekly row is shown as a plain row only if it has no detail bar.
     var detailFallbackRows: [Row] {
         let five = paces.filter(\.isFiveHour).count, week = paces.count - five

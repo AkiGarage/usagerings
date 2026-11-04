@@ -58,14 +58,26 @@ final class RecoveryCountdownTests: XCTestCase {
         XCTAssertFalse(pace.footerText.contains("今の期間"))
     }
 
+    func testCountdownCountsClockMinutesToTheShownTime() {
+        let now = date(2026, 11, 4, 9, 52).addingTimeInterval(50)
+        XCTAssertEqual(WeeklyPace.recoverText(reset: now.addingTimeInterval(15), now: now), "あと1分で回復（11/4 09:53 JST）")
+    }
+
+    func testJustPassedResetIsNotCountedDown() {
+        let now = date(2026, 11, 4, 10, 0).addingTimeInterval(12)
+        var limit = UsageLimit(title: "5h", leftPercent: 50, resetText: "")
+        limit.resetAt = now.addingTimeInterval(-2)
+        XCTAssertNil(WeeklyPace(label: "5時間枠", limit: limit, now: now, period: WeeklyPace.fiveHours).recoverText)
+    }
+
     func testRingCardSimpleRowsCarryRecovery() throws {
         let now = date(2026, 11, 4, 9, 52).addingTimeInterval(41)
         var five = UsageLimit(title: "Account B · 5h", leftPercent: 39, resetText: ""); five.resetAt = now.addingTimeInterval(98 * 60)
         var week = UsageLimit(title: "Account B · Weekly", leftPercent: 73, resetText: ""); week.resetAt = now.addingTimeInterval(16 * 3600)
         let row5 = RingDetailCardModel.Row(label: "5時間枠", leftPercent: 39, kind: .five, resetAt: five.resetAt)
         let rowW = RingDetailCardModel.Row(label: "週の枠", leftPercent: 73, kind: .week, resetAt: week.resetAt)
-        XCTAssertEqual(row5.recoverText(now: now), "あと1時間39分で回復（11/4 11:30 JST）")
-        XCTAssertEqual(rowW.recoverText(now: now), "あと16時間1分で回復（11/5 01:52 JST）")
+        XCTAssertEqual(row5.recoverText(now: now), "あと1時間38分で回復（11/4 11:30 JST）")
+        XCTAssertEqual(rowW.recoverText(now: now), "あと16時間0分で回復（11/5 01:52 JST）")
         XCTAssertNil(RingDetailCardModel.Row(label: "MCP", leftPercent: 10, kind: .other, resetAt: week.resetAt).recoverText(now: now))
     }
 
