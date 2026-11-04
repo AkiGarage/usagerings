@@ -18,6 +18,8 @@ struct WeeklyPace: Equatable {
     /// Why there is no marker: reset unknown, already passed, or farther than a week away.
     let unknownReason: String?
 
+    static let freshWindowSlack: TimeInterval = 120
+
     init(label: String, limit: UsageLimit, now rawNow: Date, period: TimeInterval = WeeklyPace.week) {
         // Minute precision: keeps the pace Equatable across quick refreshes with unchanged data,
         // so the hover card is not rebuilt every few seconds (captions show minutes anyway).
@@ -28,7 +30,7 @@ struct WeeklyPace: Equatable {
         self.now = now
         usedPercent = 100 - limit.clampedLeftPercent
         let reset = limit.resetAt ?? RingResetFormat.date(fromResetText: limit.resetText, now: now)
-        if let reset, reset > now, reset.timeIntervalSince(now) <= period {
+        if let reset, reset > now, reset.timeIntervalSince(rawNow) <= period + Self.freshWindowSlack {
             let start = reset.addingTimeInterval(-period)
             self.reset = reset
             self.start = start
@@ -68,18 +70,19 @@ struct WeeklyPace: Equatable {
         guard todayTarget != nil else { return nil }
         return blocked ? "今日の目安：使用不可" : todayText(basis)
     }
-    /// 5h caption: "あと1時間20分で回復（20:00）".
-    var recoverText: String? {
-        guard isFiveHour, let reset else { return nil }
-        let m = max(1, Int((reset.timeIntervalSince(now) / 60).rounded(.up)))
-        let c = RingResetFormat.tokyoCalendar.dateComponents([.hour, .minute], from: reset)
-        let at = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
-        return "あと\(m >= 60 ? "\(m / 60)時間\(m % 60)分" : "\(m)分")で回復（\(at) JST）"
+    var recoverText: String? { reset.map { Self.recoverText(reset: $0, now: now) } }
+    static func recoverText(reset: Date, now: Date) -> String {
+        let wholeMinuteNow = (now.timeIntervalSince1970 / 60).rounded(.down) * 60
+        let total = max(1, Int(((reset.timeIntervalSince1970 - wholeMinuteNow) / 60).rounded(.up)))
+        let days = total / 1440, hours = total % 1440 / 60, minutes = total % 60
+        let span = (days > 0 ? "\(days)日" : "") + (days > 0 || hours > 0 ? "\(hours)時間" : "") + "\(minutes)分"
+        return "あと\(span)で回復（\(day(reset)) JST）"
     }
+    var resetStatusText: String { recoverText ?? unknownReason ?? "リセット 不明" }
     func valueText(_ basis: UsageBasis) -> String { basis.valueText(leftPercent: 100 - usedPercent) }
     /// "週の枠" -> "週の詳細"; other labels keep their name so several weekly sections stay distinguishable.
     var detailTitle: String { label.contains("週の枠") ? label.replacingOccurrences(of: "週の枠", with: "週の詳細") : "\(label)の詳細" }
-    static let helpText = "今日の目安：毎日同じだけ使った場合に今日の終わり時点での週の合計の目安で、（あと/超過）は今の使用量からリアルタイムに計算します。今の期間：この週の制限が数えられる期間で、終わりの時刻にリセットされます。"
+    static let helpText = "今日の目安：毎日同じだけ使った場合に今日の終わり時点での週の合計の目安で、（あと/超過）は今の使用量からリアルタイムに計算します。回復：この枠がリセットされるまでの残り時間と、その日時（日本時間）です。"
 
     /// used - even share, in percentage points; positive means ahead of pace.
     var delta: Int? { elapsedPercent.map { Int((usedPercent - $0).rounded()) } }
@@ -107,9 +110,7 @@ struct WeeklyPace: Equatable {
         let c = RingResetFormat.tokyoCalendar.dateComponents([.month, .day, .hour, .minute], from: date)
         return String(format: "%d/%d %02d:%02d", c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0)
     }
-    var rangeText: String { start == nil ? (unknownReason ?? "リセット 不明") : "今の期間：\(Self.day(start))〜\(Self.day(reset))" }
-    /// Bottom line: reset range plus today's allowance when known.
-    var footerText: String { todayText.map { "\(rangeText) ・ \($0)" } ?? rangeText }
+    var footerText: String { todayText.map { "\(resetStatusText) ・ \($0)" } ?? resetStatusText }
 
     /// Every weekly window of a list.
     static func all(_ windows: [UsageLimit], now: Date, label: (UsageLimit) -> String) -> [WeeklyPace] {
@@ -170,13 +171,10 @@ struct WeeklyPaceBar: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(pace.paceText(basis))
                     .foregroundStyle(pace.tone == .over && !blocked ? CollapsedUsageBar.warningColor : .secondary)
-                if let t = pace.recoverText {
-                    Text(t).foregroundStyle(.primary)
-                }
+                Text(pace.resetStatusText).foregroundStyle(pace.recoverText == nil ? .secondary : .primary)
                 if let t = pace.todayText(basis, blocked: blocked) {
                     Text(t).foregroundStyle(pace.todayOver && !blocked ? CollapsedUsageBar.warningColor : .primary)
                 }
-                Text(pace.rangeText).foregroundStyle(.secondary)
                 if showLegend {
                     Text(basis.directionText).font(UsageLayout.legendFont).foregroundStyle(.tertiary)
                 }
@@ -186,7 +184,7 @@ struct WeeklyPaceBar: View {
             .help(WeeklyPace.helpText)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(pace.label) \(pace.valueText(basis))、\(pace.paceText(basis))、\(pace.recoverText ?? pace.footerText)")
+        .accessibilityLabel("\(pace.label) \(pace.valueText(basis))、\(pace.paceText(basis))、\(pace.footerText)")
     }
 
     private var bar: some View {

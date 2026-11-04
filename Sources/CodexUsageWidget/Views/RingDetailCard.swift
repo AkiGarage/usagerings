@@ -118,6 +118,11 @@ struct RingDetailCardModel: Equatable {
         let leftPercent: Double
         /// Window kind, for ordering (5h on top, then the weekly pace bars, then the rest).
         var kind: ServiceRowModel.Kind = .other
+        var resetAt: Date? = nil
+        func recoverText(now: Date) -> String? {
+            guard kind != .other, let resetAt, resetAt > now else { return nil }
+            return WeeklyPace.recoverText(reset: resetAt, now: now)
+        }
         var severity: RingCardSeverity { RingCardSeverity.of(leftPercent: leftPercent) }
         var percentText: String { "残り \(Int(leftPercent.rounded()))%" }
     }
@@ -172,6 +177,7 @@ struct RingDetailCardModel: Equatable {
     var isStale = false
 
     func orderedRows(_ kind: ServiceRowModel.Kind) -> [Row] { rows.filter { $0.kind == kind } }
+    func simpleShowsRecoveryPerRow(now: Date) -> Bool { rows.contains { $0.recoverText(now: now) != nil } }
     /// In 詳細 mode a 5h/weekly row is shown as a plain row only if it has no detail bar.
     var detailFallbackRows: [Row] {
         let five = paces.filter(\.isFiveHour).count, week = paces.count - five
@@ -200,7 +206,10 @@ struct RingDetailCardModel: Equatable {
             }
             return RingCardLabel.label(for: window.title)
         }
-        let rows = bar.windows.map { Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent, kind: ServiceRowModel.kind($0.title)) }
+        let rows = bar.windows.map {
+            Row(label: windowLabel($0), leftPercent: $0.clampedLeftPercent, kind: ServiceRowModel.kind($0.title),
+                resetAt: $0.resetAt ?? RingResetFormat.date(fromResetText: $0.resetText, now: now, sourceTimeZone: sourceTimeZone))
+        }
         let codexExtras = bar.id == "codex" || bar.id.hasPrefix("codex-") ? bar.codexExtras : nil
         // Codex: keep each ticket's 期限 line but drop the 完全リセット title and 使用可 label (Aki t1655u, t1660u).
         let tickets = sortedTicketRows(codexExtras?.tickets ?? [], now: now).map {
@@ -424,7 +433,8 @@ struct RingDetailCardView: View {
                     }.font(caption).foregroundStyle(.secondary)
                 }
                 // 詳細 shows recovery/period under each bar, so the plain reset line is only for シンプル.
-                if style == .simple || model.paces.isEmpty, let resetText = model.resetText {
+                if (style == .simple && !model.simpleShowsRecoveryPerRow(now: Date())) || (style == .detail && model.paces.isEmpty),
+                   let resetText = model.resetText {
                     Text("リセット" + (model.resetLabel.map { "（\($0)）" } ?? "") + " \(resetText)")
                         .font(caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 }
@@ -495,6 +505,15 @@ struct RingDetailCardView: View {
 
     /// Label column | flexible bar (same width on every row) | value column.
     @ViewBuilder private func simpleRow(_ row: RingDetailCardModel.Row) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            simpleBarLine(row)
+            if let recover = row.recoverText(now: Date()) {
+                Text(recover).font(caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+            }
+        }
+    }
+
+    @ViewBuilder private func simpleBarLine(_ row: RingDetailCardModel.Row) -> some View {
         HStack(spacing: 8) {
             Text(row.label).font(UsageLayout.labelFont).foregroundStyle(.secondary).lineLimit(1)
                 .frame(width: 76, alignment: .leading)
