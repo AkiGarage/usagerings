@@ -70,21 +70,6 @@ final class ResetRefreshPlannerTests: XCTestCase {
         XCTAssertTrue(attempts.isEmpty)
     }
 
-    func testClientRecheckOncePerResetAndBoundedRetries() {
-        let fetched = t0
-        let reset = t0.addingTimeInterval(60)
-        var w = UsageLimit(title: "W", leftPercent: 1, resetText: ""); w.resetAt = reset
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: fetched, retries: 0, now: t0.addingTimeInterval(59)), .none)
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: fetched, retries: 0, now: t0.addingTimeInterval(61)), .afterReset)
-        // Refetched at +65 but provider still echoes the passed reset.
-        let refetched = t0.addingTimeInterval(65)
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: refetched, retries: 0, now: refetched.addingTimeInterval(29)), .none)
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: refetched, retries: 0, now: refetched.addingTimeInterval(30)), .staleRetry)
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: refetched, retries: 1, now: refetched.addingTimeInterval(89)), .none)
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: refetched, retries: 1, now: refetched.addingTimeInterval(90)), .staleRetry)
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: refetched, retries: 2, now: refetched.addingTimeInterval(9999)), .none)
-        XCTAssertEqual(CLIProxyClient.resetRecheck(resets: [reset], fetchedAt: nil, retries: 0, now: refetched), .none)
-    }
 }
 
 @MainActor
@@ -101,7 +86,7 @@ final class ResetRefreshStoreTests: XCTestCase {
             if slowFirst, n == 1 { Thread.sleep(forTimeInterval: 1.5) }
             let json = #"[{"provider":"zai","usage":{"primary":{"usedPercent":\#(used),"windowMinutes":300,"resetsAt":"\#(iso.string(from: at))"}}}]"#
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client(), retryDelay: 0), snapshotURLs: [])
+        }, retryDelay: 0), snapshotURLs: [])
     }
 
     private func waitForZai(_ store: MultiUsageStore, _ left: Double) async throws {

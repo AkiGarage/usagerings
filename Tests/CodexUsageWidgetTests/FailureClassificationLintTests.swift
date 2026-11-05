@@ -29,7 +29,7 @@ final class FailureClassificationLintTests: XCTestCase {
                 assertNoClassifierToOther(body: body, file: file)
             }
         }
-        XCTAssertGreaterThanOrEqual(mappingCount, 2, "expected at least the service and proxy mappings to be scanned")
+        XCTAssertGreaterThanOrEqual(mappingCount, 1, "expected the service mapping to be scanned")
     }
 
     private func failureReasonMappingBodies(in text: String) -> [String] {

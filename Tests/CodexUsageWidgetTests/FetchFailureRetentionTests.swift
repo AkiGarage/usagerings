@@ -13,7 +13,7 @@ final class FetchFailureRetentionTests: XCTestCase {
     }
 
     private func service(_ runner: @escaping CodexUsageService.CommandRunner) -> MultiUsageService {
-        MultiUsageService(commandRunner: runner, cliProxyClient: CLIProxyFixtures.client(), retryDelay: 0)
+        MultiUsageService(commandRunner: runner, retryDelay: 0)
     }
 
     private func zaiRunner(status: Int32 = 0, stdout: String? = nil, stderr: String = "") -> CodexUsageService.CommandRunner {
@@ -110,7 +110,6 @@ final class FetchFailureRetentionTests: XCTestCase {
                     ? Fixtures.commandResult(#"[{"provider":"codex","error":{"kind":"provider","code":503}}]"#, status: 1)
                     : Fixtures.commandResult("[]")
             },
-            cliProxyClient: CLIProxyFixtures.client(),
             retryDelay: 0,
             failureLog: FetchFailureLog(fileURL: url)
         )

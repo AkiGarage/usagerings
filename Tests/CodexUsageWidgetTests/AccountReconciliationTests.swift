@@ -239,48 +239,6 @@ final class AccountReconciliationTests: XCTestCase {
         XCTAssertNil(preferences.accounts[old.rawValue])
     }
 
-    func testSuccessfulEmptyProxyInventoryExpiresButFailedInventoryDoesNot() async throws {
-        let id = try identity(["accountId": "gone"], provider: .claude)
-        var preferences = AccountPreferences()
-        preferences.setLabel("Gone", for: id)
-        preferences.setPrimary(id, for: .claude)
-        preferences.reconcile(snapshot([id], provider: .claude), now: start, salt: salt)
-        let later = start.addingTimeInterval(AccountPreferences.retentionInterval + 1)
-        let failedClient = CLIProxyClient(transport: EmptyAccountInventoryTransport(status: 503), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
-        let failed = await failedClient.fetchSections(now: later)
-        preferences.reconcile(MultiUsageSnapshot(sections: failed, codexSnapshot: nil, updatedAt: later), now: later, salt: salt)
-        XCTAssertEqual(preferences.label(for: id), "Gone")
-        let emptyClient = CLIProxyClient(transport: EmptyAccountInventoryTransport(status: 200), keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
-        let empty = await emptyClient.fetchSections(now: later)
-        XCTAssertTrue(empty.allSatisfy { $0.accountInventoryComplete == true && $0.accounts.isEmpty })
-        preferences.reconcile(MultiUsageSnapshot(sections: empty, codexSnapshot: nil, updatedAt: later), now: later, salt: salt)
-        XCTAssertNil(preferences.label(for: id))
-        XCTAssertNil(preferences.primaryAccounts["claude"])
-    }
-
-    func testMalformedProxyInventoryPreservesExpiredPreferences() async throws {
-        let id = try identity(["accountId": "missing-row"], provider: .claude)
-        var preferences = AccountPreferences()
-        preferences.setLabel("Retained", for: id)
-        preferences.setPrimary(id, for: .claude)
-        preferences.reconcile(snapshot([id], provider: .claude), now: start, salt: salt)
-        let later = start.addingTimeInterval(AccountPreferences.retentionInterval + 1)
-        let payloads = [
-            #"{"files":[{"provider":"claude"}]}"#,
-            #"{"files":[{"provider":"claude ","auth_index":"fixture"}]}"#
-        ]
-        for payload in payloads {
-            let transport = EmptyAccountInventoryTransport(status: 200, payload: payload)
-            let client = CLIProxyClient(transport: transport, keyProvider: FixtureCLIProxyKey(), peerVerifier: FixtureCLIProxyPeerVerifier())
-            let sections = await client.fetchSections(now: later)
-            XCTAssertTrue(sections.allSatisfy { $0.accountInventoryComplete == false })
-            let archived = preferences.reconcile(MultiUsageSnapshot(sections: sections, codexSnapshot: nil, updatedAt: later), now: later, salt: salt)
-            XCTAssertEqual(preferences.label(for: id), "Retained")
-            XCTAssertEqual(preferences.primaryAccounts["claude"], id.rawValue)
-            XCTAssertTrue(archived.accounts.isEmpty)
-        }
-    }
-
     func testLegacyUnknownEntriesGetGraceAndRequireCompleteSuccessfulInventory() throws {
         let id = try legacyID(source: "id", value: "unknown")
         var preferences = AccountPreferences()
@@ -332,7 +290,7 @@ final class AccountReconciliationTests: XCTestCase {
             let data = try JSONSerialization.data(withJSONObject: [["provider": arguments[2],
                 "usage": ["identity": ["accountId": "account-one"], "primary": ["usedPercent": 20]]]])
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: data, stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client())
+        })
         let store = MultiUsageStore(service: service, snapshotURLs: [], preferences: preferences)
         var migratedAtDelivery = false
         let subscription = store.$snapshot.dropFirst().sink { data in
@@ -419,10 +377,3 @@ final class AccountReconciliationTests: XCTestCase {
     }
 }
 
-private struct EmptyAccountInventoryTransport: CLIProxyTransport {
-    let status: Int
-    var payload = #"{"files":[]}"#
-    func send(_ request: URLRequest) async throws -> (Data, Int) {
-        (Data(payload.utf8), status)
-    }
-}

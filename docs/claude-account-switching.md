@@ -1,16 +1,16 @@
 # Claude account switching — acceptance spec (2026-10-22)
 
 ## What is switched
-UsageRings never changes CLIProxyAPI or any running session. It only *decides* and
+UsageRings never changes any running session. It only *decides* and
 writes `~/.local/state/usagerings/claude-account-choice.json`
 (`{"order":["b","a"],"selected":"b","reason":"…","decidedAt":…,"expiresAt":…}`, valid 10 min).
 `~/.local/bin/claude-ab` reads that file (if fresh and well-formed) to choose which
 profile (claude-a / claude-b) to try first; otherwise it keeps its old order a → b.
 claude-ab still falls through to the other profile on a real limit error.
 The file is written only when (1) Settings「Claudeの使う順番を自動で決める」is on
-(default on) and (2) both CLIProxy Claude accounts are mapped to profiles a/b. Mapping is
+(default on) and (2) both CodexBarCLI Claude accounts are mapped to profiles a/b. Mapping is
 automatic: the masked e-mail in ~/.claude-a/.claude.json and ~/.claude-b/.claude.json
-(oauthAccount.emailAddress only) must each match exactly one CLIProxy account; any
+(oauthAccount.emailAddress only) must each match exactly one CodexBarCLI account; any
 ambiguity → no mapping → no file (claude-ab keeps a → b).
 
 ## Provider visibility
@@ -19,7 +19,7 @@ No choice yet → probed at most every 30 min and turned on automatically (and r
 the first time it reports configured usage; never turned off automatically.
 
 ## Inputs (per account, each refresh = 60 s)
-five-hour left % + reset time, weekly left % + reset time (CLIProxy, per account).
+five-hour left % + reset time, weekly left % + reset time (CodexBarCLI, per account).
 Log blocks are not used for the choice (log slot A mixes ~/.claude and ~/.claude-a, identity unverified).
 When the hint must not apply (setting off, unmapped, Claude hidden, no data) the file is
 overwritten with an expired hint (expiresAt 0), never deleted.
@@ -41,7 +41,7 @@ overwritten with an expired hint (expiresAt 0), never deleted.
 5. Else (all limited): the account whose limits clear soonest; state = all limited.
 6. When preferred becomes free again (5h ≥ 5 % or its 5h reset time has passed) → back to preferred.
 7. All-limited ranking: per active cause only (5h / weekly); a cause with no known future clear time counts as "unknown" and ranks last.
-8. Accounts are evaluated in profile order (a, b) regardless of CLIProxy listing order.
+8. Accounts are evaluated in profile order (a, b) regardless of CodexBarCLI listing order.
 
 Property: if any account is not limited, the selected account is never limited.
 

@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let persona: any AppPersona
     private let demoMode: DemoMode
     private let defaults: UserDefaults
+    private let codexBarGuide = CodexBarGuideController()
     private let showDemoShowcase: Bool
     private let demoHoverRing: Int?
     private let tabPresentation = EdgeTabPresentationState()
@@ -118,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         createTabPanel()
         if !demoMode.isEnabled {
             updateController = NanoUpdateController()
+            codexBarGuide.start()
         }
         persona.start()
         if let ring = demoHoverRing {

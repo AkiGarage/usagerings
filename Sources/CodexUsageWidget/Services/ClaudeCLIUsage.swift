@@ -76,7 +76,6 @@ final class ClaudeCLIUsage: Sendable {
     static let sourceTitle = "取得元"
     static let cliSource = "CodexBar CLI"
     static let cachedSource = "CodexBar CLI（前回値）"
-    static let proxySource = "CLIProxyAPI（予備）"
 
     typealias Runner = @Sendable (_ arguments: [String], _ environment: [String: String]?) async throws
         -> CodexUsageService.CommandResult
@@ -87,7 +86,6 @@ final class ClaudeCLIUsage: Sendable {
         var attemptedAt: Date?
         /// Identity CodexBar reported for this folder (salted digest only).
         var sourceID: AccountID?
-        /// Masked like CLIProxyAPI labels ("abc***@g***"); the raw email is never stored.
         var maskedEmail: String?
         var failureReason: UsageFailureReason?
         var failureMessage: String?
@@ -127,7 +125,6 @@ final class ClaudeCLIUsage: Sendable {
         var section: ProviderSection
         /// Every account's value is from this refresh cycle (none older than the interval).
         var fromCache: Bool
-        /// Per CLI account index: masked email, used to carry over old CLIProxy labels/hide settings.
         var maskedEmails: [Int: String] = [:]
     }
 
@@ -215,7 +212,7 @@ final class ClaudeCLIUsage: Sendable {
             for object in [identity, usage, account] {
                 for key in ["accountEmail", "email"] {
                     if let value = object[key] as? String, value.contains("@") {
-                        return CLIProxyParser.mask(value.trimmingCharacters(in: .whitespacesAndNewlines))
+                        return UsageText.mask(value.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
                 }
             }
@@ -337,42 +334,5 @@ final class ClaudeCLIUsage: Sendable {
         "前回値（\(UsageDurationFormat.timestamp(fetched, now: now, calendar: RingResetFormat.tokyoCalendar)) JST 取得）"
     }
 
-    /// Old CLIProxyAPI account IDs whose masked label matches exactly one CLI folder (and vice versa).
-    static func proxyAliases(cli maskedEmails: [Int: String], proxy: ProviderSection) -> [Int: [AccountID]] {
-        var proxyByMask: [String: [AccountID]] = [:]
-        for account in proxy.accounts {
-            guard let id = account.id else { continue }
-            let titles = proxy.windows.filter { $0.accountIndex == account.index }.map(\.title)
-                + proxy.stats.filter { $0.accountIndex == account.index }.map(\.title)
-            let masks = Set(titles.compactMap(ServiceRowModel.accountPrefix))
-            guard masks.count == 1, let mask = masks.first, mask != "Account" else { continue }
-            if !(proxyByMask[mask]?.contains(id) ?? false) { proxyByMask[mask, default: []].append(id) }
-        }
-        let counts = maskedEmails.values.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
-        var out: [Int: [AccountID]] = [:]
-        for (index, mask) in maskedEmails where counts[mask] == 1 {
-            if let ids = proxyByMask[mask], ids.count == 1 { out[index] = ids }
-        }
-        return out
-    }
 
-    /// CLI first; the CLIProxyAPI section only when no CLI account has a usable value.
-    static func merge(cli result: Result?, proxy: ProviderSection?) -> ProviderSection? {
-        if let result {
-            var cli = result.section
-            if let proxy {
-                for (index, ids) in proxyAliases(cli: result.maskedEmails, proxy: proxy) {
-                    guard let position = cli.accounts.firstIndex(where: { $0.index == index }),
-                          let id = cli.accounts[position].id else { continue }
-                    cli.accounts[position].id = ids.reduce(id) { $0.merging($1) }
-                }
-                cli.claudeProfileBlocks = proxy.claudeProfileBlocks
-                cli.claudeRemoteFailureText = proxy.claudeRemoteFailureText
-            }
-            return cli
-        }
-        guard var proxy else { return nil }
-        proxy.stats.append(ProviderStat(title: sourceTitle, valueText: proxySource))
-        return proxy
-    }
 }

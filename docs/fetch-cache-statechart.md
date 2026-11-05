@@ -1,7 +1,7 @@
 # 取得キャッシュの状態モデル（fetch-cache）
 
 2026-11-05 の "?" リング不具合（1回の取得失敗で前回値が消える）の修正に対する状態モデル。
-対象は `MultiUsageService` / `ClaudeCLIUsage` / `CLIProxyClient` → `MultiUsageStore.retainingStaleValues` の流れ。
+対象は `MultiUsageService` / `ClaudeCLIUsage` → `MultiUsageStore.retainingStaleValues` の流れ。
 
 ## 日本語でのルール（不変条件の元になる文）
 

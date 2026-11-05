@@ -15,6 +15,7 @@ INSTALL_DIR=""
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
+"$ROOT_DIR/script/lint.sh"
 
 if [[ "$VARIANT" == "multi" ]]; then
   APP_NAME="UsageRings"
@@ -60,7 +61,6 @@ if ! /usr/bin/otool -l "$APP_BINARY" | /usr/bin/grep -F 'path @executable_path/.
 fi
 # Local builds use ad-hoc signing. Supply your own identity when needed.
 # Stable identity keeps the designated requirement (and Keychain "Always Allow") across rebuilds;
-# ad-hoc ("-") changes the cdhash every build so macOS asks for cliproxyapi-management again.
 # Override with USAGERINGS_SIGN_IDENTITY (use "-" to force ad-hoc).
 if [[ -z "${USAGERINGS_SIGN_IDENTITY:-}" ]]; then
   USAGERINGS_SIGN_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \

@@ -17,7 +17,6 @@ struct ClaudeRemoteFetch: Sendable, Equatable {
 }
 
 struct ClaudeRateLimitMonitor: Sendable {
-    // Profile slots identify log roots, never the order of CLIProxy quota accounts.
     // The plain ~/.claude dir belongs to whichever account ~/.claude.json is
     // signed in to (it was B on the Air), so never assume it is A.
     static var defaultAccounts: [Int: [URL]] {

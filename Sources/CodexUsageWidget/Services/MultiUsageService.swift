@@ -2,7 +2,6 @@ import Foundation
 import os
 
 struct MultiUsageService: Sendable {
-    private let cliProxyClient: CLIProxyClient
     private let cliPath: String
     private let commandRunner: CodexUsageService.CommandRunner?
     private let zaiTicketClient: ZaiResetTicketClient?
@@ -12,21 +11,18 @@ struct MultiUsageService: Sendable {
     private let fetchFailureLog: FetchFailureLog?
 
     init(
-        cliPath: String = "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
+        cliPath: String = CodexBarRequirement.cliPath,
         commandRunner: CodexUsageService.CommandRunner? = nil,
-        cliProxyClient: CLIProxyClient = CLIProxyClient(),
         zaiTicketClient: ZaiResetTicketClient? = nil,
         claudeRateLimitMonitor: ClaudeRateLimitMonitor? = nil,
         claudeCLI: ClaudeCLIUsage? = nil,
         retryDelay: TimeInterval = 2.5,
         failureLog: FetchFailureLog? = nil
     ) {
-        self.cliProxyClient = cliProxyClient
         self.cliPath = cliPath
         self.commandRunner = commandRunner
         self.zaiTicketClient = zaiTicketClient ?? (commandRunner == nil ? .live() : nil)
         self.claudeRateLimitMonitor = claudeRateLimitMonitor ?? (commandRunner == nil ? .live() : nil)
-        // Live app: one shared cache so successive refreshes reuse the slow CLI probe.
         self.claudeCLI = claudeCLI ?? (commandRunner == nil ? Self.sharedClaudeCLI(cliPath) : nil)
         self.retryDelay = retryDelay
         self.fetchFailureLog = failureLog ?? (commandRunner == nil ? .live() : nil)
@@ -42,16 +38,14 @@ struct MultiUsageService: Sendable {
         }
     }
 
-    /// Never throws: a provider that fails anywhere in the chain resolves
-    /// to its own section carrying a failure reason, and the other sections
-    /// are unaffected.
     func fetchAll(
         now: Date = Date(),
         disabled: Set<ProviderID> = [],
         timeZone: TimeZone = .current,
         calendar: Calendar = .current
     ) async -> MultiUsageSnapshot {
-        async let proxySections = cliProxyClient.fetchSections(now: now, skipping: disabled)
+        async let antigravity = fetchProviderUnlessDisabled(.antigravity, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
+        async let grok = fetchProviderUnlessDisabled(.grok, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
         async let codex = fetchProviderUnlessDisabled(.codex, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
         async let zai = fetchProviderUnlessDisabled(.zai, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
         async let minimax = fetchProviderUnlessDisabled(.minimax, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
@@ -59,14 +53,15 @@ struct MultiUsageService: Sendable {
         async let deepseek = fetchProviderUnlessDisabled(.deepseek, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
         async let tickets = disabled.contains(.zai) ? nil : zaiTicketClient?.fetch()
         async let blocks = disabled.contains(.claude) ? nil : claudeRateLimitMonitor?.blocks(now: now)
-        let (codexResult, zaiResult, proxyRaw, ticketResult, blockResult) = await (codex, zai, proxySections, tickets, blocks)
+        let (codexResult, zaiResult, ticketResult, blockResult) = await (codex, zai, tickets, blocks)
         let cliClaude = disabled.contains(.claude) ? nil : claudeCLI?.section(accounts: ClaudeCLIAccountSettings.load(), now: now, timeZone: timeZone)
-        var proxy = proxyRaw
-        if claudeCLI != nil, !disabled.contains(.claude) {
-            let index = proxy.firstIndex { $0.provider == .claude }
-            let merged = ClaudeCLIUsage.merge(cli: cliClaude, proxy: index.map { proxy[$0] })
-            if let index { proxy.remove(at: index) }
-            if let merged { proxy.append(merged) }
+        var proxy = await [antigravity.section, grok.section]
+        if !disabled.contains(.claude) {
+            if claudeCLI != nil {
+                proxy.append(cliClaude?.section ?? Self.claudePendingSection)
+            } else {
+                proxy.append(await fetchProvider(.claude, now: now, timeZone: timeZone, calendar: calendar).section)
+            }
         }
         let sshFailure = disabled.contains(.claude) ? nil : await claudeRateLimitMonitor?.remoteFailureText()
         let proxyWithBlocks = proxy.map { section in
@@ -78,8 +73,6 @@ struct MultiUsageService: Sendable {
             return section
         }
         var zaiSection = zaiResult.section
-        // The optional ticket reader has no account identity; never attach its
-        // default-config inventory to an arbitrary member of a multi-account response.
         zaiSection.zaiResetTickets = zaiSection.accounts.count > 1 ? nil : ticketResult
         let additional = await [minimax.section, kimi.section, deepseek.section]
         let sections = MultiUsageSnapshot.ordered([codexResult.section, zaiSection] + additional + proxyWithBlocks)
@@ -91,7 +84,6 @@ struct MultiUsageService: Sendable {
         )
     }
 
-    /// Diagnostics contain structural quota data only, never remote text or account identity.
     private static func writeWindowDump(_ sections: [ProviderSection]) {
         guard Bundle.main.bundleIdentifier != nil, NSClassFromString("XCTestCase") == nil else { return }
         guard let url = PrivateTempPaths.file("codex-usage-widget-panel-windows.json"),
@@ -133,6 +125,10 @@ struct MultiUsageService: Sendable {
             }
         }
     }
+
+    static let claudePendingText = "Claude: CodexBar CLI の値を取得中"
+
+    static let claudePendingSection = ProviderSection(provider: .claude, windows: [], stats: [], failureText: claudePendingText)
 
     static let hiddenText = "非表示（取得していません）"
 
@@ -253,7 +249,7 @@ struct MultiUsageService: Sendable {
         timeZone: TimeZone,
         calendar: Calendar
     ) async throws -> CodexUsageService.CommandResult {
-        let arguments = ["usage", "--provider", provider.rawValue, "--format", "json", "--all-accounts"]
+        let arguments = ["usage", "--provider", provider.rawValue, "--format", "json"] + Self.sourceArguments(provider) + ["--all-accounts"]
         func attempt(_ arguments: [String]) async throws -> CodexUsageService.CommandResult {
             var retried = false
             while true {
@@ -282,7 +278,6 @@ struct MultiUsageService: Sendable {
             }
         }
         let result = try await attempt(arguments)
-        // A single API-key setup has no token accounts; try its single-account query.
         if provider != .codex, Self.isNoTokenAccounts(result.stdout) {
             return try await attempt(Array(arguments.dropLast()))
         }
@@ -298,15 +293,18 @@ struct MultiUsageService: Sendable {
                    message: Self.failureText(for: error))
     }
 
+    static func sourceArguments(_ provider: ProviderID) -> [String] {
+        switch provider {
+        case .antigravity, .grok, .claude: ["--source", "cli"]
+        case .codex, .zai, .minimax, .kimi, .deepseek, .gemini: []
+        }
+    }
+
     static func isNoTokenAccounts(_ stdout: Data) -> Bool {
         guard let rows = try? JSONSerialization.jsonObject(with: stdout) as? [[String: Any]], !rows.isEmpty else { return false }
         return rows.allSatisfy { (($0["error"] as? [String: Any])?["message"] as? String)?.hasPrefix("No token accounts configured") == true }
     }
 
-    /// Codex windows come from the contract parser; credits and tickets are
-    /// the sidecar read of what that parser drops. The parser's snapshot is
-    /// also the published artifact.
-    /// "完全リセット · 使用可 · 期限 10/23 05:56 · 付与 09/23 05:56 · codex_rate_limits" (calendar's zone = JST on the Air).
     static func ticketText(_ ticket: CodexExtrasParser.Ticket, now: Date, calendar: Calendar) -> String {
         var parts: [String] = []
         if let title = ticket.title, !title.isEmpty { parts.append(title) }
@@ -414,7 +412,6 @@ struct MultiUsageService: Sendable {
             for ticket in extras.tickets {
                 stats.append(ProviderStat(title: "Reset ticket", valueText: Self.ticketText(ticket, now: now, calendar: calendar)))
             }
-            // Machine-readable expiries of usable tickets for the vertical list (ISO 8601, UTC).
             for expiry in extras.ticketExpiries {
                 stats.append(ProviderStat(title: "Reset ticket expiry", valueText: ISO8601DateFormatter().string(from: expiry)))
             }
@@ -441,8 +438,6 @@ struct MultiUsageService: Sendable {
         )
     }
 
-    /// CodexUsageError descriptions are already sanitized and bounded; the
-    /// parser errors carry their own fixed strings.
     static func failureReason(for error: Error) -> UsageFailureReason {
         if case ProviderFailure.timedOut = error { return .timeout }
         if case ProviderFailure.logout = error { return .logout }

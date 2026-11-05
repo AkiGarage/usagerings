@@ -7,8 +7,7 @@ final class MultiUsageStoreTests: XCTestCase {
         let defaults = UserDefaults(suiteName: "CloudStoreTests-\(UUID())")!
         let preferences = PanelPreferences(defaults: defaults)
         let transport = CloudSnapshotSenderTests.MockTransport()
-        let store = MultiUsageStore(service: MultiUsageService(commandRunner: Self.successRunner,
-            cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [], preferences: preferences, cloudTransport: transport)
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: Self.successRunner), snapshotURLs: [], preferences: preferences, cloudTransport: transport)
         store.refresh()
         try await waitUntil("refresh settles") { !store.isRefreshing }
         XCTAssertTrue(transport.sent.isEmpty)
@@ -25,8 +24,7 @@ final class MultiUsageStoreTests: XCTestCase {
         let preferences = PanelPreferences(defaults: defaults)
         preferences.setProviderVisible(false, for: .codex)
         let transport = CloudSnapshotSenderTests.MockTransport()
-        let store = MultiUsageStore(service: MultiUsageService(commandRunner: Self.successRunner,
-            cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [], preferences: preferences, cloudTransport: transport)
+        let store = MultiUsageStore(service: MultiUsageService(commandRunner: Self.successRunner), snapshotURLs: [], preferences: preferences, cloudTransport: transport)
         store.refresh()
         try await waitUntil("refresh settles before opt-in") { !store.isRefreshing }
         XCTAssertTrue(transport.sent.isEmpty)
@@ -41,7 +39,7 @@ final class MultiUsageStoreTests: XCTestCase {
         let service = MultiUsageService(commandRunner: { _ in
             let json = #"[{"provider":"codex","usage":{"primary":{"usedPercent":20,"windowMinutes":300,"resetsAt":"2026-10-29T00:00:00Z"}}}]"#
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client())
+        })
         let snapshot = await service.fetchAll(disabled: Set(ProviderID.allCases.filter { $0 != .codex }))
         let limit = try XCTUnwrap(snapshot.sections.first { $0.provider == .codex }?.windows.first)
         XCTAssertEqual(limit.title, "5h")
@@ -56,7 +54,7 @@ final class MultiUsageStoreTests: XCTestCase {
         try Data("synthetic blocker".utf8).write(to: blocker)
         let fileURL = blocker.appendingPathComponent("snapshot.json")
         let store = MultiUsageStore(
-            service: MultiUsageService(commandRunner: Self.successRunner, cliProxyClient: CLIProxyFixtures.client()),
+            service: MultiUsageService(commandRunner: Self.successRunner),
             snapshotURLs: [fileURL]
         )
 
@@ -78,7 +76,7 @@ final class MultiUsageStoreTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("latest-usage-snapshot.json")
         let store = MultiUsageStore(
-            service: MultiUsageService(commandRunner: Self.successRunner, cliProxyClient: CLIProxyFixtures.client()),
+            service: MultiUsageService(commandRunner: Self.successRunner),
             snapshotURLs: [fileURL]
         )
 
@@ -103,7 +101,7 @@ final class MultiUsageStoreTests: XCTestCase {
                     )
                 }
                 return try Self.successRunner(arguments)
-            }, cliProxyClient: CLIProxyFixtures.client()),
+            }),
             snapshotURLs: []
         )
 
@@ -114,7 +112,7 @@ final class MultiUsageStoreTests: XCTestCase {
 
         XCTAssertEqual(store.snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
         XCTAssertNotNil(store.snapshot.sections[3].failureText)
-        XCTAssertEqual(store.snapshot.sections[1].windows.count, 4)
+        XCTAssertEqual(store.snapshot.sections[1].windows.count, 2)
         XCTAssertFalse(store.isRefreshing)
     }
 
@@ -128,7 +126,7 @@ final class MultiUsageStoreTests: XCTestCase {
                 return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(Self.zai.replacingOccurrences(of: "\"usedPercent\":10", with: "\"usedPercent\":35").utf8), stderr: Data())
             }
             return try Self.successRunner(args)
-        }, cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [])
+        }), snapshotURLs: [])
         store.refresh()
         try await waitUntil("first refresh") { !store.isRefreshing }
         let before = CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .zai }?.limit
@@ -158,7 +156,7 @@ final class MultiUsageStoreTests: XCTestCase {
                 return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
             }
             return try Self.successRunner(args)
-        }, cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [])
+        }), snapshotURLs: [])
         store.refresh()
         try await waitUntil("first failure") { !store.isRefreshing }
         let bar = try XCTUnwrap(CollapsedUsageBar.bars(for: store.snapshot).first { $0.provider == .zai })

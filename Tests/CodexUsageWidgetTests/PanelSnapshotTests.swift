@@ -79,7 +79,7 @@ final class PanelSnapshotTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let preferences = PanelPreferences(defaults: defaults)
-        let failure = "CLIProxyAPI request failed · account boundary stayed explicit · this safe notice must remain complete"
+        let failure = "Provider CLI request failed · account boundary stayed explicit · this safe notice must remain complete"
         let snapshot = MultiUsageSnapshot(sections: [
             ProviderSection(provider: .grok, windows: [], stats: [
                 ProviderStat(title: "Account · Monthly", valueText: "No monthly cap"),

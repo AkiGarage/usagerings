@@ -12,7 +12,7 @@ enum ClaudeAccountChoice {
             guard let data = try? Data(contentsOf: url),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let email = (root["oauthAccount"] as? [String: Any])?["emailAddress"] as? String else { continue }
-            result[key] = CLIProxyParser.mask(email)
+            result[key] = UsageText.mask(email)
         }
         return result
     }

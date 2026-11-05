@@ -59,7 +59,7 @@ final class AdditionalCodexBarProviderTests: XCTestCase {
             }
             let json = provider == "deepseek" ? AdditionalCodexBarFixtures.balance : AdditionalCodexBarFixtures.quota(provider)
             return .init(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client())
+        })
         let snapshot = await service.fetchAll()
         XCTAssertEqual(snapshot.sections.map(\.provider), MultiUsageSnapshot.displayOrder.filter { $0 != .gemini })
         for provider in [ProviderID.minimax, .deepseek] {
