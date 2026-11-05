@@ -20,7 +20,7 @@ final class SourcePolicyTests: XCTestCase {
             let service = MultiUsageService(commandRunner: { arguments in
                 calls.withLock { $0.append(arguments) }
                 return .init(terminationStatus: 1, stdout: Data(), stderr: Data())
-            })
+            }, retryDelay: 0)
             let snapshot = await service.fetchAll(disabled: disabled)
             let recorded = calls.withLock { $0 }
             for arguments in recorded {
