@@ -102,7 +102,13 @@ enum MultiProviderParser {
                 section.accounts.append(ProviderAccount(index: index, id: id))
             } catch {
                 if entries.count == 1 { throw error }
-                section.accounts.append(ProviderAccount(index: index, failureText: "Usage unavailable", id: id))
+                let message = (entry["error"] as? [String: Any])?["message"] as? String
+                section.accounts.append(ProviderAccount(
+                    index: index,
+                    failureText: "Usage unavailable",
+                    id: id,
+                    failureReason: message.map { MultiUsageService.isLogoutMessage($0) } == true ? .logout : .providerError
+                ))
                 section.failureText = "Some accounts unavailable"
             }
         }

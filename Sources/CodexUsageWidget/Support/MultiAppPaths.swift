@@ -18,4 +18,11 @@ enum MultiAppPaths {
             PrivateTempPaths.unresolvedFile("codex-usage-widget-multi", "latest-usage-snapshot.json")
         ]
     }
+
+    static func fetchFailureLogURL(fileManager: FileManager = .default) -> URL? {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("CodexUsageWidget-Multi", isDirectory: true)
+            .appendingPathComponent("fetch-failures.log")
+    }
 }

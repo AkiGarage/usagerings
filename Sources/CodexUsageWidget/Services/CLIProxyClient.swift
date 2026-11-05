@@ -157,8 +157,9 @@ actor CLIProxyClient {
         var reason: UsageFailureReason {
             switch self {
             case .transport: .transport
+            case .request, .rateLimited, .payload: .providerError
             case .upstreamAuth: .logout
-            default: .other
+            case .rejected, .unverifiedPeer, .noCredentials, .noQuota, .missingProject: .other
             }
         }
         var text: String {

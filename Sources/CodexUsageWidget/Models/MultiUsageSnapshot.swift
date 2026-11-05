@@ -47,9 +47,9 @@ struct ProviderStat: Equatable, Codable, Sendable {
 }
 
 enum UsageFailureReason: Equatable, Sendable {
-    case timeout, launchFailure, transport, logout, other
+    case timeout, launchFailure, transport, logout, providerError, other
 
-    var isTransient: Bool { self == .timeout || self == .launchFailure || self == .transport }
+    var isTransient: Bool { self == .timeout || self == .launchFailure || self == .transport || self == .providerError }
 }
 
 func staleFailureText(_ failure: String?) -> String {

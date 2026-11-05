@@ -239,7 +239,7 @@ final class GrokQuotaTests: XCTestCase {
         XCTAssertEqual(after, before.map { $0 + 2 })
     }
 
-    func testHTTPDateRetryAfterDropsWindowsOnNonTransientFailures() async throws {
+    func testHTTPDateRetryAfterDropsRateLimitedPeriodAndRetainsTransient503() async throws {
         let clock = GrokClock(), transport = GrokTransport()
         let client = client(transport, clock)
         let good = try await grok(client)
@@ -253,8 +253,11 @@ final class GrokQuotaTests: XCTestCase {
         await transport.respond(weekly: false, status: 503)
         let stale = try await grok(client)
         XCTAssertEqual(good.windows.count, 4)
-        XCTAssertFalse(stale.windows.contains { $0.accountIndex == 0 })
+        XCTAssertEqual(stale.windows.filter { $0.accountIndex == 0 && $0.title.contains("Weekly") }.count, 0)
+        XCTAssertEqual(stale.windows.filter { $0.accountIndex == 0 && $0.title.contains("Monthly") }.count, 1)
         XCTAssertEqual(stale.windows.filter { $0.accountIndex == 1 }.count, 2)
+        XCTAssertEqual(stale.accounts.first?.isStale, true)
+        XCTAssertEqual(stale.accounts.first?.failureReason, .other, "the rate-limited period still drops and dominates")
         XCTAssertNotNil(stale.failureText)
         XCTAssertTrue(stale.stats.contains { $0.valueText.contains("rate-limited") })
         XCTAssertTrue(stale.stats.contains { $0.valueText.contains("request failed") })
@@ -266,6 +269,21 @@ final class GrokQuotaTests: XCTestCase {
         _ = await client.fetchSections()
         counts = await transport.counts
         XCTAssertEqual(counts["x1"], 6)
+    }
+
+    func testProxy503RetainsLastWindowsMarkedStale() async throws {
+        let clock = GrokClock(), transport = GrokTransport()
+        let client = client(transport, clock)
+        let good = try await grok(client)
+        XCTAssertEqual(good.windows.map(\.leftPercent), [75, 90, 75, 90])
+        clock.advance(300)
+        await transport.respond(weekly: true, status: 503)
+        await transport.respond(weekly: false, status: 503)
+        let stale = try await grok(client)
+        XCTAssertEqual(stale.windows.count, 4, "one 503 poll must not drop the last good windows")
+        XCTAssertEqual(stale.accounts.first?.isStale, true)
+        XCTAssertEqual(stale.accounts.first?.failureReason, .providerError)
+        XCTAssertEqual(stale.failureText, "Some accounts unavailable")
     }
 
     func testGrok401LatchesAllProvidersAndStopsSecondCallThenRecovers() async {

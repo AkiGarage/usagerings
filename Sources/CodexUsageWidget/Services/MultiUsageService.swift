@@ -8,6 +8,8 @@ struct MultiUsageService: Sendable {
     private let zaiTicketClient: ZaiResetTicketClient?
     private let claudeRateLimitMonitor: ClaudeRateLimitMonitor?
     private let claudeCLI: ClaudeCLIUsage?
+    private let retryDelay: TimeInterval
+    private let fetchFailureLog: FetchFailureLog?
 
     init(
         cliPath: String = "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
@@ -15,7 +17,9 @@ struct MultiUsageService: Sendable {
         cliProxyClient: CLIProxyClient = CLIProxyClient(),
         zaiTicketClient: ZaiResetTicketClient? = nil,
         claudeRateLimitMonitor: ClaudeRateLimitMonitor? = nil,
-        claudeCLI: ClaudeCLIUsage? = nil
+        claudeCLI: ClaudeCLIUsage? = nil,
+        retryDelay: TimeInterval = 2.5,
+        failureLog: FetchFailureLog? = nil
     ) {
         self.cliProxyClient = cliProxyClient
         self.cliPath = cliPath
@@ -24,6 +28,8 @@ struct MultiUsageService: Sendable {
         self.claudeRateLimitMonitor = claudeRateLimitMonitor ?? (commandRunner == nil ? .live() : nil)
         // Live app: one shared cache so successive refreshes reuse the slow CLI probe.
         self.claudeCLI = claudeCLI ?? (commandRunner == nil ? Self.sharedClaudeCLI(cliPath) : nil)
+        self.retryDelay = retryDelay
+        self.fetchFailureLog = failureLog ?? (commandRunner == nil ? .live() : nil)
     }
 
     private static let claudeCLICache = OSAllocatedUnfairLock<[String: ClaudeCLIUsage]>(initialState: [:])
@@ -116,11 +122,14 @@ struct MultiUsageService: Sendable {
 
     private enum ProviderFailure: LocalizedError {
         case timedOut
+        case logout(CodexUsageError)
 
         var errorDescription: String? {
             switch self {
             case .timedOut:
                 "CodexBarCLI timed out"
+            case .logout(let error):
+                error.errorDescription
             }
         }
     }
@@ -144,28 +153,31 @@ struct MultiUsageService: Sendable {
         calendar: Calendar
     ) async -> ProviderResult {
         do {
-            let result = try await run(provider)
+            let result = try await run(provider, now: now, timeZone: timeZone, calendar: calendar)
             if result.timedOut {
                 throw ProviderFailure.timedOut
             }
-            if provider == .codex, result.terminationStatus != 0,
-               let partial = try? codexResult(from: result.stdout, now: now, timeZone: timeZone, calendar: calendar),
-               partial.section.accounts.count > 1, !partial.section.windows.isEmpty,
-               partial.section.accounts.contains(where: { $0.failureText != nil }) {
+            if let partial = partialResult(for: provider, result: result, now: now, timeZone: timeZone, calendar: calendar) {
+                if provider != .codex {
+                    for account in partial.section.accounts where account.failureText != nil {
+                        fetchFailureLog?.record(provider: "\(provider.rawValue):\(account.index)",
+                                                reason: account.failureReason ?? .providerError,
+                                                exitCode: result.terminationStatus,
+                                                message: account.failureText ?? "")
+                    }
+                }
                 return partial
             }
-            if provider != .codex, result.terminationStatus != 0,
-               let partial = try? MultiProviderParser.parse(result.stdout, provider: provider, now: now, timeZone: timeZone),
-               partial.accounts.count > 1, partial.accounts.contains(where: { $0.failureText != nil }),
-               !partial.windows.isEmpty || !partial.stats.isEmpty {
-                return ProviderResult(provider: provider, section: partial, codexSnapshot: nil)
-            }
             guard result.terminationStatus == 0 else {
-                throw CodexUsageError.commandFailure(
+                let error = CodexUsageError.commandFailure(
                     exitCode: result.terminationStatus,
                     stdout: result.stdout,
                     stderr: result.stderr
                 )
+                if Self.isLogout(stdout: result.stdout, stderr: result.stderr) {
+                    throw ProviderFailure.logout(error)
+                }
+                throw error
             }
             switch provider {
             case .codex:
@@ -180,6 +192,7 @@ struct MultiUsageService: Sendable {
                 return ProviderResult(provider: provider, section: section, codexSnapshot: nil)
             }
         } catch {
+            Self.recordFailure(fetchFailureLog, provider: provider.rawValue, error: error)
             return ProviderResult(
                 provider: provider,
                 section: ProviderSection(
@@ -194,10 +207,55 @@ struct MultiUsageService: Sendable {
         }
     }
 
-    private func run(_ provider: ProviderID) async throws -> CodexUsageService.CommandResult {
+    static func isLogout(stdout: Data, stderr: Data) -> Bool {
+        [stdout, stderr].contains { data in
+            guard let text = String(data: data, encoding: .utf8) else { return false }
+            return isLogoutMessage(text)
+        }
+    }
+
+    static func isLogoutMessage(_ text: String) -> Bool {
+        let phrases = ["not logged in", "unauthorized", "unauthorised", "no credentials",
+                       "login required", "please log in", "not authenticated"]
+        if phrases.contains(where: { text.range(of: $0, options: .caseInsensitive) != nil }) { return true }
+        guard let code401 else { return false }
+        return code401.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    private static let code401 = try? NSRegularExpression(
+        pattern: "(?:http|status|code|error|response|request)[ \\t=:\"'()/]{0,8}401(?:[^0-9]|$)",
+        options: [.caseInsensitive]
+    )
+
+    private func partialResult(
+        for provider: ProviderID,
+        result: CodexUsageService.CommandResult,
+        now: Date,
+        timeZone: TimeZone,
+        calendar: Calendar
+    ) -> ProviderResult? {
+        guard result.terminationStatus != 0 else { return nil }
+        if provider == .codex {
+            guard let partial = try? codexResult(from: result.stdout, now: now, timeZone: timeZone, calendar: calendar),
+                  partial.section.accounts.count > 1, !partial.section.windows.isEmpty,
+                  partial.section.accounts.contains(where: { $0.failureText != nil }) else { return nil }
+            return partial
+        }
+        guard let partial = try? MultiProviderParser.parse(result.stdout, provider: provider, now: now, timeZone: timeZone),
+              partial.accounts.count > 1, partial.accounts.contains(where: { $0.failureText != nil }),
+              !partial.windows.isEmpty || !partial.stats.isEmpty else { return nil }
+        return ProviderResult(provider: provider, section: partial, codexSnapshot: nil)
+    }
+
+    private func run(
+        _ provider: ProviderID,
+        now: Date,
+        timeZone: TimeZone,
+        calendar: Calendar
+    ) async throws -> CodexUsageService.CommandResult {
         let arguments = ["usage", "--provider", provider.rawValue, "--format", "json", "--all-accounts"]
-        var retried = false
         func attempt(_ arguments: [String]) async throws -> CodexUsageService.CommandResult {
+            var retried = false
             while true {
                 try Task.checkCancellation()
                 do {
@@ -209,6 +267,13 @@ struct MultiUsageService: Sendable {
                         result = try await runner.run(arguments)
                     }
                     if result.timedOut && !retried { retried = true; continue }
+                    if result.terminationStatus != 0, !retried,
+                       !Self.isLogout(stdout: result.stdout, stderr: result.stderr),
+                       partialResult(for: provider, result: result, now: now, timeZone: timeZone, calendar: calendar) == nil {
+                        retried = true
+                        if retryDelay > 0 { try? await Task.sleep(for: .seconds(retryDelay)) }
+                        continue
+                    }
                     return result
                 } catch let error as CodexUsageError {
                     if case .commandFailed(-1, _) = error, !retried { retried = true; continue }
@@ -222,6 +287,15 @@ struct MultiUsageService: Sendable {
             return try await attempt(Array(arguments.dropLast()))
         }
         return result
+    }
+
+    static func recordFailure(_ log: FetchFailureLog?, provider: String, error: Error) {
+        guard let log else { return }
+        var exitCode: Int32?
+        if case let CodexUsageError.commandFailed(code, _) = error { exitCode = code }
+        if case ProviderFailure.logout(let inner) = error, case let CodexUsageError.commandFailed(code, _) = inner { exitCode = code }
+        log.record(provider: provider, reason: Self.failureReason(for: error), exitCode: exitCode,
+                   message: Self.failureText(for: error))
     }
 
     static func isNoTokenAccounts(_ stdout: Data) -> Bool {
@@ -293,6 +367,7 @@ struct MultiUsageService: Sendable {
                     return stat
                 }
             } catch {
+                Self.recordFailure(fetchFailureLog, provider: "codex:\(index)", error: error)
                 section.accounts.append(ProviderAccount(index: index, failureText: Self.failureText(for: error), id: id, failureReason: Self.failureReason(for: error)))
                 section.failureText = "Some accounts unavailable"
             }
@@ -368,10 +443,18 @@ struct MultiUsageService: Sendable {
 
     /// CodexUsageError descriptions are already sanitized and bounded; the
     /// parser errors carry their own fixed strings.
-    private static func failureReason(for error: Error) -> UsageFailureReason {
+    static func failureReason(for error: Error) -> UsageFailureReason {
         if case ProviderFailure.timedOut = error { return .timeout }
-        if case CodexUsageError.commandFailed(-1, _) = error { return .launchFailure }
-        return .other
+        if case ProviderFailure.logout = error { return .logout }
+        switch error {
+        case let error as CodexUsageError:
+            if case .commandFailed(-1, _) = error { return .launchFailure }
+            return .providerError
+        case is MultiProviderParser.ParseError, is DecodingError:
+            return .providerError
+        default:
+            return .other
+        }
     }
 
     private static func failureText(for error: Error) -> String {

@@ -101,7 +101,7 @@ final class ResetRefreshStoreTests: XCTestCase {
             if slowFirst, n == 1 { Thread.sleep(forTimeInterval: 1.5) }
             let json = #"[{"provider":"zai","usage":{"primary":{"usedPercent":\#(used),"windowMinutes":300,"resetsAt":"\#(iso.string(from: at))"}}}]"#
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
-        }, cliProxyClient: CLIProxyFixtures.client()), snapshotURLs: [])
+        }, cliProxyClient: CLIProxyFixtures.client(), retryDelay: 0), snapshotURLs: [])
     }
 
     private func waitForZai(_ store: MultiUsageStore, _ left: Double) async throws {
@@ -124,10 +124,10 @@ final class ResetRefreshStoreTests: XCTestCase {
         XCTAssertEqual(store.snapshot.sections.first { $0.provider == .zai }?.windows.first?.leftPercent, 100,
                        "A reset must refresh the display without waiting for the 60 s poll")
         XCTAssertEqual(counts["zai"], 2, "Initial fetch + one at the reset")
-        XCTAssertEqual(counts["kimi"], 1, "Other providers are not fetched for zai's reset")
+        XCTAssertEqual(counts["kimi"], 2, "Initial fetch plus its one retry; not fetched for zai's reset")
         try await Task.sleep(nanoseconds: 1_500_000_000)
         XCTAssertEqual(counts["zai"], 2, "No further checks once the new window is shown")
-        XCTAssertEqual(counts["kimi"], 1)
+        XCTAssertEqual(counts["kimi"], 2)
     }
 
     func testResetDuringInFlightFetchIsQueuedNotDropped() async throws {
@@ -140,7 +140,7 @@ final class ResetRefreshStoreTests: XCTestCase {
         try await waitForZai(store, 100)
         XCTAssertEqual(store.snapshot.sections.first { $0.provider == .zai }?.windows.first?.leftPercent, 100)
         XCTAssertEqual(counts["zai"], 2, "The queued reset runs right after the in-flight fetch")
-        XCTAssertEqual(counts["kimi"], 1)
+        XCTAssertEqual(counts["kimi"], 2)
     }
 }
 
