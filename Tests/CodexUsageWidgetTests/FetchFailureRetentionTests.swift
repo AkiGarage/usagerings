@@ -159,6 +159,9 @@ final class FetchFailureRetentionTests: XCTestCase {
         XCTAssertEqual(stale?.section.forAccount(0).windows.isEmpty, false, "transient failure retains the young cache")
         XCTAssertEqual(stale?.section.accounts.first?.isStale, true)
         XCTAssertEqual(stale?.section.accounts.first?.failureText?.hasPrefix("前回値（"), true)
+        let displayed = MultiUsageStore.retainingStaleValues(
+            in: MultiUsageSnapshot(sections: [stale!.section], codexSnapshot: nil, updatedAt: t1), previous: nil, now: t1.addingTimeInterval(1))
+        XCTAssertEqual(displayed.sections.first?.windows.isEmpty, false, "the store must still show the cached Claude value")
     }
 
     func testClaudeAccountLogoutSuppressesCachedValueImmediately() async {

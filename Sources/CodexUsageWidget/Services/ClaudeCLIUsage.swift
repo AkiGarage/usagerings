@@ -312,7 +312,7 @@ final class ClaudeCLIUsage: Sendable {
             let lastAttemptFailed = (entry?.attemptedAt).map { $0 > entry!.fetchedAt! } ?? false
             let fromCache = age >= staleAge || lastAttemptFailed
             anyCached = anyCached || fromCache
-            combined.windows += cached.windows.map { var w = $0; w.accountIndex = index; return w }
+            combined.windows += cached.windows.map { var w = $0; w.accountIndex = index; if w.observedAt == nil { w.observedAt = entry?.fetchedAt }; return w }
             combined.stats += cached.stats.filter { $0.title != sourceTitle }.map { var s = $0; s.accountIndex = index; return s }
             combined.stats.append(ProviderStat(title: sourceTitle,
                                                valueText: "\(fromCache ? cachedSource : cliSource) · \(account.label): \(account.displayDir)",
