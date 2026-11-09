@@ -385,7 +385,7 @@ final class AccountPreferencesTests: XCTestCase {
         func fetch(_ entries: [String]) async -> ProviderSection? {
             let payload = "[" + entries.joined(separator: ",") + "]"
             let service = MultiUsageService(commandRunner: { arguments in
-                XCTAssertTrue(arguments.contains("--all-accounts"))
+                XCTAssertEqual(arguments.contains("--all-accounts"), MultiUsageService.accountScope(ProviderID(rawValue: arguments[2]) ?? .codex) == .savedAccounts)
                 let json = arguments[2] == "codex" ? payload : "[]"
                 return .init(terminationStatus: 0, stdout: Data(json.utf8), stderr: Data())
             })
@@ -414,7 +414,7 @@ final class AccountPreferencesTests: XCTestCase {
 
     func testCodexBarPartialFailureRetainsOtherAccountsOnNonzeroExit() async throws {
         let service = MultiUsageService(commandRunner: { arguments in
-            XCTAssertTrue(arguments.contains("--all-accounts"))
+            XCTAssertEqual(arguments.contains("--all-accounts"), MultiUsageService.accountScope(ProviderID(rawValue: arguments[2]) ?? .codex) == .savedAccounts)
             let provider = arguments[2]
             let payload = """
             [{"provider":"\(provider)","account":"failed","error":{"message":"synthetic-secret"}},

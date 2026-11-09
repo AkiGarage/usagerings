@@ -237,7 +237,7 @@ final class ClaudeCLIUsage: Sendable {
                     failure = (.timeout, nil, "CodexBarCLI timed out")
                 } else if result.terminationStatus != 0 {
                     let error = CodexUsageError.commandFailure(
-                        exitCode: result.terminationStatus, stdout: result.stdout, stderr: result.stderr)
+                        exitCode: result.terminationStatus, stdout: result.stdout, stderr: result.stderr, provider: .claude)
                     failure = (MultiUsageService.isLogout(stdout: result.stdout, stderr: result.stderr) ? .logout : .providerError,
                                result.terminationStatus, error.localizedDescription)
                 } else if let section = try? MultiProviderParser.parse(result.stdout, provider: .claude, now: started, timeZone: timeZone),

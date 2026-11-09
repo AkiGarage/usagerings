@@ -22,8 +22,8 @@ enum CodexUsageError: LocalizedError, Equatable {
         }
     }
 
-    static func commandFailure(exitCode: Int32, stdout: Data, stderr: Data) -> Self {
-        if let summary = CodexBarErrorTransport.sanitizedSummary(from: stdout) {
+    static func commandFailure(exitCode: Int32, stdout: Data, stderr: Data, provider: ProviderID = .codex) -> Self {
+        if let summary = CodexBarErrorTransport.sanitizedSummary(from: stdout, provider: provider) {
             return .commandFailed(exitCode, summary)
         }
         let summary = stderr.isEmpty
@@ -86,13 +86,13 @@ struct CodexUsageService: Sendable {
 private enum CodexBarErrorTransport {
     private static let knownKinds: Set<String> = ["args", "config", "provider", "runtime"]
 
-    static func sanitizedSummary(from data: Data) -> String? {
+    static func sanitizedSummary(from data: Data, provider: ProviderID) -> String? {
         guard let decoded = try? JSONSerialization.jsonObject(with: data),
               let objects = decoded as? [Any]
         else { return nil }
 
         for case let object as [String: Any] in objects {
-            guard object["provider"] as? String == "codex",
+            guard object["provider"] as? String == provider.rawValue,
                   object["error"] != nil,
                   JSONSerialization.isValidJSONObject(object),
                   let entryData = try? JSONSerialization.data(withJSONObject: object),
@@ -100,7 +100,7 @@ private enum CodexBarErrorTransport {
                   let error = entry.error
             else { continue }
 
-            var summary = "Codex provider error"
+            var summary = "\(provider.displayName) provider error"
             var details: [String] = []
             if let kind = error.kind, knownKinds.contains(kind) {
                 details.append(kind)

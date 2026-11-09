@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exhaustive state-space check for docs/FetchCache.tla (TLC is not installed here).
+"""Exhaustive state-space mirror of docs/FetchCache.tla; docs/fetch_cache_tlc.sh runs TLC on both and compares state counts.
 
 Mirrors the TLA+ spec literally: same variables, same actions, same invariants.
   python3 -B docs/fetch_cache_check.py            -> checks the spec, exit 0

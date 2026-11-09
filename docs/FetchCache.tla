@@ -6,7 +6,7 @@
    "?" may be shown only if (no good reading in the last 5h or the reset
    passed) or the account is logged out; a value must never be shown when
    logged out or expired. *)
-EXTENDS Naturals, TLC
+EXTENDS Integers, TLC
 
 CONSTANT Horizon,         \* max simulated hour
           RetainOnLogout  \* fault-injection switch: TRUE = logout wrongly keeps the value
@@ -58,7 +58,7 @@ PollSuccess ==
     /\ now' = now
 
 TransientFail ==
-    /\ shown' = IF RetainOnLogout /\ loggedOut THEN shown
+    /\ shown' = IF RetainOnLogout /\ loggedOut THEN "value"
                  ELSE IF Expired([goodAt |-> goodAt, now |-> now, reset |-> reset, loggedOut |-> loggedOut])
                           \/ goodAt = -1 \/ loggedOut
                       THEN "?" ELSE "value"
@@ -80,9 +80,10 @@ Tick ==
     /\ goodAt' = goodAt
     /\ reset' = reset
     /\ loggedOut' = loggedOut
-    /\ shown' = IF Expired([goodAt |-> goodAt, now |-> now + 1, reset |-> reset, loggedOut |-> loggedOut])
-                      \/ goodAt = -1 \/ loggedOut
-                 THEN "?" ELSE "value"
+    /\ shown' = IF RetainOnLogout /\ loggedOut THEN "value"
+                 ELSE IF Expired([goodAt |-> goodAt, now |-> now + 1, reset |-> reset, loggedOut |-> loggedOut])
+                          \/ goodAt = -1 \/ loggedOut
+                      THEN "?" ELSE "value"
 
 Next == PollSuccess \/ TransientFail \/ LogoutFail \/ Tick
 

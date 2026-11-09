@@ -168,7 +168,8 @@ struct MultiUsageService: Sendable {
                 let error = CodexUsageError.commandFailure(
                     exitCode: result.terminationStatus,
                     stdout: result.stdout,
-                    stderr: result.stderr
+                    stderr: result.stderr,
+                    provider: provider
                 )
                 if Self.isLogout(stdout: result.stdout, stderr: result.stderr) {
                     throw ProviderFailure.logout(error)
@@ -249,7 +250,7 @@ struct MultiUsageService: Sendable {
         timeZone: TimeZone,
         calendar: Calendar
     ) async throws -> CodexUsageService.CommandResult {
-        let arguments = ["usage", "--provider", provider.rawValue, "--format", "json"] + Self.sourceArguments(provider) + ["--all-accounts"]
+        let arguments = Self.usageArguments(provider)
         func attempt(_ arguments: [String]) async throws -> CodexUsageService.CommandResult {
             var retried = false
             while true {
@@ -278,7 +279,7 @@ struct MultiUsageService: Sendable {
             }
         }
         let result = try await attempt(arguments)
-        if provider != .codex, Self.isNoTokenAccounts(result.stdout) {
+        if Self.accountScope(provider) == .savedAccounts, provider != .codex, Self.isNoTokenAccounts(result.stdout) {
             return try await attempt(Array(arguments.dropLast()))
         }
         return result
@@ -291,6 +292,26 @@ struct MultiUsageService: Sendable {
         if case ProviderFailure.logout(let inner) = error, case let CodexUsageError.commandFailed(code, _) = inner { exitCode = code }
         log.record(provider: provider, reason: Self.failureReason(for: error), exitCode: exitCode,
                    message: Self.failureText(for: error))
+    }
+
+    enum CodexBarAccountScope: Equatable, Sendable {
+        case savedAccounts
+        case localLogin
+    }
+
+    static func accountScope(_ provider: ProviderID) -> CodexBarAccountScope {
+        switch provider {
+        case .antigravity, .grok, .claude: .localLogin
+        case .codex, .zai, .minimax, .kimi, .deepseek, .gemini: .savedAccounts
+        }
+    }
+
+    static func usageArguments(_ provider: ProviderID) -> [String] {
+        let scope: [String] = switch accountScope(provider) {
+        case .savedAccounts: ["--all-accounts"]
+        case .localLogin: []
+        }
+        return ["usage", "--provider", provider.rawValue, "--format", "json"] + sourceArguments(provider) + scope
     }
 
     static func sourceArguments(_ provider: ProviderID) -> [String] {

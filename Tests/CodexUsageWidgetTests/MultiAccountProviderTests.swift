@@ -5,10 +5,10 @@ final class MultiAccountProviderTests: XCTestCase {
     private func fetchCodex(_ json: String, status: Int32 = 0) async -> MultiUsageSnapshot {
         let service = MultiUsageService(commandRunner: { arguments in
             if arguments[2] == "codex" {
-                XCTAssertTrue(arguments.contains("--all-accounts"))
+                XCTAssertEqual(arguments.contains("--all-accounts"), MultiUsageService.accountScope(ProviderID(rawValue: arguments[2]) ?? .codex) == .savedAccounts)
                 return .init(terminationStatus: status, stdout: Data(json.utf8), stderr: Data())
             }
-            XCTAssertTrue(arguments.contains("--all-accounts"))
+            XCTAssertEqual(arguments.contains("--all-accounts"), MultiUsageService.accountScope(ProviderID(rawValue: arguments[2]) ?? .codex) == .savedAccounts)
             return .init(terminationStatus: 0, stdout: Data("[]".utf8), stderr: Data())
         })
         return await service.fetchAll()

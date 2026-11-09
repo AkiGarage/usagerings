@@ -28,6 +28,12 @@ scan "provider reads must use --source cli and must not read the Keychain" '"--s
 scan "isolated deinit needs Swift 6.2 but CI runs Swift 6.1" '(^|[^a-zA-Z])isolated deinit' Sources Tests
 scan "README must not claim sections work without CodexBarCLI" 'work independently when that helper is missing|独立して動作します' README.md README.ja.md
 
+account_flag_hits="$(grep -rn -- '--all-accounts' Sources 2>/dev/null || true)"
+if [[ "$(printf '%s\n' "$account_flag_hits" | grep -c .)" != "1" ]] || ! grep -q 'MultiUsageService.swift:.*case .savedAccounts: \["--all-accounts"\]' <<<"$account_flag_hits"; then
+  echo "$account_flag_hits" >&2
+  fail "--all-accounts must come only from MultiUsageService.usageArguments via accountScope (CodexBar --source cli rejects it)"
+fi
+
 path_hits="$(grep -rlE 'CodexBar\.app|Helpers/CodexBarCLI' Sources Tests 2>/dev/null | grep -v 'Support/CodexBarRequirement.swift$' || true)"
 if [[ -n "$path_hits" ]]; then
   echo "$path_hits" >&2

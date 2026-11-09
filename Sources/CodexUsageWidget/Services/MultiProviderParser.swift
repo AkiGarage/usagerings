@@ -57,6 +57,13 @@ enum MultiProviderParser {
         var usage: Usage?
     }
 
+    static func headlineWindowsRepeatSummary(_ provider: ProviderID) -> Bool {
+        switch provider {
+        case .antigravity: true
+        case .codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .gemini: false
+        }
+    }
+
     static func windowTitle(windowMinutes: Double?, fallback: String?) -> String {
         switch windowMinutes {
         case 300:
@@ -160,9 +167,12 @@ enum MultiProviderParser {
             limits.append(limit)
         }
 
-        append(usage?.primary)
-        append(usage?.secondary)
-        append(usage?.tertiary)
+        let summaryWindows = usage?.extraRateWindows ?? []
+        if !(headlineWindowsRepeatSummary(provider) && !summaryWindows.isEmpty) {
+            append(usage?.primary)
+            append(usage?.secondary)
+            append(usage?.tertiary)
+        }
         for extra in usage?.extraRateWindows ?? [] {
             append(extra.window, titleOverride: extra.title)
         }

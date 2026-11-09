@@ -26,9 +26,10 @@ guide_moved() { python3 -c "import sys;p=sys.argv[1];s=open(p).read().replace(' 
 test_path_literal() { echo 'let q = "/Applications/CodexBar.app"' >> "$1/Tests/CodexUsageWidgetTests/CodexBarRequirementTests.swift"; }
 guide_removed() { sed -i.bak 's/codexBarGuide.start()/codexBarGuide.state/' "$1/Sources/CodexUsageWidget/App/AppDelegate.swift"; }
 isolated_deinit() { printf 'final class Z {\n    isolated deinit {}\n}\n' >> "$1/Sources/CodexUsageWidget/Services/MultiUsageService.swift"; }
+all_accounts_literal() { echo 'let b = ["--all-accounts"]' >> "$1/Sources/CodexUsageWidget/Services/ClaudeCLIUsage.swift"; }
 readme_claim() { echo 'Other sections can work independently when that helper is missing.' >> "$1/README.md"; }
 
-for case in trailing_comment block_comment management_url missing_target web_source readme_claim cli_path_literal guide_removed guide_moved test_path_literal isolated_deinit; do
+for case in trailing_comment block_comment management_url missing_target web_source readme_claim cli_path_literal guide_removed guide_moved test_path_literal isolated_deinit all_accounts_literal; do
   expect_fail "$case" "$case"
 done
 bash "$repo/script/lint.sh"
