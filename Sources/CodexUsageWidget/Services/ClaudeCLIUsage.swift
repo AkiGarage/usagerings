@@ -86,8 +86,9 @@ final class ClaudeCLIUsage: Sendable {
         var attemptedAt: Date?
         /// Identity CodexBar reported for this folder (salted digest only).
         var sourceID: AccountID?
-        /// Masked account label ("abc***@g***"); the raw email is never stored.
         var maskedEmail: String?
+        var failureReason: UsageFailureReason?
+        var failureMessage: String?
     }
 
     private struct State {
@@ -102,19 +103,22 @@ final class ClaudeCLIUsage: Sendable {
     private let runner: Runner
     private let refreshInterval: TimeInterval
     private let maxCacheAge: TimeInterval
+    private let failureLog: FetchFailureLog?
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    init(runner: @escaping Runner, refreshInterval: TimeInterval = 120, maxCacheAge: TimeInterval = 600) {
+    init(runner: @escaping Runner, refreshInterval: TimeInterval = 120, maxCacheAge: TimeInterval = 600,
+         failureLog: FetchFailureLog? = nil) {
         self.runner = runner
         self.refreshInterval = refreshInterval
         self.maxCacheAge = maxCacheAge
+        self.failureLog = failureLog
     }
 
     static func live(cliPath: String, timeout: TimeInterval = 60) -> ClaudeCLIUsage {
         ClaudeCLIUsage(runner: { arguments, environment in
             try await SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
                                        environment: environment).run(arguments)
-        })
+        }, failureLog: .live())
     }
 
     struct Result {
@@ -224,16 +228,35 @@ final class ClaudeCLIUsage: Sendable {
             var parsed: ProviderSection?
             var masked: String?
             var reported: AccountID?
+            var failure: (reason: UsageFailureReason, exitCode: Int32?, message: String)?
             // Default login: blank value strips any inherited CLAUDE_CONFIG_DIR (see SubprocessRunner).
             let env = ["CLAUDE_CONFIG_DIR": account.configDir ?? ""]
-            if let result = try? await runner(Self.arguments, env), !result.timedOut, result.terminationStatus == 0,
-               let section = try? MultiProviderParser.parse(result.stdout, provider: .claude, now: started, timeZone: timeZone),
-               section.failureText == nil, !section.windows.isEmpty {
-                parsed = section
-                masked = Self.maskedEmail(result.stdout)
-                reported = Self.reportedID(result.stdout)
+            do {
+                let result = try await runner(Self.arguments, env)
+                if result.timedOut {
+                    failure = (.timeout, nil, "CodexBarCLI timed out")
+                } else if result.terminationStatus != 0 {
+                    let error = CodexUsageError.commandFailure(
+                        exitCode: result.terminationStatus, stdout: result.stdout, stderr: result.stderr)
+                    failure = (MultiUsageService.isLogout(stdout: result.stdout, stderr: result.stderr) ? .logout : .providerError,
+                               result.terminationStatus, error.localizedDescription)
+                } else if let section = try? MultiProviderParser.parse(result.stdout, provider: .claude, now: started, timeZone: timeZone),
+                          section.failureText == nil, !section.windows.isEmpty {
+                    parsed = section
+                    masked = Self.maskedEmail(result.stdout)
+                    reported = Self.reportedID(result.stdout)
+                } else {
+                    failure = (.providerError, nil, "Claude usage unreadable")
+                }
+            } catch {
+                failure = (MultiUsageService.failureReason(for: error), nil, error.localizedDescription)
+            }
+            if let failure {
+                failureLog?.record(provider: "claude-cli(\(account.label))", reason: failure.reason,
+                                   exitCode: failure.exitCode, message: failure.message, at: started)
             }
             let parsedValue = parsed, maskedValue = masked, reportedValue = reported
+            let failureValue = failure
             let current = state.withLock { s -> Bool in
                 guard s.generation == generation else { return false }
                 var entry = s.entries[Self.key(account)] ?? Entry()
@@ -242,6 +265,15 @@ final class ClaudeCLIUsage: Sendable {
                     entry.section = parsedValue; entry.fetchedAt = started
                     entry.sourceID = reportedValue
                     entry.maskedEmail = maskedValue
+                    entry.failureReason = nil
+                    entry.failureMessage = nil
+                } else if let failureValue {
+                    entry.failureReason = failureValue.reason
+                    entry.failureMessage = failureValue.message
+                    if failureValue.reason == .logout {
+                        entry.section = nil
+                        entry.fetchedAt = nil
+                    }
                 }
                 s.entries[Self.key(account)] = entry
                 return true
@@ -266,15 +298,21 @@ final class ClaudeCLIUsage: Sendable {
             let id = (salt.map { account.accountID(salt: $0) } ?? account.accountID()).merging(entry?.sourceID)
             let age = entry?.fetchedAt.map { now.timeIntervalSince($0) } ?? .infinity
             guard let cached = entry?.section, age < maxCacheAge else {
-                let text = entry?.attemptedAt == nil ? "取得中…（\(account.displayDir)）" : "取得失敗（\(account.displayDir)）"
-                combined.accounts.append(ProviderAccount(index: index, failureText: text, id: id))
+                let neverAttempted = entry?.attemptedAt == nil
+                let text = neverAttempted ? "取得中…（\(account.displayDir)）" : "取得失敗（\(account.displayDir)）"
+                combined.accounts.append(ProviderAccount(
+                    index: index,
+                    failureText: text,
+                    id: id,
+                    failureReason: neverAttempted ? nil : (entry?.failureReason ?? .providerError)
+                ))
                 continue
             }
             anyValue = true
             let lastAttemptFailed = (entry?.attemptedAt).map { $0 > entry!.fetchedAt! } ?? false
             let fromCache = age >= staleAge || lastAttemptFailed
             anyCached = anyCached || fromCache
-            combined.windows += cached.windows.map { var w = $0; w.accountIndex = index; return w }
+            combined.windows += cached.windows.map { var w = $0; w.accountIndex = index; if w.observedAt == nil { w.observedAt = entry?.fetchedAt }; return w }
             combined.stats += cached.stats.filter { $0.title != sourceTitle }.map { var s = $0; s.accountIndex = index; return s }
             combined.stats.append(ProviderStat(title: sourceTitle,
                                                valueText: "\(fromCache ? cachedSource : cliSource) · \(account.label): \(account.displayDir)",

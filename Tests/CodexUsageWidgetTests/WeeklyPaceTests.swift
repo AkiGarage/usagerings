@@ -29,14 +29,14 @@ final class WeeklyPaceTests: XCTestCase {
     func testUnknownResetHasNoMarker() {
         let p = WeeklyPace(label: "週", limit: weekly(left: 40, resetIn: nil), now: now)
         XCTAssertNil(p.elapsedPercent)
-        XCTAssertEqual(p.rangeText, "リセット 不明")
+        XCTAssertEqual(p.resetStatusText, "リセット 不明")
         XCTAssertTrue(p.paceText.contains("不明"))
     }
 
     func testPassedResetIsUnknown() {
         let p = WeeklyPace(label: "週", limit: weekly(left: 40, resetIn: -60), now: now)
         XCTAssertNil(p.elapsedPercent)
-        XCTAssertTrue(p.rangeText.contains("要更新"))
+        XCTAssertTrue(p.resetStatusText.contains("要更新"))
     }
 
     func testToneMatchesRoundedText() {
@@ -66,7 +66,7 @@ final class WeeklyPaceTests: XCTestCase {
         XCTAssertEqual(p.todayRange!.upperBound, 300.0 / 7, accuracy: 0.01)
         XCTAssertEqual(p.todayText, "今日の目安：使用43%まで（あと 2%）")
         XCTAssertTrue(p.footerText.hasSuffix("今日の目安：使用43%まで（あと 2%）"))
-        XCTAssertTrue(p.rangeText.hasPrefix("今の期間："))
+        XCTAssertTrue(p.resetStatusText.hasPrefix("あと"), p.resetStatusText)
         XCTAssertFalse(p.todayOver)
     }
 
