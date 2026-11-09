@@ -9,3 +9,4 @@ Tests/CodexUsageWidgetTests/RetrySafetyTests.swift
 Sources/CodexUsageWidget/Support/CodexBarRequirement.swift
 Tests/CodexUsageWidgetTests/CodexBarRequirementTests.swift
 Tests/CodexUsageWidgetTests/CodexBarAccountScopeTests.swift
+Tests/CodexUsageWidgetTests/DeepSeekEmptyBalanceTests.swift
