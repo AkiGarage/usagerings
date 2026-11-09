@@ -28,3 +28,10 @@ artifacts/
 __pycache__/
 *.py[cod]
 .shots/
+
+# Local-only scratch and archives
+_debug/
+archive/
+*.bak
+*.bak-*
+/main
