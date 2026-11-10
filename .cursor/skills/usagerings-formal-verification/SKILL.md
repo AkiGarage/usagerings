@@ -28,7 +28,7 @@ Plus `script/lint.sh`, which bans proxy, cookie, web and Keychain reads in the s
 | CliTimesOutRetry / GiveUp, BoundedRetries | MultiUsageService retry once on timeout or launch failure (RetrySafetyTests) |
 | CliFailsRetry, NoRetryOnLogout (ログアウト時は再試行しない) | attempt retries a nonzero exit once unless isLogout or a partial result; Fault-RetryLogout breaks the guard |
 | CliOk / CliFails, Shown/FailedOnly… | ProviderSection windows vs failureText |
-Sync commit: bb87939 (adds the nonzero-exit retry and the logout no-retry rule; the extra no-token-accounts attempt is bounded and left to tests). Move it forward only after confirming that the table still describes the code at the new commit.
+Sync commit: 280d6ee (adds the nonzero-exit retry and the logout no-retry rule; the extra no-token-accounts attempt is bounded and left to tests). Move it forward only after confirming that the table still describes the code at the new commit.
 
 ## Bounds and what is left out
 One provider instance, one retry, the cli states ok/missing/signedOut/timeout. Not covered: what the CLI output means (that is parser tests), multi-account Antigravity, the UI drawing, real network timing.
@@ -62,4 +62,4 @@ Run: `docs/formal/check-refresh.sh`. It must print PASS for UsageRefresh and PAS
 | Request, queued, runQueued | refresh() during a fetch queues one full refresh; apply() starts it (Fault-DropQueuedRefresh) |
 | Stop, Restart, gen, GenGuard | stop() bumps the generation; an older fetch is not applied (Fault-ApplyAfterStop) |
 Bounds: 2 accounts, 4 requests, 2 periods, 2 stops (63808 distinct states). Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
-Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit bb87939 (providerError counts as transient, i.e. the model's "transient" outcome).
+Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit 280d6ee (providerError counts as transient, i.e. the model's "transient" outcome).

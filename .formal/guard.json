@@ -4,13 +4,13 @@
       "tla": "docs/formal/UsageRefresh.tla",
       "cfgs": ["docs/formal/UsageRefresh.cfg"],
       "sources": ["Sources/CodexUsageWidget/Stores/MultiUsageStore.swift", "Sources/CodexUsageWidget/Models/UsageSnapshot.swift", "Sources/CodexUsageWidget/Models/MultiUsageSnapshot.swift"],
-      "sync_commit": "bb87939"
+      "sync_commit": "280d6ee"
     },
     {
       "tla": "docs/formal/UsageRead.tla",
       "cfgs": ["docs/formal/UsageRead.cfg"],
       "sources": ["Sources/CodexUsageWidget/Services/MultiUsageService.swift"],
-      "sync_commit": "bb87939"
+      "sync_commit": "280d6ee"
     }
   ]
 }
