@@ -1,0 +1,3 @@
+# Approved by Aki 2026-11-10: invariants only added (NoRetryOnLogout, NoLostRefreshRequest, NoApplyAfterStop); none removed or weakened.
+3707223152e6bf6c9d4c052b4837d927eb3bd978cb9f33fdd0d10511affc8c58  docs/formal/UsageRead.tla
+cfed916b532a228847e97a29f6e855f6b950496f09a86ec27636d0eae6a84ee5  docs/formal/UsageRefresh.tla

@@ -15,7 +15,7 @@ Harm if broken: cookie/web/OAuth reads that break provider terms, hidden network
 Plus `script/lint.sh`, which bans proxy, cookie, web and Keychain reads in the sources.
 
 ## Run (one command each)
-- `TLA2TOOLS_JAR=/path/to/tla2tools.jar docs/formal/check.sh` must print "No error has been found" (44 distinct states, depth 4).
+- `TLA2TOOLS_JAR=/path/to/tla2tools.jar docs/formal/check.sh` must print PASS for UsageRead (45 distinct states), CodexBarGate and Fault-RetryLogout (caught NoRetryOnLogout).
 - `swift test --filter SourcePolicyTests` and `./script/lint.sh` must pass.
 - Read every TLC result, pass or fail, with the `/statechart` skill and `docs/formal/view.mjs` as the view. On a pass it draws the chart (`docs/formal/chart.mmd`, 6 states, 10 arrows). On a fail it gives the shortest bug path in plain words.
 
@@ -25,9 +25,10 @@ Plus `script/lint.sh`, which bans proxy, cookie, web and Keychain reads in the s
 | source, OnlyOfficialCli | MultiUsageService.sourceArguments |
 | enabled, DisabledNeverFetched, HiddenOnlyWhenDisabled | MultiUsageService.fetchAll provider filter and Claude section omission |
 | ClaudeCacheEmpty → pending | MultiUsageService.claudePendingSection |
-| CliTimesOutRetry / GiveUp, BoundedRetries | MultiUsageService retry once on launch failure (RetrySafetyTests) |
+| CliTimesOutRetry / GiveUp, BoundedRetries | MultiUsageService retry once on timeout or launch failure (RetrySafetyTests) |
+| CliFailsRetry, NoRetryOnLogout (ログアウト時は再試行しない) | attempt retries a nonzero exit once unless isLogout or a partial result; Fault-RetryLogout breaks the guard |
 | CliOk / CliFails, Shown/FailedOnly… | ProviderSection windows vs failureText |
-Sync commit: 2e2abb4 (2e2abb4 only swapped the CLI path literal for CodexBarRequirement.cliPath; model unchanged). Move it forward only after confirming that the table still describes the code at the new commit.
+Sync commit: bb87939 (adds the nonzero-exit retry and the logout no-retry rule; the extra no-token-accounts attempt is bounded and left to tests). Move it forward only after confirming that the table still describes the code at the new commit.
 
 ## Bounds and what is left out
 One provider instance, one retry, the cli states ok/missing/signedOut/timeout. Not covered: what the CLI output means (that is parser tests), multi-account Antigravity, the UI drawing, real network timing.
@@ -45,6 +46,8 @@ Rules in plain Japanese:
 3. 取得失敗を 0% や成功として表示しない (FailureNeverShownAsSuccess)
 4. リセット前の古い応答が新しい期間の表示を上書きしない (OldPeriodNeverOverwritesNew, RetainedNeverFromPastPeriod)
 5. スリープ復帰や更新の重なりでも取得は同時に1本だけ (AtMostOneFetch)
+6. 取得中に頼まれた更新は捨てられず、取得が終われば必ず次の取得が始まる (NoLostRefreshRequest)
+7. 停止より前に始まった取得の結果は、停止後の表示に反映されない (NoApplyAfterStop)
 
 Run: `docs/formal/check-refresh.sh`. It must print PASS for UsageRefresh and PASS ... caught for every Fault-*.cfg. Each fault config turns off one real guard and TLC must report the matching violation; if a fault is not caught, the invariant is too weak.
 
@@ -56,5 +59,7 @@ Run: `docs/formal/check-refresh.sh`. It must print PASS for UsageRefresh and PAS
 | DropStaleAtReset, ExpireStale | isRetainable resetAt >= now, scheduleExpiry |
 | FailIsFailure | non-transient errors keep failureText with empty windows |
 | Reset, Sleep, Wake, Reorder | ResetRefreshPlanner, wake and clock-change replans, account order changes |
-Bounds: 2 accounts, 4 requests, 2 periods. Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
-Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit d88b464.
+| Request, queued, runQueued | refresh() during a fetch queues one full refresh; apply() starts it (Fault-DropQueuedRefresh) |
+| Stop, Restart, gen, GenGuard | stop() bumps the generation; an older fetch is not applied (Fault-ApplyAfterStop) |
+Bounds: 2 accounts, 4 requests, 2 periods, 2 stops (63808 distinct states). Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
+Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit bb87939 (providerError counts as transient, i.e. the model's "transient" outcome).

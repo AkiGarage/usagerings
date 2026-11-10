@@ -259,6 +259,21 @@ final class ClaudeAccountRound2Tests: XCTestCase {
         XCTAssertEqual(obj["order"] as? [String], ["a", "b"])
     }
 
+    // A failed expired-hint write must not leave the old hint alive for validity's
+    // 600 s: the fallback deletes the path, and claude-ab treats a missing file
+    // as no hint (keeps its old a → b order).
+    func testRetractDeletesPathWhenExpiredHintWriteFails() throws {
+        // A directory at the hint path makes the atomic write fail (a file cannot
+        // be renamed over a directory), which exercises the delete fallback.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        ClaudeAccountChoice.retract(now: now, url: url)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
     func testLogBlocksDoNotAffectChoice() {
         var w = UsageLimit(title: "x · 5h", leftPercent: 80, resetText: ""); w.accountIndex = 0
         var w2 = UsageLimit(title: "y · 5h", leftPercent: 80, resetText: ""); w2.accountIndex = 1
