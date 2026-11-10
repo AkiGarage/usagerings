@@ -66,4 +66,24 @@ final class SubprocessRunnerTests: XCTestCase {
         XCTAssertFalse(result.timedOut)
         XCTAssertNotEqual(result.terminationStatus, 0)
     }
+
+    func testCancelBeforeLaunchTerminatesTheChildPromptly() async throws {
+        let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: "/bin/sleep"), timeout: 20)
+        let start = Date()
+        let task = Task {
+            try await runner.run(["30"])
+        }
+        // Cancel before the queue thread launches the child: withTaskCancellationHandler
+        // runs the handler immediately for an already-cancelled task, the request is
+        // remembered, and the launch path must flush it right after run() instead of
+        // losing it until the 20 s timeout. (If launch won the race, the mid-run cancel
+        // path of testCancelledTaskTerminatesTheChildPromptly is exercised and the
+        // same assertions still hold.)
+        task.cancel()
+        let result = try await task.value
+
+        XCTAssertLessThan(Date().timeIntervalSince(start), 6)
+        XCTAssertFalse(result.timedOut)
+        XCTAssertNotEqual(result.terminationStatus, 0)
+    }
 }

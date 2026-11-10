@@ -105,11 +105,8 @@ public struct CodexBarSyntheticContractValidator: Sendable {
 
     private static func integer(_ value: Any?) -> Int? {
         guard isNumber(value), let number = value as? NSNumber else { return nil }
-        let double = number.doubleValue
-        guard double.rounded() == double,
-              double >= Double(Int.min), double <= Double(Int.max)
-        else { return nil }
-        return Int(double)
+        // Int(exactly:) rejects 2^63: Double(Int.max) rounds up to it, so a range check would let Int() trap.
+        return Int(exactly: number.doubleValue)
     }
 }
 
@@ -131,18 +128,33 @@ public enum CodexBarSyntheticFixtures {
     public static func verify() throws {
         let validator = CodexBarSyntheticContractValidator()
         for fixture in all {
-            do {
-                let result = try validator.validate(fixture.payload, exitCode: fixture.exitCode)
-                guard fixture.expectation != .rejected,
-                      (fixture.expectation == .success && result.outcome == .success) ||
-                        (fixture.expectation == .structuredFailure && result.outcome == .structuredFailure)
-                else {
-                    throw ReleaseDetectionError.incompatibleContract
-                }
-            } catch {
-                guard fixture.expectation == .rejected else {
-                    throw ReleaseDetectionError.incompatibleContract
-                }
+            try check(fixture) { candidate in
+                try validator.validate(candidate.payload, exitCode: candidate.exitCode)
+            }
+        }
+    }
+
+    /// Decides one fixture's verdict outside of any `catch`, so a validator that
+    /// wrongly accepts a `.rejected` fixture is reported instead of being swallowed
+    /// by the error path that is expected for rejections.
+    static func check(
+        _ fixture: CodexBarSyntheticFixture,
+        with validate: (CodexBarSyntheticFixture) throws -> CompatibilityValidationResult
+    ) throws {
+        let result = try? validate(fixture)
+
+        switch fixture.expectation {
+        case .rejected:
+            guard result == nil else {
+                throw ReleaseDetectionError.incompatibleContract
+            }
+        case .success:
+            guard let result, result.outcome == .success else {
+                throw ReleaseDetectionError.incompatibleContract
+            }
+        case .structuredFailure:
+            guard let result, result.outcome == .structuredFailure else {
+                throw ReleaseDetectionError.incompatibleContract
             }
         }
     }

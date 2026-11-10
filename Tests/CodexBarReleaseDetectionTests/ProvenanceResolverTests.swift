@@ -74,6 +74,18 @@ final class ProvenanceResolverTests: XCTestCase {
         }
     }
 
+    func testContractCheckFailureResolvesToPendingIncompatibleContract() async throws {
+        let transport = ProvenanceTransport(mode: .incompatibleContract)
+
+        let resolution = try await CodexBarProvenanceResolver(client: makeClient(transport))
+            .resolve(Self.release)
+
+        XCTAssertEqual(
+            resolution,
+            .pending(.init(releaseID: 43, tag: "v0.43.0", reason: .incompatibleContract))
+        )
+    }
+
     private func makeClient(_ transport: ProvenanceTransport) -> GitHubAPIClient {
         GitHubAPIClient(
             transport: { request in try await transport.response(for: request) },
@@ -105,6 +117,7 @@ private actor ProvenanceTransport {
         case unverified
         case malformed
         case rawBlobMismatch
+        case incompatibleContract
     }
 
     private let mode: Mode
@@ -115,6 +128,16 @@ private actor ProvenanceTransport {
 
     init(mode: Mode) {
         self.mode = mode
+    }
+
+    private var sources: [String: Data] {
+        var sources = ProvenanceResolverTests.sources
+        if mode == .incompatibleContract {
+            // Same bytes in the tree and in the raw blob, so provenance still hashes
+            // correctly; only the pinned contract tokens were renamed.
+            sources["Sources/CodexBarCore/UsageFetcher.swift"] = Data("primary secondary".utf8)
+        }
+        return sources
     }
 
     func response(for request: URLRequest) throws -> GitHubHTTPResponse {
@@ -136,7 +159,7 @@ private actor ProvenanceTransport {
         }
 
         if url.path.hasSuffix("/git/tags/\(tagSHA)") {
-            let isVerified = mode == .verified || mode == .rawBlobMismatch
+            let isVerified = mode == .verified || mode == .rawBlobMismatch || mode == .incompatibleContract
             return json([
                 "tag": "v0.43.0",
                 "sha": tagSHA,
@@ -165,8 +188,9 @@ private actor ProvenanceTransport {
         }
 
         if url.path.hasSuffix("/git/trees/\(treeSHA)"), url.query == "recursive=1" {
+            let sources = self.sources
             var entries: [[String: Any]] = CodexBarContractPaths.all.map { path in
-                let data = ProvenanceResolverTests.sources[path]!
+                let data = sources[path]!
                 let sha = Self.gitBlobSHA(data)
                 return [
                     "path": path,
@@ -195,7 +219,7 @@ private actor ProvenanceTransport {
         let rawPrefix = "/steipete/CodexBar/\(commitSHA)/"
         if url.host == "raw.githubusercontent.com", url.path.hasPrefix(rawPrefix) {
             let path = String(url.path.dropFirst(rawPrefix.count)).removingPercentEncoding!
-            guard let data = ProvenanceResolverTests.sources[path] else {
+            guard let data = self.sources[path] else {
                 throw URLError(.fileDoesNotExist)
             }
             if mode == .rawBlobMismatch, path == CodexBarContractPaths.all[0] {

@@ -69,12 +69,19 @@ enum ClaudeAccountChoice {
         return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
-    /// Make any previously published hint inert (claude-ab then uses a → b). Never deletes.
+    /// Make any previously published hint inert (claude-ab then uses a → b).
+    /// When writing the expired hint fails, delete the file instead: readers
+    /// treat a missing file as no hint, which beats a stale "use account X"
+    /// hint surviving for validity's full 600 s.
     static func retract(now: Date, url: URL = fileURL()) {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let object: [String: Any] = ["order": ["a", "b"], "state": "off", "decidedAt": Int(now.timeIntervalSince1970), "expiresAt": 0]
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
-        try? data.write(to: url, options: [.atomic])
+        do {
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     /// Atomic, owner-only write. Returns false when there is nothing valid to publish.

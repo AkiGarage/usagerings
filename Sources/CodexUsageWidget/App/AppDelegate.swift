@@ -84,6 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var isPositioningPanel = false
     private var isPanelLiveResizing = false
     private var hadSavedPanelOffsetAtResizeStart = false
+    /// Bumped on every live-resize start so the end-of-resize cleanup queued
+    /// from a previous resize cannot clear the flag in the middle of the next.
+    private var panelLiveResizeGeneration = 0
     /// Blocks hover→.expanded until the pointer leaves. For personas with a ring hover card this is a no-op on the hover path (they never expand by hover); still set by drag/zoom/orientation flows.
     private var suppressHoverExpansionUntilExit = false
     private var didExitDuringDrag = false
@@ -860,6 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         hadSavedPanelOffsetAtResizeStart = hasSavedPanelOffset
+        panelLiveResizeGeneration += 1
         isPanelLiveResizing = true
     }
 
@@ -874,9 +878,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             hadSavedOffsetAtResizeStart: hadSavedPanelOffsetAtResizeStart
         )
         constrainPanelFrameIfNeeded(panel)
+        let generation = panelLiveResizeGeneration
         DispatchQueue.main.async { [weak self] in
-            self?.isPanelLiveResizing = false
-            self?.hadSavedPanelOffsetAtResizeStart = false
+            guard let self, self.panelLiveResizeGeneration == generation else { return }
+            self.isPanelLiveResizing = false
+            self.hadSavedPanelOffsetAtResizeStart = false
         }
         guard shouldSaveOffset else { return }
         savePanelOffset(for: panel.frame)

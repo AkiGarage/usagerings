@@ -99,11 +99,16 @@ final class MultiUsageStore: ObservableObject {
     private var cloudSender: CloudSnapshotSender?
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
+    /// Per-instance so tests can shorten the HUD lifetime without affecting other stores.
+    var opacityHUDDuration: TimeInterval = 1.2
     private var expiryTask: Task<Void, Never>?
     private var resetTask: Task<Void, Never>?
     private var resetAttempts: [ResetKey: ResetRefreshPlanner.Attempts] = [:]
     /// Providers the in-flight fetch covers (all when it is a regular refresh).
     private var inFlightTargets: Set<ProviderID> = []
+    private var inFlightSkipped: Set<ProviderID> = []
+    private var queuedFullRefresh = false
+    private var stopGeneration: UInt = 0
     private var resetSchedulingEnabled = false
     private var wakeObservers: [NSObjectProtocol] = []
     /// Injected for tests.
@@ -196,6 +201,9 @@ final class MultiUsageStore: ObservableObject {
     }
 
     func stop() {
+        stopGeneration &+= 1
+        queuedFullRefresh = false
+        // Keep the in-flight slot occupied until its CLI fetch actually finishes.
         geminiMonitor?.stop()
         refreshTask?.cancel()
         refreshTask = nil
@@ -239,7 +247,10 @@ final class MultiUsageStore: ObservableObject {
     /// `only`: fetch just these providers and keep every other section as it is,
     /// so a reset of one service costs no request to the others (Antigravity included).
     func refresh(only targets: Set<ProviderID>? = nil) {
-        guard !isRefreshing else { return }
+        guard !isRefreshing else {
+            if targets == nil { queuedFullRefresh = true }
+            return
+        }
         switch dataSource {
         case let .demo(demoSnapshot):
             snapshot = demoSnapshot
@@ -255,11 +266,19 @@ final class MultiUsageStore: ObservableObject {
             }
             let others = targets.map { Set(ProviderID.allCases).subtracting($0) } ?? []
             inFlightTargets = Set(ProviderID.allCases).subtracting(skip).subtracting(others)
+            inFlightSkipped = skip
             let disabled = skip.union(others)
             let cloudDataComplete = disabled.isDisjoint(with: [.codex, .claude, .grok])
+            let generation = stopGeneration
             Task {
                 let snapshot = await service.fetchAll(disabled: disabled)
-                apply(snapshot, partial: targets != nil, cloudDataComplete: cloudDataComplete)
+                guard generation == self.stopGeneration else {
+                    // Only a full request made after stop() may restart the store.
+                    self.isRefreshing = false
+                    self.refreshIfQueued()
+                    return
+                }
+                self.apply(snapshot, partial: targets != nil, cloudDataComplete: cloudDataComplete)
             }
         }
     }
@@ -267,18 +286,17 @@ final class MultiUsageStore: ObservableObject {
     func showOpacityHUD(percent: Int) {
         opacityHUDPercent = percent
         opacityHUDTask?.cancel()
-        opacityHUDTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
+        let duration = opacityHUDDuration
+        opacityHUDTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            // This task inherits MainActor: checking cancellation and clearing are atomic.
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.opacityHUDPercent = nil
-                self?.opacityHUDTask = nil
-            }
+            self?.opacityHUDPercent = nil
+            self?.opacityHUDTask = nil
         }
     }
 
     private func apply(_ fetched: MultiUsageSnapshot, partial: Bool = false, cloudDataComplete: Bool = true) {
-        isRefreshing = false
         let targets = inFlightTargets
         var snapshot = fetched
         if partial, let previous = rawSnapshot {
@@ -309,8 +327,16 @@ final class MultiUsageStore: ObservableObject {
             publish(codexSnapshot)
         }
         resetAttempts = ResetRefreshPlanner.track(resetAttempts, sections: fetched.sections, fetched: targets,
-                                                  skipped: (preferences?.providersToSkip() ?? []).union([.gemini]), now: resetClock())
+                                                  skipped: inFlightSkipped.union([.gemini]), now: resetClock())
         scheduleResetRefresh()
+        isRefreshing = false
+        refreshIfQueued()
+    }
+
+    private func refreshIfQueued() {
+        guard queuedFullRefresh else { return }
+        queuedFullRefresh = false
+        refresh()
     }
 
     /// Keep display data only; decisions and the published Codex snapshot use the fresh result.

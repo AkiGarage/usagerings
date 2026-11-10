@@ -35,3 +35,7 @@ archive/
 *.bak
 *.bak-*
 /main
+
+# TLC counterexample traces written by fault runs
+*_TTrace_*.tla
+*_TTrace_*.bin

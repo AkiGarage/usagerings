@@ -11,6 +11,8 @@ final class UsageStore: ObservableObject {
     private let publisher: UsageSnapshotPublisher?
     private var refreshTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
+    /// Per-instance so tests can shorten the HUD lifetime without affecting other stores.
+    var opacityHUDDuration: TimeInterval = 1.2
 
     init(service: CodexUsageService) {
         self.service = service
@@ -57,13 +59,13 @@ final class UsageStore: ObservableObject {
     func showOpacityHUD(percent: Int) {
         opacityHUDPercent = percent
         opacityHUDTask?.cancel()
-        opacityHUDTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.2))
+        let duration = opacityHUDDuration
+        opacityHUDTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            // This task inherits MainActor: checking cancellation and clearing are atomic.
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.opacityHUDPercent = nil
-                self?.opacityHUDTask = nil
-            }
+            self?.opacityHUDPercent = nil
+            self?.opacityHUDTask = nil
         }
     }
 

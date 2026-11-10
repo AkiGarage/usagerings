@@ -204,6 +204,203 @@ final class ReleaseCatalogTests: XCTestCase {
         XCTAssertFalse(text.contains("synthetic-author-marker"))
     }
 
+    func testRetriesForbiddenRateLimitAndServerErrorsThenSucceeds() async throws {
+        for status in [403, 429, 503] {
+            let transport = StubTransport(
+                responses: [
+                    Self.firstPageURL: [
+                        .success(statusResponse(status)),
+                        .success(response(body: releasesJSON([releaseJSON(id: 440, tag: "v0.44.0")])))
+                    ]
+                ]
+            )
+            let sleeper = SleeperRecorder()
+            let client = GitHubAPIClient(
+                transport: { request in try await transport.send(request) },
+                sleeper: { nanoseconds in await sleeper.record(nanoseconds) }
+            )
+
+            let releases = try await CodexBarReleaseCatalog(client: client)
+                .fetchStableReleases(minimum: StableSemanticVersion(tag: "v0.32.4")!)
+
+            XCTAssertEqual(releases.map(\.tag), ["v0.44.0"], "HTTP \(status)")
+            let requestCount = await transport.requestCount()
+            XCTAssertEqual(requestCount, 2, "HTTP \(status)")
+            let delays = await sleeper.delays()
+            XCTAssertEqual(delays.count, 1, "HTTP \(status)")
+        }
+    }
+
+    func testExhaustedRateLimitAndServerErrorsFailClosed() async {
+        let cases: [(status: Int, expected: ReleaseDetectionError)] = [
+            (403, .rateLimited),
+            (429, .rateLimited),
+            (500, .networkUnavailable),
+            (599, .networkUnavailable)
+        ]
+        for (status, expected) in cases {
+            let transport = StubTransport(
+                responses: [
+                    Self.firstPageURL: [
+                        .success(statusResponse(status)),
+                        .success(statusResponse(status)),
+                        .success(statusResponse(status))
+                    ]
+                ]
+            )
+            let sleeper = SleeperRecorder()
+            let client = GitHubAPIClient(
+                transport: { request in try await transport.send(request) },
+                sleeper: { nanoseconds in await sleeper.record(nanoseconds) }
+            )
+
+            do {
+                _ = try await CodexBarReleaseCatalog(client: client)
+                    .fetchStableReleases(minimum: StableSemanticVersion(tag: "v0.32.4")!)
+                XCTFail("Expected HTTP \(status) to fail closed")
+            } catch let error as ReleaseDetectionError {
+                XCTAssertEqual(error, expected, "HTTP \(status)")
+            } catch {
+                XCTFail("Unexpected error for HTTP \(status): \(type(of: error))")
+            }
+
+            let requestCount = await transport.requestCount()
+            XCTAssertEqual(requestCount, 3, "HTTP \(status)")
+            let delays = await sleeper.delays()
+            XCTAssertEqual(delays.count, 2, "HTTP \(status)")
+        }
+    }
+
+    func testNotFoundIsNotRetried() async {
+        let transport = StubTransport(
+            responses: [Self.firstPageURL: [.success(statusResponse(404))]]
+        )
+        let sleeper = SleeperRecorder()
+        let client = GitHubAPIClient(
+            transport: { request in try await transport.send(request) },
+            sleeper: { nanoseconds in await sleeper.record(nanoseconds) }
+        )
+
+        do {
+            _ = try await CodexBarReleaseCatalog(client: client)
+                .fetchStableReleases(minimum: StableSemanticVersion(tag: "v0.32.4")!)
+            XCTFail("Expected a 404 to fail closed")
+        } catch let error as ReleaseDetectionError {
+            XCTAssertEqual(error, .notFound)
+        } catch {
+            XCTFail("Unexpected error: \(type(of: error))")
+        }
+
+        let requestCount = await transport.requestCount()
+        XCTAssertEqual(requestCount, 1)
+        let delays = await sleeper.delays()
+        XCTAssertTrue(delays.isEmpty)
+    }
+
+    func testRetryAfterHeaderIsHonouredUpToTheCap() async throws {
+        let transport = StubTransport(
+            responses: [
+                Self.firstPageURL: [
+                    .success(statusResponse(403, headers: ["Retry-After": "5"])),
+                    .success(response(body: releasesJSON([releaseJSON(id: 440, tag: "v0.44.0")])))
+                ]
+            ]
+        )
+        let cappedTransport = StubTransport(
+            responses: [
+                Self.firstPageURL: [
+                    .success(statusResponse(429, headers: ["retry-after": "600"])),
+                    .success(response(body: releasesJSON([releaseJSON(id: 440, tag: "v0.44.0")])))
+                ]
+            ]
+        )
+        let sleeper = SleeperRecorder()
+        let cappedSleeper = SleeperRecorder()
+
+        _ = try await CodexBarReleaseCatalog(
+            client: GitHubAPIClient(
+                transport: { request in try await transport.send(request) },
+                sleeper: { nanoseconds in await sleeper.record(nanoseconds) }
+            )
+        ).fetchStableReleases(minimum: StableSemanticVersion(tag: "v0.32.4")!)
+        _ = try await CodexBarReleaseCatalog(
+            client: GitHubAPIClient(
+                transport: { request in try await cappedTransport.send(request) },
+                sleeper: { nanoseconds in await cappedSleeper.record(nanoseconds) }
+            )
+        ).fetchStableReleases(minimum: StableSemanticVersion(tag: "v0.32.4")!)
+
+        let delays = await sleeper.delays()
+        XCTAssertEqual(delays, [5_000_000_000])
+        let cappedDelays = await cappedSleeper.delays()
+        XCTAssertEqual(cappedDelays, [60_000_000_000])
+        let cappedRequestCount = await cappedTransport.requestCount()
+        XCTAssertEqual(cappedRequestCount, 2)
+    }
+
+    func testRepeatedNextPageURLFailsClosedAsAPaginationLoop() async {
+        let transport = StubTransport(
+            responses: [
+                Self.firstPageURL: [
+                    .success(
+                        response(
+                            body: releasesJSON([releaseJSON(id: 440, tag: "v0.44.0")]),
+                            headers: ["Link": "<\(Self.firstPageURL)>; rel=\"next\""]
+                        )
+                    )
+                ]
+            ]
+        )
+        let client = GitHubAPIClient(
+            transport: { request in try await transport.send(request) },
+            sleeper: { _ in }
+        )
+
+        do {
+            _ = try await CodexBarReleaseCatalog(client: client)
+                .fetchStableReleases(minimum: StableSemanticVersion(tag: "v0.32.4")!)
+            XCTFail("Expected a repeated next URL to fail closed")
+        } catch let error as ReleaseDetectionError {
+            XCTAssertEqual(error, .paginationLoop)
+        } catch {
+            XCTFail("Unexpected error: \(type(of: error))")
+        }
+
+        let requestedURLs = await transport.requestedURLs()
+        XCTAssertEqual(requestedURLs, [Self.firstPageURL])
+    }
+
+    func testConflictingReleaseIdentitiesFailClosed() async {
+        let transport = StubTransport(
+            responses: [
+                Self.firstPageURL: [
+                    .success(
+                        response(
+                            body: releasesJSON([
+                                releaseJSON(id: 440, tag: "v0.44.0"),
+                                releaseJSON(id: 440, tag: "v0.45.0")
+                            ])
+                        )
+                    )
+                ]
+            ]
+        )
+        let client = GitHubAPIClient(
+            transport: { request in try await transport.send(request) },
+            sleeper: { _ in }
+        )
+
+        do {
+            _ = try await CodexBarReleaseCatalog(client: client)
+                .fetchStableReleases(minimum: StableSemanticVersion(tag: "v0.32.4")!)
+            XCTFail("Expected conflicting release identities to fail closed")
+        } catch let error as ReleaseDetectionError {
+            XCTAssertEqual(error, .ambiguousRelease("v0.45.0"))
+        } catch {
+            XCTFail("Unexpected error: \(type(of: error))")
+        }
+    }
+
     private static let firstPageURL =
         "https://api.github.com/repos/steipete/CodexBar/releases?per_page=100"
     private static let secondPageURL =
@@ -242,12 +439,28 @@ private actor StubTransport {
     }
 }
 
+private actor SleeperRecorder {
+    private var recorded: [UInt64] = []
+
+    func record(_ nanoseconds: UInt64) {
+        recorded.append(nanoseconds)
+    }
+
+    func delays() -> [UInt64] {
+        recorded
+    }
+}
+
 private struct MarkerError: Error {
     let message: String
 }
 
 private func response(body: Data, headers: [String: String] = [:]) -> GitHubHTTPResponse {
     GitHubHTTPResponse(statusCode: 200, headers: headers, body: body)
+}
+
+private func statusResponse(_ statusCode: Int, headers: [String: String] = [:]) -> GitHubHTTPResponse {
+    GitHubHTTPResponse(statusCode: statusCode, headers: headers, body: Data())
 }
 
 private func releasesJSON(_ releases: [[String: Any]]) -> Data {

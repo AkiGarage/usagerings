@@ -22,7 +22,8 @@ the first time it reports configured usage; never turned off automatically.
 five-hour left % + reset time, weekly left % + reset time (CodexBarCLI, per account).
 Log blocks are not used for the choice (log slot A mixes ~/.claude and ~/.claude-a, identity unverified).
 When the hint must not apply (setting off, unmapped, Claude hidden, no data) the file is
-overwritten with an expired hint (expiresAt 0), never deleted.
+overwritten with an expired hint (expiresAt 0); it is deleted only when that write fails
+(a missing file also means no hint).
 
 ## Definitions
 - weekly-limited: weekly left ≤ 0, or an active weekly log block.
