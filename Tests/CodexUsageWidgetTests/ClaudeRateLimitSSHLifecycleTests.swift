@@ -41,7 +41,8 @@ final class ClaudeRateLimitSSHLifecycleTests: XCTestCase {
         // Immediate repeat within the 300 s debounce window: cached, no refetch.
         let again = await ssh.lines()
         XCTAssertEqual(again, ["rate-limit-line"])
-        XCTAssertEqual(await gate.count, 1)
+        let finalCount = await gate.count
+        XCTAssertEqual(finalCount, 1)
     }
 }
 
