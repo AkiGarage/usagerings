@@ -63,10 +63,11 @@ public struct CodexBarSourceContractChecker: Sendable {
             let current = characters[index]
 
             if current == "/", Self.character(characters, at: index + 1) == "/" {
-                while index < characters.count, characters[index] != "\n" {
+                while index < characters.count, !characters[index].isNewline {
                     index += 1
                 }
                 // Preserve a separator so tokens on either side cannot fuse together.
+                // isNewline: "\r\n" is one Character, so CRLF files must not be compared to "\n".
                 if index < characters.count {
                     stripped.append("\n")
                     index += 1
@@ -87,7 +88,7 @@ public struct CodexBarSourceContractChecker: Sendable {
                         depth -= 1
                         index += 2
                     } else {
-                        if characters[index] == "\n" {
+                        if characters[index].isNewline {
                             stripped.append("\n")
                         }
                         index += 1
@@ -113,7 +114,7 @@ public struct CodexBarSourceContractChecker: Sendable {
                         escaped = false
                     } else if literalCharacter == "\\" {
                         escaped = true
-                    } else if !isMultiline, literalCharacter == "\n" {
+                    } else if !isMultiline, literalCharacter.isNewline {
                         break
                     } else if isMultiline,
                               literalCharacter == "\"",

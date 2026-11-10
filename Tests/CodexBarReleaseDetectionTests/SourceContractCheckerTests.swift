@@ -118,6 +118,23 @@ final class SourceContractCheckerTests: XCTestCase {
         XCTAssertNoThrow(try CodexBarSourceContractChecker().validate(commented))
     }
 
+    func testCRLFSourcesWithLineCommentsAreAccepted() {
+        // "\r\n" is one Swift Character; a line comment must still end at a CRLF.
+        var crlf = Self.validSources
+        crlf["Sources/CodexBarCLI/CLIErrorReporting.swift"] = Data(
+            "// Encodes the envelope.\r\nJSONEncoder()\r\nencodeJSON([payload]) // stays\r\nprintJSON([payload])\r\n".utf8
+        )
+        crlf["Sources/CodexBarCore/UsageFetcher.swift"] = Data(
+            "/* lanes\r\n */ // keep\r\nlet primary = 1; let secondary = 2; let usedPercent = 3\r\nlet s = \"a\"\r\n".utf8
+        )
+
+        XCTAssertNoThrow(try CodexBarSourceContractChecker().validate(crlf))
+        XCTAssertEqual(
+            CodexBarSourceContractChecker.strippingComments(from: "// c\r\ncode"),
+            "\ncode"
+        )
+    }
+
     static let validSources: [String: Data] = [
         "docs/cli.md": Data("codexbar --version\ncodexbar --provider codex --format json".utf8),
         "Sources/CodexBarCLI/CLIPayloads.swift": Data("let provider: String; let usage: UsageSnapshot?; let error: ProviderErrorPayload?".utf8),
