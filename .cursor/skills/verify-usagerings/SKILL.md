@@ -12,6 +12,7 @@ description: Use after any change to UsageRings panels, rings, refresh, stale or
 
 ## Run
 `.cursor/skills/verify-usagerings/verify.sh [/abs/new/dir]` must print ok for every file and the evidence path. Then open the PNGs and check by eye.
+Over non-interactive SSH to a Mac (e.g. the mini), export `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (Command Line Tools have no XCTest) and `GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=` (the keychain helper fails without a GUI session when SwiftPM fetches Sparkle) before `swift build`/`swift test`.
 
 ## Feature map
 | Feature | Evidence file | What to see |
