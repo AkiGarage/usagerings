@@ -85,16 +85,18 @@ enum ClaudeResetGrantsOutcome: Equatable, Sendable {
     case loginExpired
     case unauthorized
     case httpFailure(Int)
+    case rateLimited(TimeInterval)
     case transportFailure
     case malformed
 }
 
 struct ClaudeResetGrantsClient: Sendable {
     typealias LoadToken = @Sendable (String?) async throws -> String
-    typealias Transport = @Sendable (URLRequest) async throws -> (Data, Int)
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, Int, String?)
 
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")!
     static let timeout: TimeInterval = 15
+    static let maximumTickets = 100
 
     let loadToken: LoadToken
     let transport: Transport
@@ -119,10 +121,12 @@ struct ClaudeResetGrantsClient: Sendable {
             return .notLoggedIn
         }
         do {
-            let (data, status) = try await transport(request(token: token))
+            let (data, status, retryAfter) = try await transport(request(token: token))
             switch status {
             case 200:
                 return Self.parse(data)
+            case 429:
+                return .rateLimited(Self.retryInterval(retryAfter, now: Date()))
             case 401, 403:
                 return .unauthorized
             default:
@@ -150,18 +154,32 @@ struct ClaudeResetGrantsClient: Sendable {
         }
         guard let rawBlock = object["cedar_ember"], !(rawBlock is NSNull) else { return .notOffered }
         guard let block = rawBlock as? [String: Any] else { return .malformed }
-        guard boolean(block["eligible"]) == true else { return .notOffered }
+        guard let eligible = boolean(block["eligible"]) else { return .malformed }
+        guard eligible else { return .notOffered }
         guard let rawGrants = block["grants"], !(rawGrants is NSNull) else { return .loaded([]) }
-        guard let entries = rawGrants as? [Any] else { return .malformed }
+        guard let entries = rawGrants as? [Any], entries.count <= maximumTickets else { return .malformed }
         var grants: [ClaudeResetGrant] = []
         for entry in entries {
             guard let item = entry as? [String: Any] else { return .malformed }
-            grants.append(grant(from: item))
+            guard let grant = grant(from: item),
+                  grant.resetsLeft <= maximumTickets - grants.reduce(0, { $0 + $1.resetsLeft }) else {
+                return .malformed
+            }
+            grants.append(grant)
         }
         return .loaded(grants)
     }
 
-    private static func grant(from object: [String: Any]) -> ClaudeResetGrant {
+    private static func grant(from object: [String: Any]) -> ClaudeResetGrant? {
+        guard let resetsLeft = integer(object["resets_left"]),
+              object["type"] == nil || object["type"] is String,
+              object["paused"] == nil || boolean(object["paused"]) != nil,
+              object["usable_now"] == nil || boolean(object["usable_now"]) != nil else { return nil }
+        var endsAt: Date?
+        if let rawEnd = object["ends_at"], !(rawEnd is NSNull) {
+            guard let text = rawEnd as? String, let date = timestamp(text) else { return nil }
+            endsAt = date
+        }
         let kind: ClaudeResetGrant.Kind
         switch object["type"] as? String {
         case "session": kind = .session
@@ -172,8 +190,8 @@ struct ClaudeResetGrantsClient: Sendable {
         let paused = boolean(object["paused"]) ?? false
         return ClaudeResetGrant(
             kind: kind,
-            resetsLeft: integer(object["resets_left"]) ?? 0,
-            endsAt: (object["ends_at"] as? String).flatMap(timestamp),
+            resetsLeft: resetsLeft,
+            endsAt: endsAt,
             paused: paused,
             usableNow: boolean(object["usable_now"]) ?? !paused
         )
@@ -181,7 +199,9 @@ struct ClaudeResetGrantsClient: Sendable {
 
     private static func integer(_ value: Any?) -> Int? {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFNumberGetTypeID() else { return nil }
-        return number.intValue
+        let value = number.doubleValue
+        guard value.isFinite, value >= 0, value <= Double(maximumTickets), value.rounded(.towardZero) == value else { return nil }
+        return Int(value)
     }
 
     private static func boolean(_ value: Any?) -> Bool? {
@@ -190,20 +210,41 @@ struct ClaudeResetGrantsClient: Sendable {
     }
 
     private static func timestamp(_ raw: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: raw) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
+        guard raw.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$"#, options: .regularExpression) != nil else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.isLenient = false
+        formatter.dateFormat = raw.contains(".") ? "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSSXXXXX" : "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+        return formatter.date(from: raw)
+    }
+
+    static func retryInterval(_ raw: String?, now: Date) -> TimeInterval {
+        guard let raw else { return ClaudeCLIUsage.grantsRefreshInterval }
+        let seconds: TimeInterval?
+        if let value = Double(raw), value.isFinite {
+            seconds = value
+        } else {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+            seconds = formatter.date(from: raw)?.timeIntervalSince(now)
+        }
+        return max(ClaudeCLIUsage.grantsRefreshInterval, seconds ?? 0)
     }
 
     static func stats(for outcome: ClaudeResetGrantsOutcome, accountIndex: Int, now: Date,
                       calendar: Calendar) -> [ProviderStat] {
         switch outcome {
         case .loaded(let grants):
+            guard grants.count <= maximumTickets,
+                  grants.allSatisfy({ (0...maximumTickets).contains($0.resetsLeft) }),
+                  grants.reduce(0, { $0 + $1.resetsLeft }) <= maximumTickets else {
+                return note("取得できません", accountIndex: accountIndex)
+            }
             let usable = grants.filter {
-                $0.resetsLeft > 0 && !$0.paused && ($0.endsAt.map { $0 > now } ?? true)
+                $0.resetsLeft > 0 && !$0.paused && $0.usableNow && ($0.endsAt.map { $0 > now } ?? true)
             }
             let tickets = usable.flatMap { grant in Array(repeating: grant, count: grant.resetsLeft) }
             guard !tickets.isEmpty else { return [] }
@@ -230,6 +271,8 @@ struct ClaudeResetGrantsClient: Sendable {
             return note("Claude Codeを一度使うとログインが更新されます", accountIndex: accountIndex)
         case .unauthorized:
             return note("Claude Codeで再ログインしてください", accountIndex: accountIndex)
+        case .rateLimited(let seconds):
+            return note("取得の回数制限中（最短\(Int(min(ceil(seconds / 60), Double(Int.max / 2))))分間隔で再取得）", accountIndex: accountIndex)
         case .httpFailure(429):
             return note("取得の回数制限中（\(Int(ClaudeCLIUsage.grantsRefreshInterval / 60))分ごとに再取得）", accountIndex: accountIndex)
         case .httpFailure(let status):
@@ -267,7 +310,8 @@ struct ClaudeResetGrantsClient: Sendable {
             let session = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
             defer { session.invalidateAndCancel() }
             let (data, response) = try await session.data(for: request)
-            return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+            let http = response as? HTTPURLResponse
+            return (data, http?.statusCode ?? 0, http?.value(forHTTPHeaderField: "Retry-After"))
         })
     }
 

@@ -26,7 +26,7 @@ final class ClaudeResetGrantsTests: XCTestCase {
         """)
     }
 
-    private func tokenClient(transport: @escaping @Sendable (URLRequest) async throws -> (Data, Int))
+    private func tokenClient(transport: @escaping @Sendable (URLRequest) async throws -> (Data, Int, String?))
         -> ClaudeResetGrantsClient {
         ClaudeResetGrantsClient(loadToken: { _ in "sk-ant-oat-test-token" }, transport: transport)
     }
@@ -105,7 +105,7 @@ final class ClaudeResetGrantsTests: XCTestCase {
         let recorder = RequestRecorder()
         let client = tokenClient { request in
             recorder.record(request)
-            return (Self.grantsBody(), 200)
+            return (Self.grantsBody(), 200, nil)
         }
         _ = await client.fetch(configDir: nil)
         let request = try XCTUnwrap(recorder.last)
@@ -122,7 +122,7 @@ final class ClaudeResetGrantsTests: XCTestCase {
         let recorded = RequestRecorder()
         let client = tokenClient { request in
             recorded.record(request)
-            return (Self.grantsBody(), 200)
+            return (Self.grantsBody(), 200, nil)
         }
         let loaded = await client.fetch(configDir: "/tmp/claude-test-config")
         guard case .loaded(let grants) = loaded else { return XCTFail("expected loaded") }
@@ -132,47 +132,147 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(grants.map(\.paused), [false, false])
         XCTAssertEqual(grants.map(\.usableNow), [true, true])
 
-        let noBlock = tokenClient { _ in (Self.json(#"{"weekly_resets_at":"2027-01-20T12:00:00Z"}"#), 200) }
+        let noBlock = tokenClient { _ in (Self.json(#"{"weekly_resets_at":"2027-01-20T12:00:00Z"}"#), 200, nil) }
         let noBlockOutcome = await noBlock.fetch(configDir: nil)
         XCTAssertEqual(noBlockOutcome, .notOffered)
 
         let ineligible = tokenClient { _ in
-            (Self.json(#"{"cedar_ember":{"eligible":false,"grants":[]}}"#), 200)
+            (Self.json(#"{"cedar_ember":{"eligible":false,"grants":[]}}"#), 200, nil)
         }
         let ineligibleOutcome = await ineligible.fetch(configDir: nil)
         XCTAssertEqual(ineligibleOutcome, .notOffered)
 
         for status in [401, 403] {
-            let client = tokenClient { _ in (Data(), status) }
+            let client = tokenClient { _ in (Data(), status, nil) }
             let outcome = await client.fetch(configDir: nil)
             XCTAssertEqual(outcome, .unauthorized)
         }
-        let throttled = tokenClient { _ in (Data(), 429) }
+        let throttled = tokenClient { _ in (Data(), 429, nil) }
         let throttledOutcome = await throttled.fetch(configDir: nil)
-        XCTAssertEqual(throttledOutcome, .httpFailure(429))
+        XCTAssertEqual(throttledOutcome, .rateLimited(900))
 
         let transportFailure = tokenClient { _ in throw URLError(.cannotConnectToHost) }
         let transportOutcome = await transportFailure.fetch(configDir: nil)
         XCTAssertEqual(transportOutcome, .transportFailure)
 
-        let garbage = tokenClient { _ in (Data("garbage".utf8), 200) }
+        let garbage = tokenClient { _ in (Data("garbage".utf8), 200, nil) }
         let garbageOutcome = await garbage.fetch(configDir: nil)
         XCTAssertEqual(garbageOutcome, .malformed)
 
         let expiredToken = ClaudeResetGrantsClient(
             loadToken: { _ in throw ClaudeOAuthCredential.Failure.expired },
-            transport: { _ in (Data(), 200) }
+            transport: { _ in (Data(), 200, nil) }
         )
         let expiredOutcome = await expiredToken.fetch(configDir: nil)
         XCTAssertEqual(expiredOutcome, .loginExpired)
 
         let missingToken = ClaudeResetGrantsClient(
             loadToken: { _ in throw ClaudeOAuthCredential.Failure.missing },
-            transport: { _ in (Data(), 200) }
+            transport: { _ in (Data(), 200, nil) }
         )
         let missingOutcome = await missingToken.fetch(configDir: nil)
         XCTAssertEqual(missingOutcome, .notLoggedIn)
         XCTAssertEqual(recorded.requests.count, 1)
+    }
+
+    func testMalformedGrantFieldsAreRejectedBeforeRendering() {
+        let invalid = [
+            #""resets_left":9223372036854775807"#,
+            #""resets_left":1.9"#, #""resets_left":-1"#,
+            #""resets_left":true"#, #""resets_left":"1""#,
+            #""resets_left":101"#, #""resets_left":1,"paused":"false""#,
+            #""resets_left":1,"usable_now":1"#,
+            #""resets_left":1,"ends_at":"invalid""#,
+            #""resets_left":1,"ends_at":"2027-02-30T12:00:00Z""#,
+            #""resets_left":1,"ends_at":123"#,
+            #""resets_left":1,"type":12"#
+        ]
+        for fields in invalid {
+            let body = Self.json("{\"cedar_ember\":{\"eligible\":true,\"grants\":[{\(fields)}]}}")
+            XCTAssertEqual(ClaudeResetGrantsClient.parse(body), .malformed, fields)
+        }
+        let tooMany = Array(repeating: #"{"resets_left":1}"#, count: 101).joined(separator: ",")
+        XCTAssertEqual(ClaudeResetGrantsClient.parse(Self.json(
+            "{\"cedar_ember\":{\"eligible\":true,\"grants\":[\(tooMany)]}}")), .malformed)
+    }
+
+    func testRemovingAndReaddingAccountKeepsGrantCooldown() async {
+        let calls = GrantCallLog()
+        let client = tokenClient { request in
+            calls.record(request)
+            return (Self.grantsBody(), 200, nil)
+        }
+        let runner = CLIStub()
+        let usage = ClaudeCLIUsage(runner: { arguments, environment in
+            await runner.run(arguments, environment)
+        }, grantsClient: client)
+        let account = ClaudeCLIAccount(label: "A", configDir: "/tmp/claude-test-config")
+        let t0 = now
+        await usage.refreshNow([account], timeZone: .current, now: { t0 })
+        await usage.refreshNow([], timeZone: .current, now: { t0.addingTimeInterval(1) })
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(2) })
+        XCTAssertEqual(calls.count, 1)
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(901) })
+        XCTAssertEqual(calls.count, 2)
+    }
+
+    func testCooldownIsClaimedBeforeAwaitAndSurvivesDiscardedResponse() async {
+        let calls = GrantCallLog()
+        let entered = Gate(), release = Gate()
+        let client = tokenClient { request in
+            calls.record(request)
+            await entered.open()
+            await release.wait()
+            return (Self.grantsBody(), 200, nil)
+        }
+        let runner = CLIStub()
+        let usage = ClaudeCLIUsage(runner: { arguments, environment in
+            await runner.run(arguments, environment)
+        }, grantsClient: client)
+        let account = ClaudeCLIAccount(label: "A", configDir: nil)
+        let t0 = now
+        let first = Task { await usage.refreshNow([account], timeZone: .current, now: { t0 }) }
+        await entered.wait()
+        await usage.refreshNow([], timeZone: .current, now: { t0.addingTimeInterval(1) })
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(2) })
+        XCTAssertEqual(calls.count, 1)
+        await release.open()
+        await first.value
+        let section = usage.section(accounts: [account], now: t0.addingTimeInterval(2), timeZone: .current)
+        XCTAssertFalse(section?.section.stats.contains { $0.title == "Reset tickets" } ?? true)
+    }
+
+    func testRateLimitHonorsRetryAfterAndShowsNoteWhenCLIHasNoValue() async {
+        let calls = GrantCallLog()
+        let client = tokenClient { request in
+            calls.record(request)
+            return (Data(), 429, "3600")
+        }
+        let usage = ClaudeCLIUsage(runner: { _, _ in
+            CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data())
+        }, grantsClient: client)
+        let account = ClaudeCLIAccount(label: "A", configDir: nil)
+        let t0 = now
+        await usage.refreshNow([account], timeZone: .current, now: { t0 })
+        let result = usage.section(accounts: [account], now: t0, timeZone: .current)
+        XCTAssertEqual(result?.section.stats.map(\.valueText), ["取得の回数制限中（最短60分間隔で再取得）"])
+        XCTAssertTrue(result?.section.windows.isEmpty ?? false)
+        await usage.refreshNow([], timeZone: .current, now: { t0.addingTimeInterval(1) })
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(901) })
+        XCTAssertEqual(calls.count, 1)
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(3601) })
+        XCTAssertEqual(calls.count, 2)
+        let retryDate = DateFormatter()
+        retryDate.locale = Locale(identifier: "en_US_POSIX")
+        retryDate.timeZone = TimeZone(secondsFromGMT: 0)
+        retryDate.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        XCTAssertEqual(ClaudeResetGrantsClient.retryInterval(retryDate.string(from: t0.addingTimeInterval(7200)), now: t0), 7200)
+        XCTAssertEqual(ClaudeResetGrantsClient.retryInterval("invalid", now: t0), 900)
+        XCTAssertEqual(ClaudeResetGrantsClient.retryInterval("NaN", now: t0), 900)
+        let unavailable = ClaudeResetGrant(kind: .session, resetsLeft: 1, endsAt: nil, paused: false, usableNow: false)
+        XCTAssertTrue(ClaudeResetGrantsClient.stats(for: .loaded([unavailable]), accountIndex: 0, now: t0, calendar: tokyoCalendar()).isEmpty)
+        let extreme = ClaudeResetGrant(kind: .session, resetsLeft: Int.max, endsAt: nil, paused: false, usableNow: true)
+        XCTAssertEqual(ClaudeResetGrantsClient.stats(for: .loaded([extreme]), accountIndex: 0, now: t0, calendar: tokyoCalendar()).map(\.valueText), ["取得できません"])
     }
 
     func testStatsExpandUsableGrantsAndSkipPausedExpiredAndEmptyOnes() {
@@ -262,7 +362,7 @@ final class ClaudeResetGrantsTests: XCTestCase {
             },
             transport: { request in
                 calls.record(request)
-                return (Self.grantsBody(), 200)
+                return (Self.grantsBody(), 200, nil)
             }
         )
         let runner = CLIStub()
@@ -323,6 +423,7 @@ final class ClaudeGrantsLiveTests: XCTestCase {
             case .notLoggedIn: name = "notLoggedIn"
             case .loginExpired: name = "loginExpired"
             case .unauthorized: name = "unauthorized"
+            case .rateLimited: name = "rateLimited"
             case .httpFailure(let status): name = "httpFailure(\(status))"
             case .transportFailure: name = "transportFailure"
             case .malformed: name = "malformed"
