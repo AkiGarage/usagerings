@@ -114,6 +114,12 @@ final class HideTicketsAndBlockedBarTests: XCTestCase {
         XCTAssertTrue(row.isLockedOut(UsageLimit(title: "MCP", leftPercent: 0, resetText: "")))
     }
 
+    func testSessionLockStillGraysAnExhaustedWeeklyWindow() {
+        var row = ServiceRowModel(id: "x", name: "X", color: .gray)
+        row.block = ClaudeBlock(kind: .session, resetAt: Date().addingTimeInterval(3600), timeZoneKnown: true)
+        XCTAssertTrue(row.isLockedOut(UsageLimit(title: "Weekly", leftPercent: 0, resetText: "")))
+    }
+
     func testWeeklyLockGraysEveryWindow() {
         var row = ServiceRowModel(id: "x", name: "X", color: .gray)
         row.block = ClaudeBlock(kind: .weekly, resetAt: Date().addingTimeInterval(3600), timeZoneKnown: true)

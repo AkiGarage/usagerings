@@ -178,9 +178,9 @@ struct RingDetailCardModel: Equatable {
     var isStale = false
 
     func orderedRows(_ kind: ServiceRowModel.Kind) -> [Row] { rows.filter { $0.kind == kind } }
-    func isLockedOut(_ kind: ServiceRowModel.Kind) -> Bool {
+    func isLockedOut(_ kind: ServiceRowModel.Kind, leftPercent: Double) -> Bool {
         guard blockText != nil, let blockKind else { return false }
-        return blockKind == .weekly || kind != .week
+        return ServiceRowModel.lockGraysWindow(blockKind: blockKind, windowKind: kind, leftPercent: leftPercent)
     }
     func simpleShowsRecoveryPerRow(now: Date) -> Bool { !rows.isEmpty && rows.allSatisfy { $0.recoverText(now: now) != nil } }
     /// In 詳細 mode a 5h/weekly row is shown as a plain row only if it has no detail bar.
@@ -449,11 +449,11 @@ struct RingDetailCardView: View {
             if style == .detail {
                 ForEach(Array(model.paces.enumerated()), id: \.offset) { index, pace in
                     WeeklyPaceBar(pace: pace, compact: true, showLegend: index == model.paces.count - 1,
-                                  blocked: model.isLockedOut(pace.windowKind))
+                                  blocked: model.isLockedOut(pace.windowKind, leftPercent: 100 - pace.usedPercent))
                 }
                 ForEach(Array((model.detailFallbackRows + model.orderedRows(.other)).enumerated()), id: \.offset) { _, row in
                     DetailLimitRow(label: row.label, leftPercent: row.leftPercent, tint: color(for: row),
-                                   blocked: model.isLockedOut(row.kind))
+                                   blocked: model.isLockedOut(row.kind, leftPercent: row.leftPercent))
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -523,7 +523,7 @@ struct RingDetailCardView: View {
         HStack(spacing: 8) {
             Text(row.label).font(UsageLayout.labelFont).foregroundStyle(.secondary).lineLimit(1)
                 .frame(width: 76, alignment: .leading)
-            BasisBar(basis: basis, leftPercent: row.leftPercent, tint: color(for: row), blocked: model.isLockedOut(row.kind))
+            BasisBar(basis: basis, leftPercent: row.leftPercent, tint: color(for: row), blocked: model.isLockedOut(row.kind, leftPercent: row.leftPercent))
                 .frame(height: UsageLayout.simpleBarHeight)
             Text(basis.valueText(leftPercent: row.leftPercent)).font(UsageLayout.valueFont)
                 .frame(width: 72, alignment: .trailing)
@@ -531,7 +531,7 @@ struct RingDetailCardView: View {
     }
 
     private func color(for row: RingDetailCardModel.Row) -> Color {
-        if model.isLockedOut(row.kind) { return Color.secondary.opacity(0.45) }
+        if model.isLockedOut(row.kind, leftPercent: row.leftPercent) { return Color.secondary.opacity(0.45) }
         switch row.severity {
         case .red: return CollapsedUsageBar.criticalColor
         case .amber: return CollapsedUsageBar.warningColor

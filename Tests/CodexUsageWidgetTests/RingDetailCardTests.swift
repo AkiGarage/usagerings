@@ -193,22 +193,27 @@ final class RingDetailCardTests: XCTestCase {
 
     func testHoverCardSessionLockGraysOnlyTheFiveHourWindow() throws {
         let model = try XCTUnwrap(lockedCardModel(kind: .session))
-        XCTAssertTrue(model.isLockedOut(.five))
-        XCTAssertTrue(model.isLockedOut(.other))
-        XCTAssertFalse(model.isLockedOut(.week))
+        XCTAssertTrue(model.isLockedOut(.five, leftPercent: 0))
+        XCTAssertTrue(model.isLockedOut(.other, leftPercent: 0))
+        XCTAssertFalse(model.isLockedOut(.week, leftPercent: 60))
+    }
+
+    func testHoverCardSessionLockStillGraysAnExhaustedWeeklyWindow() throws {
+        let model = try XCTUnwrap(lockedCardModel(kind: .session))
+        XCTAssertTrue(model.isLockedOut(.week, leftPercent: 0))
     }
 
     func testHoverCardWeeklyLockGraysEveryWindow() throws {
         let model = try XCTUnwrap(lockedCardModel(kind: .weekly))
-        XCTAssertTrue(model.isLockedOut(.five))
-        XCTAssertTrue(model.isLockedOut(.week))
+        XCTAssertTrue(model.isLockedOut(.five, leftPercent: 0))
+        XCTAssertTrue(model.isLockedOut(.week, leftPercent: 60))
     }
 
     func testHoverCardWithoutActiveLockGraysNothing() throws {
         let expired = ClaudeBlock(kind: .weekly, resetAt: noonJST.addingTimeInterval(-60), timeZoneKnown: true)
         let model = try XCTUnwrap(lockedCardModel(block: expired))
-        XCTAssertFalse(model.isLockedOut(.five))
-        XCTAssertFalse(model.isLockedOut(.week))
+        XCTAssertFalse(model.isLockedOut(.five, leftPercent: 0))
+        XCTAssertFalse(model.isLockedOut(.week, leftPercent: 60))
     }
 
     private func lockedCardModel(kind: ClaudeBlock.Kind) -> RingDetailCardModel? {

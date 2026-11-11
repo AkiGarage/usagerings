@@ -21,11 +21,17 @@ struct ServiceRowModel: Identifiable {
     var isBlocked: Bool { block?.isActive(at: Date()) == true }
 
     func isLockedOut(_ limit: UsageLimit) -> Bool {
-        isLockedOut(ServiceRowModel.kind(limit.title))
+        isLockedOut(ServiceRowModel.kind(limit.title), leftPercent: limit.leftPercent)
     }
-    func isLockedOut(_ kind: ServiceRowModel.Kind) -> Bool {
+    func isLockedOut(_ pace: WeeklyPace) -> Bool {
+        isLockedOut(pace.windowKind, leftPercent: 100 - pace.usedPercent)
+    }
+    func isLockedOut(_ kind: ServiceRowModel.Kind, leftPercent: Double) -> Bool {
         guard isBlocked, let block else { return false }
-        return block.kind == .weekly || kind != .week
+        return Self.lockGraysWindow(blockKind: block.kind, windowKind: kind, leftPercent: leftPercent)
+    }
+    static func lockGraysWindow(blockKind: ClaudeBlock.Kind, windowKind: Kind, leftPercent: Double) -> Bool {
+        blockKind == .weekly || windowKind != .week || leftPercent < CollapsedUsageBar.exhaustedLeftPercent
     }
 
     /// "リセットチケット ×3 · 期限 10/23 05:56 · 10/30 04:10 · 11/07 08:36" — available tickets, sorted by expiry.
@@ -420,7 +426,7 @@ struct ServiceRowView: View {
                     // 詳細: every window gets the same full-width bar (5h first, then weekly, then others like GLM MCP).
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(row.detailPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
-                            WeeklyPaceBar(pace: pace, blocked: row.isLockedOut(pace.windowKind))
+                            WeeklyPaceBar(pace: pace, blocked: row.isLockedOut(pace))
                         }
                         ForEach(Array(detailOthers.enumerated()), id: \.offset) { _, limit in
                             DetailLimitRow(label: ServiceRowModel.shortLabel(limit.title), leftPercent: limit.clampedLeftPercent,
