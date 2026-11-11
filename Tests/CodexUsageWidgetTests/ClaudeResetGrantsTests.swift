@@ -216,7 +216,8 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(stats(.loginExpired).map(\.valueText),
                        ["Claude Codeを一度使うとログインが更新されます"])
         XCTAssertEqual(stats(.unauthorized).map(\.valueText), ["Claude Codeで再ログインしてください"])
-        XCTAssertEqual(stats(.httpFailure(429)).map(\.valueText), ["取得できません（HTTP 429）"])
+        XCTAssertEqual(stats(.httpFailure(429)).map(\.valueText), ["取得の回数制限中（15分ごとに再取得）"])
+        XCTAssertEqual(stats(.httpFailure(500)).map(\.valueText), ["取得できません（HTTP 500）"])
         XCTAssertEqual(stats(.transportFailure).map(\.valueText), ["取得できません"])
         XCTAssertEqual(stats(.malformed).map(\.valueText), ["取得できません"])
         for outcome in [ClaudeResetGrantsOutcome.loginExpired, .unauthorized, .httpFailure(500),

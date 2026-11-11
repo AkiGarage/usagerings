@@ -230,6 +230,8 @@ struct ClaudeResetGrantsClient: Sendable {
             return note("Claude Codeを一度使うとログインが更新されます", accountIndex: accountIndex)
         case .unauthorized:
             return note("Claude Codeで再ログインしてください", accountIndex: accountIndex)
+        case .httpFailure(429):
+            return note("取得の回数制限中（\(Int(ClaudeCLIUsage.grantsRefreshInterval / 60))分ごとに再取得）", accountIndex: accountIndex)
         case .httpFailure(let status):
             return note("取得できません（HTTP \(status)）", accountIndex: accountIndex)
         case .transportFailure, .malformed:
