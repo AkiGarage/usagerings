@@ -100,6 +100,7 @@ enum DemoSnapshotExporter {
             ("hover-minimax.png", "minimax"),
             ("hover-kimi.png", "kimi"),
             ("hover-deepseek.png", "deepseek"),
+            ("hover-opendesign.png", "opendesign"),
             ("hover-antigravity-argon.png", "antigravity-Gemini 4 Argon"),
             ("hover-antigravity-gemini-models.png", "antigravity-Gemini Models"),
             ("hover-antigravity-claude-gpt.png", "antigravity-Claude and GPT models")
@@ -113,6 +114,12 @@ enum DemoSnapshotExporter {
             ("panel-failure-no-data.png", failureData),
             ("opacity-hud.png", opacityHUDData)
         ]
+        let fittedSize = MultiCollapsedUsageView.size(for: snapshot, barZoom: 2.5,
+            menuBarHeight: 37, orientation: .vertical, maxVerticalLength: 889)
+        let fittedRings = MultiCollapsedUsageView(snapshot: snapshot, barZoom: 2.5,
+            menuBarHeight: 37, orientation: .vertical, maxVerticalLength: 889).padding(8)
+        outputs.append(("rings-vertical-fitted.png", try renderImagePNG(fittedRings,
+            size: CGSize(width: fittedSize.width + 16, height: 905), appearance: .dark)))
         for (filename, barID) in cardFiles {
             guard let bar = bars.first(where: { $0.id == barID }),
                   let model = RingDetailCardModel.make(bar: UsageRingsDemoFixture.detailCardBar(for: bar), now: now,
@@ -199,7 +206,7 @@ enum DemoSnapshotExporter {
     /// Native toolbar buttons need AppKit hosting. Scale the SwiftUI tree before
     /// caching so AppKit's 1x backing store rasterizes text at final pixel size.
     /// The attached window remains unordered.
-    private static func renderHostedPNG<Content: View>(_ content: Content,
+    static func renderHostedPNG<Content: View>(_ content: Content,
                                                         size requestedSize: CGSize? = nil,
                                                         appearance: PanelAppearance) throws -> Data {
         let scheme: ColorScheme = appearance == .dark ? .dark : .light

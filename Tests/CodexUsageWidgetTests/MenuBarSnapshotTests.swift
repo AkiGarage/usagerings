@@ -36,7 +36,7 @@ final class MenuBarSnapshotTests: XCTestCase {
             XCTAssertEqual(bar.fillColor == bar.providerColor, percent >= 35)
         }
         let empty = CollapsedUsageBar.bars(for: .placeholder)
-        XCTAssertEqual(empty.count, 12)
+        XCTAssertEqual(empty.count, 13)
         XCTAssertTrue(empty.allSatisfy { $0.limit == nil && !$0.isWarning })
         XCTAssertEqual(CollapsedUsageBar.detailText(for: try XCTUnwrap(empty.last)), "No data")
     }

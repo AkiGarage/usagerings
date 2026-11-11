@@ -7,6 +7,7 @@ struct MultiUsageService: Sendable {
     private let zaiTicketClient: ZaiResetTicketClient?
     private let claudeRateLimitMonitor: ClaudeRateLimitMonitor?
     private let claudeCLI: ClaudeCLIUsage?
+    private let openDesignClient: OpenDesignUsageClient?
     private let retryDelay: TimeInterval
     private let fetchFailureLog: FetchFailureLog?
 
@@ -16,6 +17,7 @@ struct MultiUsageService: Sendable {
         zaiTicketClient: ZaiResetTicketClient? = nil,
         claudeRateLimitMonitor: ClaudeRateLimitMonitor? = nil,
         claudeCLI: ClaudeCLIUsage? = nil,
+        openDesignClient: OpenDesignUsageClient? = nil,
         retryDelay: TimeInterval = 2.5,
         failureLog: FetchFailureLog? = nil
     ) {
@@ -24,6 +26,7 @@ struct MultiUsageService: Sendable {
         self.zaiTicketClient = zaiTicketClient ?? (commandRunner == nil ? .live() : nil)
         self.claudeRateLimitMonitor = claudeRateLimitMonitor ?? (commandRunner == nil ? .live() : nil)
         self.claudeCLI = claudeCLI ?? (commandRunner == nil ? Self.sharedClaudeCLI(cliPath) : nil)
+        self.openDesignClient = openDesignClient ?? (commandRunner == nil ? .live() : nil)
         self.retryDelay = retryDelay
         self.fetchFailureLog = failureLog ?? (commandRunner == nil ? .live() : nil)
     }
@@ -51,9 +54,11 @@ struct MultiUsageService: Sendable {
         async let minimax = fetchProviderUnlessDisabled(.minimax, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
         async let kimi = fetchProviderUnlessDisabled(.kimi, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
         async let deepseek = fetchProviderUnlessDisabled(.deepseek, disabled: disabled, now: now, timeZone: timeZone, calendar: calendar)
+        async let opendesign = fetchOpenDesignUnlessDisabled(disabled: disabled, now: now)
         async let tickets = disabled.contains(.zai) ? nil : zaiTicketClient?.fetch()
         async let blocks = disabled.contains(.claude) ? nil : claudeRateLimitMonitor?.blocks(now: now)
-        let (codexResult, zaiResult, ticketResult, blockResult) = await (codex, zai, tickets, blocks)
+        let (codexResult, zaiResult, openDesignResult, ticketResult, blockResult) =
+            await (codex, zai, opendesign, tickets, blocks)
         let cliClaude = disabled.contains(.claude) ? nil : claudeCLI?.section(accounts: ClaudeCLIAccountSettings.load(), now: now, timeZone: timeZone)
         var proxy = await [antigravity.section, grok.section]
         if !disabled.contains(.claude) {
@@ -74,7 +79,7 @@ struct MultiUsageService: Sendable {
         }
         var zaiSection = zaiResult.section
         zaiSection.zaiResetTickets = zaiSection.accounts.count > 1 ? nil : ticketResult
-        let additional = await [minimax.section, kimi.section, deepseek.section]
+        let additional = await [minimax.section, kimi.section, deepseek.section, openDesignResult]
         let sections = MultiUsageSnapshot.ordered([codexResult.section, zaiSection] + additional + proxyWithBlocks)
         Self.writeWindowDump(sections)
         return MultiUsageSnapshot(
@@ -142,6 +147,49 @@ struct MultiUsageService: Sendable {
         return await fetchProvider(provider, now: now, timeZone: timeZone, calendar: calendar)
     }
 
+    private func fetchOpenDesignUnlessDisabled(disabled: Set<ProviderID>, now: Date) async -> ProviderSection {
+        guard !disabled.contains(.opendesign) else {
+            return ProviderSection(provider: .opendesign, windows: [], stats: [], failureText: Self.hiddenText)
+        }
+        guard let client = openDesignClient else { return Self.openDesignSection(.notLoggedIn, now: now) }
+        return Self.openDesignSection(await client.fetch(), now: now)
+    }
+
+    static func openDesignSection(_ outcome: OpenDesignUsage, now: Date) -> ProviderSection {
+        switch outcome {
+        case let .loaded(_, windows):
+            let limits = windows.map { window -> UsageLimit in
+                var limit = UsageLimit(
+                    title: window.kind.title,
+                    leftPercent: window.leftPercent,
+                    resetText: window.resetsAt.map { UsageDurationFormat.resetText(for: $0, now: now) } ?? openDesignUnknownReset
+                )
+                limit.resetAt = window.resetsAt
+                return limit
+            }
+            return ProviderSection(provider: .opendesign, windows: limits, stats: [], failureText: nil)
+        case .notLoggedIn:
+            return ProviderSection(provider: .opendesign, windows: [], stats: [],
+                                   failureText: openDesignLoginText, failureReason: .logout)
+        case .unauthorized:
+            return ProviderSection(provider: .opendesign, windows: [], stats: [],
+                                   failureText: openDesignLoginText, failureReason: .logout)
+        case let .httpFailure(status):
+            return ProviderSection(provider: .opendesign, windows: [], stats: [],
+                                   failureText: "\(openDesignUnavailableText) (\(status))", failureReason: .providerError)
+        case .transportFailure:
+            return ProviderSection(provider: .opendesign, windows: [], stats: [],
+                                   failureText: openDesignUnavailableText, failureReason: .transport)
+        case .malformed, .noPlan, .noPersonalWorkspace:
+            return ProviderSection(provider: .opendesign, windows: [], stats: [],
+                                   failureText: openDesignUnavailableText, failureReason: .providerError)
+        }
+    }
+
+    static let openDesignLoginText = "OpenDesignアプリでログインしてください"
+    static let openDesignUnavailableText = "OpenDesignの使用量を取得できません"
+    static let openDesignUnknownReset = "リセット時刻 不明"
+
     private func fetchProvider(
         _ provider: ProviderID,
         now: Date,
@@ -187,6 +235,8 @@ struct MultiUsageService: Sendable {
                     timeZone: timeZone
                 )
                 return ProviderResult(provider: provider, section: section, codexSnapshot: nil)
+            case .opendesign:
+                throw MultiProviderParser.ParseError.noWindows
             }
         } catch {
             Self.recordFailure(fetchFailureLog, provider: provider.rawValue, error: error)
@@ -302,7 +352,7 @@ struct MultiUsageService: Sendable {
     static func accountScope(_ provider: ProviderID) -> CodexBarAccountScope {
         switch provider {
         case .antigravity, .grok, .claude: .localLogin
-        case .codex, .zai, .minimax, .kimi, .deepseek, .gemini: .savedAccounts
+        case .codex, .zai, .minimax, .kimi, .deepseek, .opendesign, .gemini: .savedAccounts
         }
     }
 
@@ -317,7 +367,7 @@ struct MultiUsageService: Sendable {
     static func sourceArguments(_ provider: ProviderID) -> [String] {
         switch provider {
         case .antigravity, .grok, .claude: ["--source", "cli"]
-        case .codex, .zai, .minimax, .kimi, .deepseek, .gemini: []
+        case .codex, .zai, .minimax, .kimi, .deepseek, .opendesign, .gemini: []
         }
     }
 

@@ -13,7 +13,8 @@ final class MultiUsageServiceTests: XCTestCase {
         let service = MultiUsageService(commandRunner: commandRunner(for: .allSuccess))
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
-        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
+        XCTAssertEqual(snapshot.sections.map(\.provider),
+                       [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .opendesign, .antigravity])
 
         let codex = snapshot.sections[0]
         XCTAssertEqual(codex.windows.map(\.title), ["Weekly"])
@@ -52,7 +53,8 @@ final class MultiUsageServiceTests: XCTestCase {
         let service = MultiUsageService(commandRunner: commandRunner(for: .zaiFails))
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
-        XCTAssertEqual(snapshot.sections.map(\.provider), [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity])
+        XCTAssertEqual(snapshot.sections.map(\.provider),
+                       [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .opendesign, .antigravity])
         XCTAssertNil(snapshot.sections[0].failureText)
         XCTAssertNotNil(snapshot.sections[3].failureText)
         XCTAssertFalse(snapshot.sections[3].failureText!.contains("synthetic-sensitive-message"))
