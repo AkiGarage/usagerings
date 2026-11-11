@@ -89,6 +89,8 @@ final class ClaudeCLIUsage: Sendable {
         var maskedEmail: String?
         var failureReason: UsageFailureReason?
         var failureMessage: String?
+        var grants: ClaudeResetGrantsOutcome?
+        var grantsFetchedAt: Date?
     }
 
     private struct State {
@@ -104,21 +106,25 @@ final class ClaudeCLIUsage: Sendable {
     private let refreshInterval: TimeInterval
     private let maxCacheAge: TimeInterval
     private let failureLog: FetchFailureLog?
+    private let grantsClient: ClaudeResetGrantsClient?
     private let state = OSAllocatedUnfairLock(initialState: State())
 
+    static let grantsRefreshInterval: TimeInterval = 900
+
     init(runner: @escaping Runner, refreshInterval: TimeInterval = 120, maxCacheAge: TimeInterval = 600,
-         failureLog: FetchFailureLog? = nil) {
+         failureLog: FetchFailureLog? = nil, grantsClient: ClaudeResetGrantsClient? = nil) {
         self.runner = runner
         self.refreshInterval = refreshInterval
         self.maxCacheAge = maxCacheAge
         self.failureLog = failureLog
+        self.grantsClient = grantsClient
     }
 
     static func live(cliPath: String, timeout: TimeInterval = 60) -> ClaudeCLIUsage {
         ClaudeCLIUsage(runner: { arguments, environment in
             try await SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
                                        environment: environment).run(arguments)
-        }, failureLog: .live())
+        }, failureLog: .live(), grantsClient: .live())
     }
 
     struct Result {
@@ -279,6 +285,23 @@ final class ClaudeCLIUsage: Sendable {
                 return true
             }
             guard current else { return }
+            guard let grantsClient else { continue }
+            let grantsDue = state.withLock { s -> Bool in
+                guard s.generation == generation else { return false }
+                let fetchedAt = s.entries[Self.key(account)]?.grantsFetchedAt
+                return fetchedAt.map { started.timeIntervalSince($0) >= Self.grantsRefreshInterval } ?? true
+            }
+            guard grantsDue else { continue }
+            let grants = await grantsClient.fetch(configDir: account.configDir)
+            let grantsStored = state.withLock { s -> Bool in
+                guard s.generation == generation else { return false }
+                var entry = s.entries[Self.key(account)] ?? Entry()
+                entry.grants = grants
+                entry.grantsFetchedAt = started
+                s.entries[Self.key(account)] = entry
+                return true
+            }
+            guard grantsStored else { return }
         }
         state.withLock { s in
             guard s.generation == generation else { return }
@@ -324,6 +347,14 @@ final class ClaudeCLIUsage: Sendable {
             }
             combined.accounts.append(item)
             if let masked = entry?.maskedEmail { maskedEmails[index] = masked }
+            if let grants = entry?.grants {
+                combined.stats += ClaudeResetGrantsClient.stats(
+                    for: grants,
+                    accountIndex: index,
+                    now: now,
+                    calendar: RingResetFormat.tokyoCalendar
+                )
+            }
         }
         guard anyValue else { return nil }
         combined.accountInventoryComplete = true
