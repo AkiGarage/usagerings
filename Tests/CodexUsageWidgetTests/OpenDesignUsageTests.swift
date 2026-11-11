@@ -127,7 +127,7 @@ final class OpenDesignUsageTests: XCTestCase {
 
     func testMissingResetTimeStaysUnknownInsteadOfInventingOne() throws {
         let data = try fundingJSON { object in
-            var entryWindows = try windows(&object)
+            var entryWindows = try self.windows(&object)
             entryWindows[0]["resetsAt"] = NSNull()
             try setWindows(entryWindows, in: &object)
         }
