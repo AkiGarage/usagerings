@@ -100,6 +100,27 @@ final class HideTicketsAndBlockedBarTests: XCTestCase {
         XCTAssertNotEqual(open, locked, "lock icon + unlock lines must change the ring")
     }
 
+    func testNoBlockLeavesEveryWindowUnlocked() {
+        let row = ServiceRowModel(id: "x", name: "X", color: .gray)
+        XCTAssertFalse(row.isLockedOut(UsageLimit(title: "5h", leftPercent: 0, resetText: "")))
+        XCTAssertFalse(row.isLockedOut(UsageLimit(title: "Weekly", leftPercent: 40, resetText: "")))
+    }
+
+    func testSessionLockGraysOnlyTheFiveHourWindow() {
+        var row = ServiceRowModel(id: "x", name: "X", color: .gray)
+        row.block = ClaudeBlock(kind: .session, resetAt: Date().addingTimeInterval(3600), timeZoneKnown: true)
+        XCTAssertTrue(row.isLockedOut(UsageLimit(title: "5h", leftPercent: 0, resetText: "")))
+        XCTAssertFalse(row.isLockedOut(UsageLimit(title: "Weekly", leftPercent: 40, resetText: "")))
+        XCTAssertTrue(row.isLockedOut(UsageLimit(title: "MCP", leftPercent: 0, resetText: "")))
+    }
+
+    func testWeeklyLockGraysEveryWindow() {
+        var row = ServiceRowModel(id: "x", name: "X", color: .gray)
+        row.block = ClaudeBlock(kind: .weekly, resetAt: Date().addingTimeInterval(3600), timeZoneKnown: true)
+        XCTAssertTrue(row.isLockedOut(UsageLimit(title: "5h", leftPercent: 0, resetText: "")))
+        XCTAssertTrue(row.isLockedOut(UsageLimit(title: "Weekly", leftPercent: 0, resetText: "")))
+    }
+
     func testGeminiMenuTitleHasNoChromeTabSuffix() {
         XCTAssertEqual(AppDelegate.geminiReadingMenuTitle, "Gemini の使用量を読む")
     }
