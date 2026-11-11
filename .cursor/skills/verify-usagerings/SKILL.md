@@ -25,3 +25,19 @@ Over non-interactive SSH to a Mac (e.g. the mini), export `DEVELOPER_DIR=/Applic
 
 ## Link to the formal checks
 The rules come from `docs/formal/UsageRefresh.tla` (see usagerings-formal-verification). TLC proves the ordering rules; this skill proves the real views show the results the right way. Stale display and reset timing are not rendered by demo export; they are covered by StaleRetentionTests and ResetRefreshTests.
+
+## OpenDesign and short screens
+
+Demo export also produces `hover-opendesign.png` (5-hour and weekly rows) and
+`rings-vertical-fitted.png` (905pt canvas, 8pt margins, saved zoom 2.5, all rings).
+`swift test --filter 'OrientationTests|VerticalTabFitTests'` drives the real
+NSHostingView through small → tall → small screens with isolated defaults,
+asserts native dimensions and unchanged saved zoom, and checks every hover target.
+
+Opt-in live proof on a Mac already logged into the official OpenDesign app:
+`USAGERINGS_OPENDESIGN_LIVE_OUTPUT=/abs/evidence swift test --filter OpenDesignLiveTests`.
+This uses the production client and parser, two read-only GETs, an isolated defaults
+suite and the real panel view. It writes `opendesign-live-panel.png` and prints only
+quota percentages / whether reset times are known; it never prints credentials or
+raw API data. Normal tests skip this case. No installed app is launched or stopped.
+Inspect the PNG; a passing mocked test does not replace this live proof.
