@@ -2,15 +2,50 @@
   "specs": [
     {
       "tla": "docs/formal/UsageRefresh.tla",
-      "cfgs": ["docs/formal/UsageRefresh.cfg"],
-      "sources": ["Sources/CodexUsageWidget/Stores/MultiUsageStore.swift", "Sources/CodexUsageWidget/Models/UsageSnapshot.swift", "Sources/CodexUsageWidget/Models/MultiUsageSnapshot.swift"],
-      "sync_commit": "280d6ee"
+      "cfgs": [
+        "docs/formal/UsageRefresh.cfg"
+      ],
+      "sources": [
+        "Sources/CodexUsageWidget/Stores/MultiUsageStore.swift",
+        "Sources/CodexUsageWidget/Models/UsageSnapshot.swift",
+        "Sources/CodexUsageWidget/Models/MultiUsageSnapshot.swift"
+      ],
+      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
     },
     {
       "tla": "docs/formal/UsageRead.tla",
-      "cfgs": ["docs/formal/UsageRead.cfg"],
-      "sources": ["Sources/CodexUsageWidget/Services/MultiUsageService.swift"],
-      "sync_commit": "280d6ee"
+      "cfgs": [
+        "docs/formal/UsageRead.cfg"
+      ],
+      "sources": [
+        "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
+      ],
+      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+    },
+    {
+      "tla": "docs/formal/opendesign/OpenDesignRead.tla",
+      "cfgs": [
+        "docs/formal/opendesign/OpenDesignRead.cfg"
+      ],
+      "sources": [
+        "Sources/CodexUsageWidget/Services/OpenDesignUsage.swift",
+        "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
+      ],
+      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+    },
+    {
+      "tla": "docs/formal/opendesign/VerticalTabFit.tla",
+      "cfgs": [
+        "docs/formal/opendesign/VerticalTabFit.cfg"
+      ],
+      "sources": [
+        "Sources/CodexUsageWidget/App/AppDelegate.swift",
+        "Sources/CodexUsageWidget/Views/MultiCollapsedUsageView.swift",
+        "Sources/CodexUsageWidget/Views/MultiEdgeTabView.swift",
+        "Sources/CodexUsageWidget/Views/EdgeTabView.swift",
+        "Sources/CodexUsageWidget/Views/RingDetailCard.swift"
+      ],
+      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
     }
   ]
 }

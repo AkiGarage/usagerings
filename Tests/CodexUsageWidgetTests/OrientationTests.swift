@@ -46,6 +46,7 @@ final class OrientationTests: XCTestCase {
 
     @MainActor
     func testContextMenuSelectsOrientationAndChecksCurrentValue() throws {
+        _ = NSApplication.shared
         let name = "OrientationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
@@ -79,6 +80,7 @@ final class OrientationTests: XCTestCase {
 
     @MainActor
     func testOrientationAndZoomReachNativeTabAndStayOnScreen() async throws {
+        _ = NSApplication.shared
         let name = "OrientationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
@@ -89,6 +91,7 @@ final class OrientationTests: XCTestCase {
         presentation.collapsedSize = MultiCollapsedUsageView.size(for: store.snapshot, menuBarHeight: 37)
         let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let visible = CGRect(x: 0, y: 40, width: 1512, height: 905)
+        presentation.maxCollapsedLength = TabPositioning.maxVerticalTabLength(visibleHeight: visible.height)
         let size = presentation.size
         let window = NSPanel(contentRect: CGRect(x: screen.maxX - size.width - 8,
                                                 y: screen.maxY - size.height,
@@ -107,7 +110,8 @@ final class OrientationTests: XCTestCase {
         for (orientation, zoom) in [(PanelOrientation.vertical, 1.0), (.vertical, 0.6),
                                     (.vertical, 2.5), (.horizontal, 2.5), (.horizontal, 1.0)] {
             let expected = MultiCollapsedUsageView.size(for: store.snapshot, barZoom: zoom,
-                                                       menuBarHeight: 37, orientation: orientation)
+                                                       menuBarHeight: 37, orientation: orientation,
+                                                       maxVerticalLength: presentation.maxCollapsedLength)
             let updated = expectation(description: "Native size \(orientation) at \(zoom)")
             presentation.onSizeChange = {
                 let origin = TabPositioning.multiResizedOrigin(
@@ -126,6 +130,7 @@ final class OrientationTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(window.frame.minY, visible.minY)
             XCTAssertLessThanOrEqual(window.frame.maxX, visible.maxX)
             XCTAssertLessThanOrEqual(window.frame.maxY, screen.maxY)
+            XCTAssertEqual(preferences.barZoom, zoom)
             XCTAssertFalse(window.isVisible)
             XCTAssertFalse(window.isKeyWindow)
         }
@@ -155,7 +160,8 @@ final class OrientationTests: XCTestCase {
             for zoom in [0.6, 1.0, 2.5] {
                 let horizontal = MultiCollapsedUsageView.size(for: .placeholder, barZoom: zoom, menuBarHeight: 37)
                 let vertical = MultiCollapsedUsageView.size(for: .placeholder, barZoom: zoom,
-                                                           menuBarHeight: 37, orientation: .vertical)
+                                                           menuBarHeight: 37, orientation: .vertical,
+                                                           maxVerticalLength: TabPositioning.maxVerticalTabLength(visibleHeight: visible.height))
                 for onRight in [false, true] {
                     for onTop in [false, true] {
                         let start = CGRect(x: onRight ? visible.maxX - horizontal.width - 8 : visible.minX + 8,

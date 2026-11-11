@@ -49,12 +49,14 @@ struct CollapsedUsageBar: Identifiable {
     static let codexColor = Color(red: 0x19 / 255, green: 0xB6 / 255, blue: 0xE6 / 255)
     static let antigravityColor = Color(red: 0x34 / 255, green: 0xA8 / 255, blue: 0x53 / 255)
     static let geminiColor = Color(red: 0x42 / 255, green: 0x85 / 255, blue: 0xF4 / 255)
+    /// OpenDesign: violet, distinct from GLM's indigo and Gemini's blue.
+    static let openDesignColor = Color(red: 0xA8 / 255, green: 0x55 / 255, blue: 0xF7 / 255)
     static let criticalColor = Color(red: 0xFF / 255, green: 0x45 / 255, blue: 0x3A / 255)
     static let warningColor = Color(red: 0xFF / 255, green: 0xB0 / 255, blue: 0x20 / 255)
 
     /// Short display name for rings ("Claude A", "GLM", group names for Antigravity).
     var ringName: String {
-        guard id.hasPrefix("claude-") || id == "zai" else { return title }
+        guard id.hasPrefix("claude-") || id == "zai" || id == "opendesign" else { return title }
         var parts = title.components(separatedBy: " · ")
         if parts[0].hasSuffix(" 5h") { parts[0].removeLast(3) }
         return parts.joined(separator: " · ")
@@ -162,10 +164,13 @@ struct CollapsedUsageBar: Identifiable {
         var zaiBars = accountBars(.zai, label: "Z", color: glmColor, preferFiveHour: true)
         if zaiBars.count == 1 { zaiBars[0].title = "GLM 5h" }
         bars += zaiBars
-        for provider in [ProviderID.minimax, .kimi, .deepseek] {
+        for provider in [ProviderID.minimax, .kimi, .deepseek, .opendesign] {
             guard snapshot.sections.contains(where: { $0.provider == provider }) else { continue }
-            bars += accountBars(provider, label: String(provider.displayName.prefix(1)),
-                                color: ServiceRowModel.color(for: provider, account: 0))
+            // OpenDesign's "O" would read as a second ring glyph: keep the agreed short label.
+            let label = provider == .opendesign ? "OD" : String(provider.displayName.prefix(1))
+            // OpenDesign's outer arc is its 5-hour window, with the 7-day one inside.
+            bars += accountBars(provider, label: label, color: ServiceRowModel.color(for: provider, account: 0),
+                                preferFiveHour: provider == .opendesign)
         }
         func antigravityBars(_ windows: [UsageLimit], account: Int? = nil, accountID: AccountID? = nil,
                             failureText: String? = nil) -> [Self] {
@@ -250,6 +255,7 @@ struct CollapsedUsageBar: Identifiable {
 
 struct MultiCollapsedUsageView: View {
     let snapshot: MultiUsageSnapshot
+    /// The saved preference; `renderedBarZoom` is what the tab actually draws with.
     var barZoom: Double = 1
     var menuBarHeight: CGFloat = NSStatusBar.system.thickness
     var orientation: PanelOrientation = .horizontal
@@ -257,7 +263,35 @@ struct MultiCollapsedUsageView: View {
     var accountPreferences = AccountPreferences()
     /// Ring under the cursor (hover card); nil = none.
     var highlightedBarID: String? = nil
+    /// Longest the vertical strip may be (screen visible height minus both
+    /// margins); nil means the caller measured no screen and nothing is capped.
+    var maxVerticalLength: CGFloat? = nil
     static let spacing: CGFloat = 5
+
+    /// The zoom the tab draws with: the saved one, capped only when the vertical
+    /// strip would not fit the screen. The preference itself is never written.
+    var renderedBarZoom: Double {
+        Self.renderedBarZoom(barZoom, barCount: Self.barCount(for: snapshot,
+                                                             splitAntigravityAccounts: splitAntigravityAccounts,
+                                                             accountPreferences: accountPreferences),
+                             menuBarHeight: menuBarHeight, orientation: orientation,
+                             maxVerticalLength: maxVerticalLength)
+    }
+
+    /// One definition of "what the tab actually draws at", shared by the view
+    /// and the hover card's hit testing so a fitted tab still maps clicks to
+    /// the ring under the cursor.
+    static func renderedBarZoom(_ requested: Double, barCount: Int, menuBarHeight: CGFloat,
+                                orientation: PanelOrientation, maxVerticalLength: CGFloat?) -> Double {
+        guard orientation == .vertical, let maxVerticalLength else { return requested }
+        return fittedBarZoom(requested, count: barCount, menuBarHeight: menuBarHeight, maxLength: maxVerticalLength)
+    }
+
+    static func barCount(for snapshot: MultiUsageSnapshot, splitAntigravityAccounts: Bool = false,
+                         accountPreferences: AccountPreferences = AccountPreferences()) -> Int {
+        CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
+                               accountPreferences: accountPreferences).count
+    }
 
     struct Layout {
         let tabHeight: CGFloat
@@ -285,14 +319,56 @@ struct MultiCollapsedUsageView: View {
                      menuBarHeight: CGFloat = NSStatusBar.system.thickness,
                      orientation: PanelOrientation = .horizontal,
                      splitAntigravityAccounts: Bool = false,
-                     accountPreferences: AccountPreferences = AccountPreferences()) -> CGSize {
-        let count = CGFloat(CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
-                                                  accountPreferences: accountPreferences).count)
-        let layout = layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
-        let width = max(1, count) * (layout.ringDiameter + spacing) - spacing + layout.horizontalPadding * 2
+                     accountPreferences: AccountPreferences = AccountPreferences(),
+                     maxVerticalLength: CGFloat? = nil) -> CGSize {
+        let count = CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
+                                          accountPreferences: accountPreferences).count
+        // Only the vertical strip can outgrow the screen; the horizontal tab
+        // keeps its saved zoom (the caller clamps its origin instead).
+        let zoom = orientation == .vertical
+            ? fittedBarZoom(barZoom, count: count, menuBarHeight: menuBarHeight, maxLength: maxVerticalLength)
+            : barZoom
+        let layout = layout(barZoom: zoom, menuBarThickness: menuBarHeight)
         return orientation == .horizontal
-            ? CGSize(width: ceil(width), height: layout.tabHeight)
-            : CGSize(width: layout.tabHeight, height: ceil(width))
+            ? CGSize(width: ceil(horizontalLength(count: count, layout: layout)), height: layout.tabHeight)
+            : CGSize(width: layout.tabHeight, height: verticalLength(count: count, barZoom: zoom,
+                                                                    menuBarHeight: menuBarHeight))
+    }
+
+    static func horizontalLength(count: Int, layout: Layout) -> CGFloat {
+        max(1, CGFloat(count)) * (layout.ringDiameter + spacing) - spacing + layout.horizontalPadding * 2
+    }
+
+    /// Length of the vertical (portrait) strip: one ring per bar stacked on the
+    /// tab's short side.
+    static func verticalLength(count: Int, barZoom: Double, menuBarHeight: CGFloat) -> CGFloat {
+        let layout = layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
+        return ceil(horizontalLength(count: count, layout: layout))
+    }
+
+    /// Largest bar zoom whose vertical strip still fits `maxLength` (the
+    /// screen's visible height minus both edge margins), never below the
+    /// preference minimum. Only the RENDERED zoom changes: the saved
+    /// `PanelPreferences.barZoom` stays as it is, so a taller screen restores
+    /// the full size. `nil`/non-finite `maxLength` means "unknown, do not cap".
+    static func fittedBarZoom(_ requested: Double, count: Int, menuBarHeight: CGFloat,
+                              maxLength: CGFloat?) -> Double {
+        let requestedZoom = scale(for: requested)
+        guard let maxLength, maxLength.isFinite, maxLength > 0, count > 0 else { return Double(requestedZoom) }
+        let minimum = CGFloat(PanelPreferences.barZoomRange.lowerBound)
+        func fits(_ zoom: CGFloat) -> Bool {
+            verticalLength(count: count, barZoom: Double(zoom), menuBarHeight: menuBarHeight) <= maxLength
+        }
+        if fits(requestedZoom) { return Double(requestedZoom) }
+        // Never below the preference minimum, even when even that is too long.
+        guard fits(minimum) else { return Double(minimum) }
+        var low = minimum
+        var high = requestedZoom
+        for _ in 0..<32 {
+            let mid = (low + high) / 2
+            if fits(mid) { low = mid } else { high = mid }
+        }
+        return Double(low)
     }
 
     /// Ring square for an index in top-left coordinates of the collapsed view,
@@ -326,6 +402,7 @@ struct MultiCollapsedUsageView: View {
     }
 
     var body: some View {
+        let barZoom = renderedBarZoom
         let layout = Self.layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
         let size = Self.size(for: snapshot, barZoom: barZoom, menuBarHeight: menuBarHeight,
                              orientation: orientation, splitAntigravityAccounts: splitAntigravityAccounts,

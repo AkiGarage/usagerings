@@ -657,11 +657,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         let geometryChanged = lastTabScreenGeometry != geometry
         let heightChanged = tabPresentation.menuBarHeight != height
+        // Both 8pt edges are kept clear, so the vertical strip may use the rest.
+        let fitLength = TabPositioning.maxVerticalTabLength(visibleHeight: geometry.visibleFrame.height)
+        let fitChanged = tabPresentation.maxCollapsedLength != fitLength
         lastTabScreenGeometry = geometry
         if heightChanged {
             tabPresentation.menuBarHeight = height
         }
-        if geometryChanged || heightChanged {
+        if fitChanged {
+            tabPresentation.maxCollapsedLength = fitLength
+        }
+        if geometryChanged || heightChanged || fitChanged {
             setTabMode(tabPresentation.mode)
         }
     }
@@ -1076,6 +1082,15 @@ enum FrameDiagnostics {
 enum TabPositioning {
     static let windowLevel = NSWindow.Level.statusBar
     static let edgePadding: CGFloat = 8
+
+    /// Longest vertical tab this screen can show while both edge margins stay
+    /// clear. Pure: the fit is testable without a display, and nil (an unknown
+    /// screen) means the caller caps nothing.
+    static func maxVerticalTabLength(visibleHeight: CGFloat) -> CGFloat? {
+        guard visibleHeight.isFinite, visibleHeight > 0 else { return nil }
+        let length = visibleHeight - edgePadding * 2
+        return length > 0 ? length : nil
+    }
     static let panelTopGap: CGFloat = 4
     static let panelDesignSize = NSSize(width: 360, height: 190)
     static let defaultPanelDisplayScale: CGFloat = 0.75

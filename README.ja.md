@@ -23,15 +23,16 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 | Z.ai / GLM Coding Plan | CodexBarCLI。追加情報はZ.aiのリセット券API | CodexBarのZ.ai設定 |
 | MiniMax / Kimi | CodexBarCLI | CodexBarで対象プロバイダーを設定 |
 | DeepSeek | CodexBarCLI | CodexBarのDeepSeek設定。残高・使用実績を表示（割合の上限は表示しません） |
+| OpenDesign（Go） | OpenDesignのcontrol API。公式アプリのAMRログインが保存したcontrolKeyで認証 | OpenDesignアプリ（または `od amr login`）でログイン済みであること。Design Planの5時間枠・7日枠を表示 |
 | Grok | CodexBarCLI（`--source cli`）。公式Grok Build CLIの利用状況を読みます | ログイン済みのGrok Build CLI（`grok`） |
 
 **macOS 14以降**に対応します。ビルドには **Swift 5.9以降**を含むXcode Command Line Toolsと、固定バージョンのSparkleを取得するインターネット接続が必要です。使用する開発ツールを`xcode-select`で選択してください。
 
-**すべての項目（Codex・Claude・Antigravity・Grok・GLM・MiniMax・Kimi・DeepSeek）の表示にCodexBarCLIが必要です。** 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがない場合は、各項目にその旨を表示します。
+**OpenDesign以外のすべての項目（Codex・Claude・Antigravity・Grok・GLM・MiniMax・Kimi・DeepSeek）の表示にCodexBarCLIが必要です。** OpenDesignはCodexBarCLIを経由せず、OpenDesignのcontrol APIから直接読みます。 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがない場合は、各項目にその旨を表示します。
 
 Antigravity、Grok、ClaudeはCodexBarCLIの `--source cli` だけで読みます。各社公式のCLIを使い、ブラウザーのCookieやWeb経由の取得は使いません。UsageRingsはこれらのCLIのインストールやログイン画面を持ちません。設定が足りない場合はパネルに表示します。
 
-UsageRingsが読む鍵: GLMのリセット券用にCodexBarの `~/.config/codexbar/config.json`（または `~/.codexbar/config.json`）にあるZ.aiのAPIキーだけです。Keychainに鍵は保存せず、アカウントのパスワードを求めたり読んだりもしません。
+UsageRingsが読む鍵: GLMのリセット券用にCodexBarの `~/.config/codexbar/config.json`（または `~/.codexbar/config.json`）にあるZ.aiのAPIキーと、OpenDesignのDesign Plan枠用に公式OpenDesignアプリのAMRログインが `~/.amr/config.json`（profile `prod`）へ保存するcontrolKeyです。どちらも取得のたびに読み、それぞれの提供元にだけ送ります。Keychainに鍵は保存せず、ブラウザーのCookieやWebセッションも使いません。アカウントのパスワードを求めたり読んだりもしません。
 
 GLMのリセット券詳細は追加機能です。標準のCodexBar設定にあるglobalリージョンのZ.ai APIキーを利用します。この詳細取得は、設定ファイル・API接続先の上書きや複数トークンアカウントに対応していません。
 
@@ -74,7 +75,7 @@ USAGERINGS_SIGN_IDENTITY='Your signing identity' ./script/build_and_run.sh usage
 
 設定と表示用スナップショットは初期状態ではローカルに保存します。iPhone向けiCloud同期は初期状態でオフです。有効にすると、対応する使用率・リセット時刻とランダムな端末・アカウント識別子を本人のiCloudのprivate databaseに送ります。認証情報、アカウント名、ログ、残高は送りません。このビルドには同期に必要な署名・entitlement・container設定はまだ含まれていません。UsageRings独自のクラウドアカウント、アクセス解析、HTTP/LANサーバーはありません。
 
-最新の使用量を取得する通信は必要です。CodexBarCLIは各プロバイダーへ接続し、認証付きのローカルプロキシは各サービスへの要求を仲介します。GLMのリセット券はZ.aiへ直接問い合わせます。リモートClaude監視を有効にすると、指定したホストへのSSH通信も発生します。
+最新の使用量を取得する通信は必要です。CodexBarCLIは各プロバイダーへ接続し、認証付きのローカルプロキシは各サービスへの要求を仲介します。GLMのリセット券はZ.aiへ、OpenDesignの使用枠は保存済みのcontrolKeyを使って `amr-api.open-design.ai` へ直接問い合わせます。リモートClaude監視を有効にすると、指定したホストへのSSH通信も発生します。
 
 ローカルClaude監視は `~/.claude/projects`、`~/.claude-a/projects`、`~/.claude-b/projects` の最近のログ末尾を、ファイル数・サイズを制限して読みます。SSHでは制限イベントの文面・時刻・モデル識別子に絞った情報を受け取ります。Codexの表示用スナップショットは `~/Library/Application Support/CodexUsageWidget-Multi/` と、macOSのユーザーごとの一時ディレクトリ（`$TMPDIR`）内の `UsageRings` フォルダ（権限0700、ファイルは0600）に保存し、プロバイダー・使用枠の診断JSONも同じフォルダに保存します。このバージョンは共有の `/private/tmp` に書き込みません（古いビルドが残したファイルは自動では消しません）。SSHでのリモートClaude監視に失敗した場合は、独立した「Claude logs B」の欄に接続先を含まない短い理由を表示します。これらは個人の利用情報として扱い、ログや画像を共有する前に内容を確認してください。
 

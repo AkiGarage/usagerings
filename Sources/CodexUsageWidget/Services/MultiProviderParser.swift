@@ -60,7 +60,7 @@ enum MultiProviderParser {
     static func headlineWindowsRepeatSummary(_ provider: ProviderID) -> Bool {
         switch provider {
         case .antigravity: true
-        case .codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .gemini: false
+        case .codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .opendesign, .gemini: false
         }
     }
 

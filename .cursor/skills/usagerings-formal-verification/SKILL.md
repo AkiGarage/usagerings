@@ -63,3 +63,45 @@ Run: `docs/formal/check-refresh.sh`. It must print PASS for UsageRefresh and PAS
 | Stop, Restart, gen, GenGuard | stop() bumps the generation; an older fetch is not applied (Fault-ApplyAfterStop) |
 Bounds: 2 accounts, 4 requests, 2 periods, 2 stops (63808 distinct states). Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
 Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit 280d6ee (providerError counts as transient, i.e. the model's "transient" outcome).
+
+## OpenDesign and fitted vertical tab
+
+OpenDesign is a separate read-only control API path, not a CodexBarCLI provider.
+Existing UsageRead/UsageRefresh invariants remain unchanged: the old CLI source
+policy still covers Antigravity/Grok/Claude, and refresh/stale merging is unchanged.
+The ten-provider source-policy test now enumerates 1,024 disabled subsets.
+
+Run `docs/formal/opendesign/check.sh /abs/new/evidence-directory`. It checks
+OpenDesignRead and VerticalTabFit, then requires each of six injected faults to
+violate its named invariant. Read the models with `/statechart`, using
+`read-view.mjs` / `fit-view.mjs` in that directory. No existing invariant is weakened.
+
+Rules in plain Japanese are written immediately above each invariant in the specs:
+- 無効にしたOpenDesignの認証情報を読まず、通信もしない。
+- 検証に失敗した応答を残量として表示しない。
+- 403を再ログインが必要な状態として扱わない。
+- 画面に合わせて縮小しても、保存した拡大率を変えない。
+- 縦表示は、その画面に収まる拡大率で描画する。
+- 大きい画面や横表示では、利用者が選んだ拡大率に戻る。
+
+| Model | Code / executable proof |
+|---|---|
+| Start, DisabledNoIO | MultiUsageService.fetchOpenDesignUnlessDisabled; OpenDesignUsageTests disabled case |
+| Credential / Directory / Funding | OpenDesignUsageClient.fetch: local key then two sequential GETs |
+| OnlyValidatedQuota | OpenDesignUsageParser.funding, openDesignSection; malformed response tests |
+| ForbiddenIsNotLogout | OpenDesignUsageClient.outcome; 401/403 test |
+| ChangeScreenOrOrientation, SavedZoomUnchanged, FitsScreen, RestoresZoom | AppDelegate.refreshTabScreenGeometry → EdgeTabPresentationState.maxCollapsedLength → MultiEdgeTabView.updateCollapsedSize; VerticalTabFitTests native view screen-transition test |
+| Fit | MultiCollapsedUsageView.fittedBarZoom and RingDetailCardController.context; fit boundary and hit-target tests |
+
+Bounds: one fetch (no retry), response classes 200/401/403/500, credential and
+payload validity; three abstract zoom levels, two screen sizes, two orientations.
+The fit model describes the settled view after SwiftUI processes a screen change,
+not intermediate notification delivery. Its short screen fits the minimum zoom;
+screens too short even for 0.6, fractional sizing, JSON arithmetic and pixels are
+left to Swift tests / real view exports. The app retains the minimum 0.6 in that
+unsupported geometry. Existing source-policy and refresh models were compared
+against 280d6ee: this change adds a provider without altering those algorithms.
+Sync commit: f949d06e9e2507b8154faf17efb79ff232511fc2 (OpenDesign addition and screen fitting; records in `.formal/guard.json`).
+
+After TLC passes, follow `verify-usagerings` for isolated real views. For real
+OpenDesign data on a logged-in Mac, use its explicit opt-in XCTest command.

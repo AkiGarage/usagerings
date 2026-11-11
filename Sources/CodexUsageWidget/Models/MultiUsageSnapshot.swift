@@ -8,6 +8,9 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
     case minimax
     case kimi
     case deepseek
+    /// OpenDesign Go subscription: Design Plan 5-hour and 7-day windows read
+    /// from the control key the official OpenDesign app's AMR login stores.
+    case opendesign
     case antigravity
     /// Gemini app (gemini.google.com) quota, read from Aki's open usage tab only.
     case gemini
@@ -32,6 +35,8 @@ enum ProviderID: String, CaseIterable, Identifiable, Sendable {
             "Kimi"
         case .deepseek:
             "DeepSeek"
+        case .opendesign:
+            "OpenDesign"
         case .gemini:
             "Gemini"
         }
@@ -155,7 +160,7 @@ struct MultiUsageSnapshot: Equatable, Sendable {
     var hiddenProviders: Set<ProviderID> = []
 
     /// Display order shared by the tablet (left to right) and the window (top to bottom).
-    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .antigravity, .gemini]
+    static let displayOrder: [ProviderID] = [.codex, .claude, .grok, .zai, .minimax, .kimi, .deepseek, .opendesign, .antigravity, .gemini]
 
     static func ordered(_ sections: [ProviderSection]) -> [ProviderSection] {
         sections.enumerated().sorted { lhs, rhs in

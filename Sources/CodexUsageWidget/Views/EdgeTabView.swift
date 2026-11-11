@@ -24,6 +24,10 @@ enum EdgeTabPresentation {
 final class EdgeTabPresentationState: ObservableObject {
     @Published var mode: EdgeTabPresentationMode = .collapsed
     @Published var menuBarHeight: CGFloat = NSStatusBar.system.thickness
+    /// Longest the vertical strip may be on this screen (visible height minus
+    /// both 8pt edge margins). Set from the screen the tab lives on; nil until
+    /// a screen is known, and nil means nothing is capped.
+    @Published var maxCollapsedLength: CGFloat?
     @Published var collapsedSize = EdgeTabPresentation.collapsedSize {
         didSet {
             if collapsedSize != oldValue { onSizeChange?() }

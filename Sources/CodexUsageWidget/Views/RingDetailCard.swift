@@ -751,8 +751,14 @@ final class RingDetailCardController {
                                          splitAntigravityAccounts: preferences.splitAntigravityAccounts,
                                          accountPreferences: preferences.accountPreferences)
         guard !bars.isEmpty else { return nil }
+        // Hit testing must use the zoom the tab actually drew at: a vertical
+        // tab shrinks to fit a short screen while the preference stays large.
+        let renderedZoom = MultiCollapsedUsageView.renderedBarZoom(
+            preferences.barZoom, barCount: bars.count,
+            menuBarHeight: presentation.menuBarHeight, orientation: preferences.orientation,
+            maxVerticalLength: presentation.maxCollapsedLength)
         return Context(bars: bars,
-                       layout: MultiCollapsedUsageView.layout(barZoom: preferences.barZoom,
+                       layout: MultiCollapsedUsageView.layout(barZoom: renderedZoom,
                                                               menuBarThickness: presentation.menuBarHeight),
                        orientation: preferences.orientation,
                        size: hostingView.bounds.size)

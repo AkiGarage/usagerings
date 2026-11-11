@@ -23,15 +23,16 @@ The dashboard refreshes about once a minute. Individual providers can cache resu
 | Z.ai / GLM Coding Plan | CodexBarCLI; Z.ai reset-ticket API for optional detail | CodexBar's Z.ai provider configured |
 | MiniMax / Kimi | CodexBarCLI | The corresponding provider configured in CodexBar |
 | DeepSeek | CodexBarCLI | DeepSeek configured in CodexBar; balance and usage details without a quota percentage |
+| OpenDesign (Go) | OpenDesign control API, authenticated with the control key from the official app's AMR login | A signed-in OpenDesign app (or `od amr login`); shows the Design Plan 5-hour and 7-day windows |
 | Grok | CodexBarCLI (`--source cli`), which reads the official Grok Build CLI billing report | Grok Build CLI (`grok`) installed and signed in |
 
 Requires **macOS 14 or later**. Building requires Xcode Command Line Tools with **Swift 5.9 or later** and internet access to resolve the pinned Sparkle dependency. The command-line tools must be selected with `xcode-select`.
 
-**CodexBarCLI is required for every section: Codex, Claude, Antigravity, Grok, GLM, MiniMax, Kimi, and DeepSeek.** This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Without it, every section reports the missing helper.
+**CodexBarCLI is required for every section except OpenDesign: Codex, Claude, Antigravity, Grok, GLM, MiniMax, Kimi, and DeepSeek.** OpenDesign is read directly from its control API and never from CodexBarCLI. This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Without it, every section reports the missing helper.
 
 Antigravity, Grok, and Claude are read only through CodexBarCLI with `--source cli`, so UsageRings uses the providers' own official CLIs, never browser cookies or web fallbacks. UsageRings does not install those CLIs or provide an account-sign-in screen. Missing setup is reported in the panel.
 
-Keys UsageRings reads: only the Z.ai API key from CodexBar's `~/.config/codexbar/config.json` (or `~/.codexbar/config.json`) for GLM reset tickets. UsageRings stores no keys in the Keychain and never asks for or reads your account passwords.
+Keys UsageRings reads: the Z.ai API key from CodexBar's `~/.config/codexbar/config.json` (or `~/.codexbar/config.json`) for GLM reset tickets, and the controlKey that the official OpenDesign app's AMR login stores in `~/.amr/config.json` (profile `prod`) for the OpenDesign Design Plan windows. Both are read per fetch and only sent to their own provider. UsageRings stores no keys in the Keychain, uses no browser cookies or web sessions, and never asks for or reads your account passwords.
 
 Optional GLM reset-ticket details use the default CodexBar configuration's global-region Z.ai API key. Custom config/API-host overrides and multiple token accounts are not supported by that detail reader.
 
@@ -74,7 +75,7 @@ This optional reader supports a Linux host with Bash, GNU command-line tools, Py
 
 UsageRings stores settings and display snapshots locally by default. The optional iPhone sync setting is off by default; when enabled, supported usage percentages, reset times and random device/account identifiers are sent to the user's private iCloud database. It does not send credentials, account names, logs or balances. CloudKit requires matching signing, entitlements and container configuration, which are not yet included in this build. It has no UsageRings-hosted account, analytics service, or HTTP/LAN server.
 
-Fetching current usage still requires network access: CodexBarCLI communicates with its providers, the local authenticated proxy brokers provider requests, and GLM reset-ticket details contact Z.ai directly. Enabling remote Claude monitoring adds SSH traffic to the host you configure.
+Fetching current usage still requires network access: CodexBarCLI communicates with its providers, the local authenticated proxy brokers provider requests, GLM reset-ticket details contact Z.ai directly, and OpenDesign usage readings go to `amr-api.open-design.ai` with the stored control key. Enabling remote Claude monitoring adds SSH traffic to the host you configure.
 
 Local Claude monitoring reads bounded recent log tails from `~/.claude/projects`, `~/.claude-a/projects`, and `~/.claude-b/projects`. Remote monitoring returns filtered quota-event text, timestamps, and model identifiers. Local Codex display snapshots are written to `~/Library/Application Support/CodexUsageWidget-Multi/` and a per-user `UsageRings` folder inside the macOS per-user temporary directory (`$TMPDIR`, mode 0700; files 0600), which also holds a provider/window diagnostic JSON file. This version writes nothing to the shared `/private/tmp`; files left there by older builds are not removed automatically. If remote Claude monitoring over SSH fails, the separate "Claude logs B" notice shows a short reason without host details. Treat these files as personal usage information and sanitize logs or screenshots before sharing them.
 

@@ -64,6 +64,9 @@ struct MultiEdgeTabView: View {
         .onChange(of: presentation.menuBarHeight, initial: true) {
             updateCollapsedSize()
         }
+        .onChange(of: presentation.maxCollapsedLength, initial: true) {
+            updateCollapsedSize()
+        }
     }
 
     private var expandedLabel: some View {
@@ -86,7 +89,8 @@ struct MultiEdgeTabView: View {
                                 orientation: preferences.orientation,
                                 splitAntigravityAccounts: preferences.splitAntigravityAccounts,
                                 accountPreferences: preferences.accountPreferences,
-                                highlightedBarID: ringHighlight.barID)
+                                highlightedBarID: ringHighlight.barID,
+                                maxVerticalLength: presentation.maxCollapsedLength)
     }
 
     private var size: CGSize {
@@ -155,12 +159,15 @@ struct MultiEdgeTabView: View {
     }
 
     private func updateCollapsedSize() {
+        // The vertical strip shrinks to fit the screen, but the saved bar zoom
+        // in PanelPreferences is never written, so a taller screen restores it.
         presentation.collapsedSize = MultiCollapsedUsageView.size(for: store.snapshot,
                                                                   barZoom: preferences.barZoom,
                                                                   menuBarHeight: presentation.menuBarHeight,
                                                                   orientation: preferences.orientation,
                                                                   splitAntigravityAccounts: preferences.splitAntigravityAccounts,
-                                                                  accountPreferences: preferences.accountPreferences)
+                                                                  accountPreferences: preferences.accountPreferences,
+                                                                  maxVerticalLength: presentation.maxCollapsedLength)
     }
 }
 
