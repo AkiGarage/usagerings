@@ -138,6 +138,56 @@ final class RingDetailCardTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testClaudeCardsShowTheirOwnTicketsExpiryAndRateLimitDuringFiveHourLock() throws {
+        let now = noonJST
+        var windows: [UsageLimit] = []
+        for index in 0...1 {
+            for (title, left) in [("5h", 0.0), ("Weekly", 60.0)] {
+                var window = UsageLimit(title: title, leftPercent: left, resetText: "Resets 10/23 12:00 (2d)")
+                window.accountIndex = index
+                windows.append(window)
+            }
+        }
+        let grant = ClaudeResetGrant(kind: .weekly, resetsLeft: 1,
+                                     endsAt: now.addingTimeInterval(86_400), paused: false, usableNow: true)
+        let ticketStats = ClaudeResetGrantsClient.stats(for: .loaded([grant]), accountIndex: 0,
+                                                       now: now, calendar: RingResetFormat.tokyoCalendar)
+        let rateStats = ClaudeResetGrantsClient.stats(for: .rateLimited(3600), accountIndex: 1,
+                                                     now: now, calendar: RingResetFormat.tokyoCalendar)
+        let hidden = ProviderStat(title: ClaudeCLIUsage.sourceTitle, valueText: "internal-source", accountIndex: 0)
+        let section = ProviderSection(provider: .claude, windows: windows,
+                                      stats: ticketStats + rateStats + [hidden], failureText: nil)
+        let snapshot = MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: now)
+        let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil).filter { $0.provider == .claude }
+        XCTAssertEqual(bars.count, 2)
+        for bar in bars {
+            let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: now, sourceTimeZone: jst))
+            XCTAssertTrue(model.isLockedOut(.five, leftPercent: 0))
+            XCTAssertFalse(model.isLockedOut(.week, leftPercent: 60))
+            XCTAssertEqual(model.rows.first { $0.kind == .week }?.leftPercent, 60)
+            if bar.accountIndex == 0 {
+                XCTAssertEqual(model.stats.map(\.title), ["Reset tickets", "Reset ticket"])
+                XCTAssertTrue(model.stats.last?.valueText.contains("週リセット") == true)
+                XCTAssertTrue(model.stats.last?.valueText.contains("期限 ") == true)
+                XCTAssertFalse(model.stats.contains { $0.valueText.contains("internal-source") })
+            } else {
+                XCTAssertEqual(model.stats, rateStats)
+            }
+            if let directory = ProcessInfo.processInfo.environment["USAGERINGS_CLAUDE_CARD_OUTPUT"] {
+                let renderer = ImageRenderer(content: RingDetailCardView(model: model)
+                    .padding(16).background(Color(white: 0.10)).environment(\.colorScheme, .dark))
+                renderer.scale = 2
+                let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("claude-\(bar.accountIndex ?? 0).png"), options: .atomic)
+            }
+        }
+        let failedBar = CollapsedUsageBar(id: "claude", label: "A", title: "Claude", providerColor: .white,
+                                         limit: nil, stats: rateStats, provider: .claude)
+        XCTAssertEqual(RingDetailCardModel.make(bar: failedBar, now: now)?.stats, rateStats)
+    }
+
     func testDeepSeekAndOtherStatsOnlyProvidersHideInternalStats() throws {
         let balance = ProviderStat(title: "Balance", valueText: "$23.50")
         let hiddenStats = [

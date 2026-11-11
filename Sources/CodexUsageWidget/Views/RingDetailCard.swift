@@ -191,6 +191,8 @@ struct RingDetailCardModel: Equatable {
 
     static func visibleStats(for bar: CollapsedUsageBar) -> [ProviderStat] {
         switch bar.provider {
+        case .claude:
+            return bar.stats.filter { ["Reset tickets", "Reset ticket", "リセットチケット"].contains($0.title) }
         case .minimax, .kimi, .deepseek:
             return bar.stats.filter {
                 !["Account", "5h", "Reset tickets updated", "Reset ticket expiry"].contains($0.title)

@@ -30,9 +30,9 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 
 **OpenDesign以外のすべての項目（Codex・Claude・Antigravity・Grok・GLM・MiniMax・Kimi・DeepSeek）の表示にCodexBarCLIが必要です。** OpenDesignはCodexBarCLIを経由せず、OpenDesignのcontrol APIから直接読みます。 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがない場合は、各項目にその旨を表示します。
 
-Antigravity、Grok、ClaudeはCodexBarCLIの `--source cli` だけで読みます。各社公式のCLIを使い、ブラウザーのCookieやWeb経由の取得は使いません。UsageRingsはこれらのCLIのインストールやログイン画面を持ちません。設定が足りない場合はパネルに表示します。
+Antigravity、Grok、Claudeの使用枠はCodexBarCLIの `--source cli` だけで読みます。各社公式のCLIを使い、ブラウザーのCookieやWeb経由の取得は使いません。UsageRingsはこれらのCLIのインストールやログイン画面を持ちません。設定が足りない場合はパネルに表示します。
 
-UsageRingsが読む鍵: GLMのリセット券用にCodexBarの `~/.config/codexbar/config.json`（または `~/.codexbar/config.json`）にあるZ.aiのAPIキーと、OpenDesignのDesign Plan枠用に公式OpenDesignアプリのAMRログインが `~/.amr/config.json`（profile `prod`）へ保存するcontrolKeyです。どちらも取得のたびに読み、それぞれの提供元にだけ送ります。Keychainに鍵は保存せず、ブラウザーのCookieやWebセッションも使いません。アカウントのパスワードを求めたり読んだりもしません。
+UsageRingsが読む鍵: GLMのリセット券用にCodexBarの `~/.config/codexbar/config.json`（または `~/.codexbar/config.json`）にあるZ.aiのAPIキーと、OpenDesignのDesign Plan枠用に公式OpenDesignアプリのAMRログインが `~/.amr/config.json`（profile `prod`）へ保存するcontrolKeyです。どちらも取得のたびに読み、それぞれの提供元にだけ送ります。Claudeのリセットチケットは、アプリ内で既存のClaude Code OAuthログインをKeychainから読み、Anthropicの固定APIにのみ送ります。Keychainに鍵は保存せず、ブラウザーのCookieやWebセッションも使いません。アカウントのパスワードを求めたり読んだりもしません。
 
 GLMのリセット券詳細は追加機能です。標準のCodexBar設定にあるglobalリージョンのZ.ai APIキーを利用します。この詳細取得は、設定ファイル・API接続先の上書きや複数トークンアカウントに対応していません。
 
@@ -93,7 +93,7 @@ USAGERINGS_SIGN_IDENTITY='Your signing identity' ./script/build_and_run.sh usage
 
 ![詳細パネル](docs/images/panel.png)
 
-リセットチケットは、期限と残り時間つきで1行ずつ並びます。
+リセットチケットは、期限と残り時間つきで1行ずつ並びます。 Claude A/Bでは既存のClaude Codeログインをアプリ内で読み取り、Anthropicの固定APIから取得します。Cookieやredirectは使わず、アカウントごとに15分以上間隔を空けます。429では長いRetry-Afterを優先し、0枚ではなく取得制限中と表示します。
 
 ![リセットチケット](docs/images/reset-tickets.png)
 
