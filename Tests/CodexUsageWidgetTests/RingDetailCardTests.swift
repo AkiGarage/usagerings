@@ -191,6 +191,38 @@ final class RingDetailCardTests: XCTestCase {
         XCTAssertEqual(model?.rows.map(\.percentText), ["残り 30%", "残り 70%"])
     }
 
+    func testHoverCardSessionLockGraysOnlyTheFiveHourWindow() throws {
+        let model = try XCTUnwrap(lockedCardModel(kind: .session))
+        XCTAssertTrue(model.isLockedOut(.five))
+        XCTAssertTrue(model.isLockedOut(.other))
+        XCTAssertFalse(model.isLockedOut(.week))
+    }
+
+    func testHoverCardWeeklyLockGraysEveryWindow() throws {
+        let model = try XCTUnwrap(lockedCardModel(kind: .weekly))
+        XCTAssertTrue(model.isLockedOut(.five))
+        XCTAssertTrue(model.isLockedOut(.week))
+    }
+
+    func testHoverCardWithoutActiveLockGraysNothing() throws {
+        let expired = ClaudeBlock(kind: .weekly, resetAt: noonJST.addingTimeInterval(-60), timeZoneKnown: true)
+        let model = try XCTUnwrap(lockedCardModel(block: expired))
+        XCTAssertFalse(model.isLockedOut(.five))
+        XCTAssertFalse(model.isLockedOut(.week))
+    }
+
+    private func lockedCardModel(kind: ClaudeBlock.Kind) -> RingDetailCardModel? {
+        lockedCardModel(block: ClaudeBlock(kind: kind, resetAt: noonJST.addingTimeInterval(3_600), timeZoneKnown: true))
+    }
+
+    private func lockedCardModel(block: ClaudeBlock) -> RingDetailCardModel? {
+        let fiveHour = UsageLimit(title: "5h", leftPercent: 0, resetText: "Resets 10/21 13:00 (1h)")
+        let weekly = UsageLimit(title: "Weekly", leftPercent: 60, resetText: "Resets 10/23 12:00 (2d)")
+        let bar = CollapsedUsageBar(id: "claude-0", label: "A", title: "Claude A 5h", providerColor: .white,
+                                    limit: fiveHour, windows: [fiveHour, weekly], block: block)
+        return RingDetailCardModel.make(bar: bar, now: noonJST, sourceTimeZone: jst)
+    }
+
     func testCardModelHidesMissingResetAndReturnsNilWithoutWindows() {
         let now = noonJST
         let window = UsageLimit(title: "5h", leftPercent: 10, resetText: "Reset pending")
