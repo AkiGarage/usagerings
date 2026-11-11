@@ -79,12 +79,13 @@ struct CollapsedUsageBar: Identifiable {
     /// The ring unlocks at the latest reset among exhausted windows; a window without a
     /// machine-readable reset locks with an unknown unlock time. A reset already in the past
     /// means the 0% is old data, so it does not lock.
+    static let exhaustedLeftPercent = 0.5
     static func quotaBlock(_ windows: [UsageLimit], now: Date) -> ClaudeBlock? {
         // Machine-readable reset first, then the shown reset text ("Resets 10/30 14:00"), else unknown.
         func unlock(_ w: UsageLimit) -> Date {
             w.resetAt ?? RingResetFormat.date(fromResetText: w.resetText, now: now) ?? .distantFuture
         }
-        let exhausted = windows.filter { $0.leftPercent < 0.5 && unlock($0) > now }
+        let exhausted = windows.filter { $0.leftPercent < exhaustedLeftPercent && unlock($0) > now }
         guard let window = exhausted.max(by: { unlock($0) < unlock($1) }) else { return nil }
         let kind: ClaudeBlock.Kind = ServiceRowModel.kind(window.title) == .week ? .weekly : .session
         return ClaudeBlock(kind: kind, resetAt: unlock(window), timeZoneKnown: true)

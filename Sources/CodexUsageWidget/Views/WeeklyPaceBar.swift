@@ -9,6 +9,7 @@ struct WeeklyPace: Equatable {
     let period: TimeInterval
     let slices: Int
     var isFiveHour: Bool { period == Self.fiveHours }
+    var windowKind: ServiceRowModel.Kind { isFiveHour ? .five : .week }
     let now: Date
     let usedPercent: Double
     /// Elapsed share of the week, 0...100; nil when the reset time is unknown.
