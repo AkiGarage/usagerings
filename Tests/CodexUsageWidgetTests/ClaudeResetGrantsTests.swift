@@ -275,6 +275,30 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(ClaudeResetGrantsClient.stats(for: .loaded([extreme]), accountIndex: 0, now: t0, calendar: tokyoCalendar()).map(\.valueText), ["取得できません"])
     }
 
+    func testLoginChangeAndLogoutDiscardOldTicketsWithoutBypassingCooldown() async {
+        let calls = GrantCallLog(), runner = LoginChangeStub()
+        let client = tokenClient { request in
+            calls.record(request)
+            return (Self.grantsBody(), 200, nil)
+        }
+        let usage = ClaudeCLIUsage(runner: { _, _ in await runner.run() }, grantsClient: client)
+        let account = ClaudeCLIAccount(label: "A", configDir: nil)
+        let t0 = now
+        await usage.refreshNow([account], timeZone: .current, now: { t0 })
+        XCTAssertTrue(usage.section(accounts: [account], now: t0, timeZone: .current)?.section.stats.contains { $0.title == "Reset ticket" } == true)
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(1) })
+        XCTAssertFalse(usage.section(accounts: [account], now: t0.addingTimeInterval(1), timeZone: .current)?.section.stats.contains { $0.title == "Reset ticket" } ?? true)
+        XCTAssertEqual(calls.count, 1)
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(901) })
+        XCTAssertEqual(calls.count, 2)
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(902) })
+        XCTAssertNil(usage.section(accounts: [account], now: t0.addingTimeInterval(902), timeZone: .current))
+        XCTAssertEqual(calls.count, 2)
+        await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(1802) })
+        XCTAssertNil(usage.section(accounts: [account], now: t0.addingTimeInterval(1802), timeZone: .current))
+        XCTAssertEqual(calls.count, 2)
+    }
+
     func testStatsExpandUsableGrantsAndSkipPausedExpiredAndEmptyOnes() {
         let calendar = tokyoCalendar()
         let grants = [
@@ -487,5 +511,19 @@ private actor CLIStub {
             """.utf8),
             stderr: Data()
         )
+    }
+}
+
+private actor LoginChangeStub {
+    private var count = 0
+    func run() -> CodexUsageService.CommandResult {
+        defer { count += 1 }
+        if count >= 3 {
+            return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data("not logged in".utf8))
+        }
+        let email = count == 0 ? "first@example.test" : "second@example.test"
+        return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Data("""
+        [{"provider":"claude","usage":{"identity":{"accountEmail":"\(email)"},"primary":{"usedPercent":30,"windowMinutes":300},"secondary":{"usedPercent":72,"windowMinutes":10080}}}]
+        """.utf8), stderr: Data())
     }
 }

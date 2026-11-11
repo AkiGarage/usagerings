@@ -268,6 +268,7 @@ final class ClaudeCLIUsage: Sendable {
                 var entry = s.entries[Self.key(account)] ?? Entry()
                 entry.attemptedAt = started
                 if let parsedValue {
+                    if entry.sourceID != reportedValue { entry.grants = nil }
                     entry.section = parsedValue; entry.fetchedAt = started
                     entry.sourceID = reportedValue
                     entry.maskedEmail = maskedValue
@@ -277,6 +278,7 @@ final class ClaudeCLIUsage: Sendable {
                     entry.failureReason = failureValue.reason
                     entry.failureMessage = failureValue.message
                     if failureValue.reason == .logout {
+                        entry.grants = nil
                         entry.section = nil
                         entry.fetchedAt = nil
                     }
@@ -285,7 +287,7 @@ final class ClaudeCLIUsage: Sendable {
                 return true
             }
             guard current else { return }
-            guard let grantsClient else { continue }
+            guard failureValue?.reason != .logout, let grantsClient else { continue }
             let grantsStarted = now()
             let grantsDue = state.withLock { s -> Bool in
                 guard s.generation == generation else { return false }
