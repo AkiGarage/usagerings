@@ -68,6 +68,7 @@ struct ClaudeResetGrant: Equatable, Sendable {
         case session
         case weekly
         case full
+        case fable
         case unknown
     }
 
@@ -193,6 +194,8 @@ struct ClaudeResetGrantsClient: Sendable {
     private static func grant(from object: [String: Any]) -> ClaudeResetGrant? {
         guard let resetsLeft = integer(object["resets_left"]),
               object["type"] == nil || object["type"] is String,
+              object["label"] == nil || object["label"] is String,
+              object["clears"] == nil || object["clears"] is [String],
               object["paused"] == nil || boolean(object["paused"]) != nil,
               object["usable_now"] == nil || boolean(object["usable_now"]) != nil else { return nil }
         var endsAt: Date?
@@ -204,7 +207,18 @@ struct ClaudeResetGrantsClient: Sendable {
         switch object["type"] as? String {
         case "session": kind = .session
         case "weekly": kind = .weekly
-        case "full": kind = .full
+        case "full":
+            // Raw type "full" describes both Fable-only and complete resets.
+            // Prefer the grant's label and scope; never classify based on the expiry.
+            let label = (object["label"] as? String ?? "").lowercased()
+            let clears = object["clears"] as? [String] ?? []
+            if label.contains("fable") {
+                kind = clears.contains("seven_day") ? .unknown : .fable
+            } else if label.contains("full limit reset") || clears.contains("seven_day") {
+                kind = .full
+            } else {
+                kind = .unknown
+            }
         default: kind = .unknown
         }
         let paused = boolean(object["paused"]) ?? false
@@ -289,8 +303,7 @@ struct ClaudeResetGrantsClient: Sendable {
             var stats = [stat(countStat, "\(tickets.count)")]
             if let source { stats.append(stat(noteStat, source)) }
             for ticket in tickets {
-                // type "full" does not say which limits it clears (a Fable-only grant is "full" too),
-                // so only session/weekly name their kind.
+                // Only classify reset kinds when their label or clears metadata is unambiguous.
                 var text = ticket.endsAt.map { "期限 \(time($0))" } ?? "期限なし"
                 if let kind = kindLabel(ticket.kind) { text += "（\(kind)）" }
                 if !ticket.usableNow { text += "・\(notUsableNowStatus)" }
@@ -331,7 +344,9 @@ struct ClaudeResetGrantsClient: Sendable {
         switch kind {
         case .session: "5時間リセット"
         case .weekly: "週リセット"
-        case .full, .unknown: nil
+        case .fable: "Fableリセット"
+        case .full: "完全リセット"
+        case .unknown: nil
         }
     }
 
