@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import CodexUsageWidget
 
@@ -266,6 +267,24 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         try FileManager.default.removeItem(at: newer)
         await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(200) })
         XCTAssertEqual(tickets(t0.addingTimeInterval(200)), [])
+    }
+
+    func testSwitchingTheFolderToAnotherOrganizationDoesNotInheritItsHighWater() async throws {
+        try write(org: orgA, body: Body.ineligible, date: "Thu, 12 Nov 2026 01:10:00 GMT", modified: now.addingTimeInterval(-300))
+        try write(org: orgB, body: Body.twoTickets, date: responseDate, modified: now.addingTimeInterval(-700))
+        let cache = self.cache, orgA = self.orgA, orgB = self.orgB
+        let current = OSAllocatedUnfairLock(initialState: orgA)
+        let usage = ClaudeCLIUsage(runner: { _, _ in Self.cliResult }, grantsClient: Self.notOfferedClient,
+                                   desktopResets: { _, now in cache.reading(organization: current.withLock { $0 }, now: now) })
+        let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
+        let t0 = now
+        await usage.refreshNow(account, timeZone: .current, now: { t0 })
+        XCTAssertEqual(usage.section(accounts: account, now: t0, timeZone: .current)?.section.stats
+            .filter { $0.title == "Reset ticket" }.count, 0)
+        current.withLock { $0 = orgB }
+        await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(200) })
+        XCTAssertEqual(usage.section(accounts: account, now: t0.addingTimeInterval(200), timeZone: .current)?.section.stats
+            .filter { $0.title == "Reset ticket" }.count, 2)
     }
 
     func testNewerEmptyOAuthAnswerOverridesOlderDesktopTickets() async throws {

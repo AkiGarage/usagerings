@@ -95,10 +95,11 @@ final class ClaudeCLIUsage: Sendable {
         var grantsFetchedAt: Date?
         /// Grants Claude Desktop cached for this login's organization; replaced (never kept) each cycle.
         var desktopResets: ClaudeDesktopResetCache.Reading?
-        /// Newest Desktop observation ever adopted for this folder. A later read dated before it
-        /// (the newer entry was evicted, leaving an older variant) is refused, so tickets that a
-        /// newer response already spent cannot come back.
-        var desktopHighWater: Date?
+        /// Newest Desktop observation adopted for this folder's organization. A later read for the
+        /// same organization dated before it (the newer entry was evicted, leaving an older variant)
+        /// is refused, so tickets a newer response already spent cannot come back. A different
+        /// organization (the folder was logged into another account) starts its own mark.
+        var desktopHighWater: (organization: String, at: Date)?
     }
 
     private struct State {
@@ -311,9 +312,12 @@ final class ClaudeCLIUsage: Sendable {
                 let stored = state.withLock { s -> Bool in
                     guard s.generation == generation else { return false }
                     var entry = s.entries[Self.key(account)] ?? Entry()
-                    if let reading, reading.observedAt >= (entry.desktopHighWater ?? .distantPast) {
+                    let floor = reading.flatMap { reading in
+                        entry.desktopHighWater.flatMap { $0.organization == reading.organization ? $0.at : nil }
+                    } ?? .distantPast
+                    if let reading, reading.observedAt >= floor {
                         entry.desktopResets = reading
-                        entry.desktopHighWater = reading.observedAt
+                        entry.desktopHighWater = (reading.organization, reading.observedAt)
                     } else {
                         entry.desktopResets = nil
                         if failureValue?.reason == .logout { entry.desktopHighWater = nil }

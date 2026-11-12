@@ -20,6 +20,8 @@ struct ClaudeDesktopResetCache: Sendable {
         let outcome: ClaudeResetGrantsOutcome
         /// The response's own `Date:` (else the entry's mtime): when the grants were true, not now.
         let observedAt: Date
+        /// Lower-cased organization UUID the entry's key named. Kept in memory only, never logged.
+        let organization: String
     }
 
     let directory: URL
@@ -99,7 +101,8 @@ struct ClaudeDesktopResetCache: Sendable {
         else { return nil }
         let observedAt = parsed.date ?? newest.modified
         guard observedAt.timeIntervalSince(now) < Self.futureTolerance else { return nil }
-        return Reading(outcome: ClaudeResetGrantsClient.parse(parsed.body), observedAt: observedAt)
+        return Reading(outcome: ClaudeResetGrantsClient.parse(parsed.body), observedAt: observedAt,
+                       organization: organization)
     }
 
     /// Bytes and mtime from one descriptor, bounded; nil only when there is no such regular file.
