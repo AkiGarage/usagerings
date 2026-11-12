@@ -78,8 +78,34 @@ struct CodexUsageService: Sendable {
             return try commandRunner(arguments)
         }
 
-        let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath))
+        let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath),
+                                      environment: Self.codexEnvironmentOverride())
         return try runner.runSync(arguments)
+    }
+
+    /// Environment fix-up for a CodexBarCLI Codex run, or nil to inherit as is.
+    ///
+    /// T3 Code runs each Codex session with a shadow CODEX_HOME
+    /// (`~/.t3/userdata/providers/codex/<instance>/shadow`) that links to `~/.codex` but holds no
+    /// `auth.json`. An app started from such a session inherits it, and CodexBarCLI then fails with
+    /// "authentication required", so the Codex ring shows "?". Only that shadow home, and only while
+    /// it has no login file, is unset so CodexBar falls back to the normal login. Any other
+    /// CODEX_HOME (a deliberate custom home, a Keychain-backed login) is passed through untouched.
+    static func codexEnvironmentOverride(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> [String: String]? {
+        guard let home = environment["CODEX_HOME"], isT3ShadowCodexHome(home),
+              !fileExists(URL(fileURLWithPath: home).appendingPathComponent("auth.json").path) else { return nil }
+        return ["CODEX_HOME": ""]  // blank = unset (SubprocessRunner)
+    }
+
+    static func isT3ShadowCodexHome(_ path: String) -> Bool {
+        let parts = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        guard parts.count >= 7 else { return false }
+        let tail = Array(parts.suffix(6))
+        return tail[0] == ".t3" && tail[1] == "userdata" && tail[2] == "providers" && tail[3] == "codex"
+            && !tail[4].isEmpty && tail[4] != "." && tail[4] != ".." && tail[5] == "shadow"
     }
 }
 

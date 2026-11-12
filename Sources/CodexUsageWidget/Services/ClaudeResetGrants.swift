@@ -243,16 +243,22 @@ struct ClaudeResetGrantsClient: Sendable {
                   grants.reduce(0, { $0 + $1.resetsLeft }) <= maximumTickets else {
                 return note("取得できません", accountIndex: accountIndex)
             }
+            // Inventory, not "spendable this instant": usable_now is false while e.g. the window is
+            // still fresh, yet the stored ticket remains (CodexBar docs/claude.md counts it the same way).
             let usable = grants.filter {
-                $0.resetsLeft > 0 && !$0.paused && $0.usableNow && ($0.endsAt.map { $0 > now } ?? true)
+                $0.resetsLeft > 0 && !$0.paused && ($0.endsAt.map { $0 > now } ?? true)
             }
             let tickets = usable.flatMap { grant in Array(repeating: grant, count: grant.resetsLeft) }
             guard !tickets.isEmpty else { return [] }
-            var stats = [ProviderStat(title: "Reset tickets", valueText: "\(tickets.count) available",
-                                      accountIndex: accountIndex)]
+            // A held ticket that cannot be spent this instant is never labelled 使用可.
+            let usableNowCount = tickets.filter(\.usableNow).count
+            let summary = usableNowCount == tickets.count
+                ? "\(tickets.count) available" : "\(tickets.count) held · \(usableNowCount) usable now"
+            var stats = [ProviderStat(title: "Reset tickets", valueText: summary, accountIndex: accountIndex)]
             for ticket in tickets {
                 let text = MultiUsageService.ticketText(
-                    CodexExtrasParser.Ticket(title: title(for: ticket.kind), status: "available",
+                    CodexExtrasParser.Ticket(title: title(for: ticket.kind),
+                                             status: ticket.usableNow ? "available" : Self.notUsableNowStatus,
                                              resetType: nil, grantedAt: nil, expiresAt: ticket.endsAt),
                     now: now,
                     calendar: calendar
@@ -283,6 +289,8 @@ struct ClaudeResetGrantsClient: Sendable {
             return []
         }
     }
+
+    static let notUsableNowStatus = "保有・今は使用不可"
 
     private static func note(_ text: String, accountIndex: Int) -> [ProviderStat] {
         [ProviderStat(title: "リセットチケット", valueText: text, accountIndex: accountIndex)]
