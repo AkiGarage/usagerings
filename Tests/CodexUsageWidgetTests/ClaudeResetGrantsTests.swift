@@ -245,7 +245,7 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(ClaudeDesktopResetCacheTests.card(section?.section.stats ?? [], 0), "未確認|取得中|")
     }
 
-    func testRateLimitHonorsRetryAfterAndShowsNoteWhenCLIHasNoValue() async {
+    func testRateLimitHonorsRetryAfterWithoutCreatingEmptyCard() async {
         let calls = GrantCallLog()
         let client = tokenClient { request in
             calls.record(request)
@@ -258,8 +258,9 @@ final class ClaudeResetGrantsTests: XCTestCase {
         let t0 = now
         await usage.refreshNow([account], timeZone: .current, now: { t0 })
         let result = usage.section(accounts: [account], now: t0, timeZone: .current)
-        XCTAssertEqual(ClaudeDesktopResetCacheTests.card(result?.section.stats ?? [], 0), "未確認|取得制限中・18:00 JST 以降に再取得|")
-        XCTAssertTrue(result?.section.windows.isEmpty ?? false)
+        // A rate-limit note alone is not a real usage/ticket reading.
+        // The provider must remain pending, rather than creating an empty ring.
+        XCTAssertNil(result)
         await usage.refreshNow([], timeZone: .current, now: { t0.addingTimeInterval(1) })
         await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(901) })
         XCTAssertEqual(calls.count, 1)

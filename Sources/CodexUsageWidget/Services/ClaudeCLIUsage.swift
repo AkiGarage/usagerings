@@ -378,7 +378,9 @@ final class ClaudeCLIUsage: Sendable {
             if let retryAt {
                 // Every account gets its own ticket section, 未確認 included, so A never borrows B's.
                 let preferred = preferredGrants(entry, now: now)
-                anyTicketData = anyTicketData || preferred != nil
+                // Only an actual eligible result (even an explicit zero) can stand alone without
+                // CLI usage. A 429, notOffered, or missing credentials is not ticket data.
+                if let preferred, case .loaded = preferred.0 { anyTicketData = true }
                 combined.stats += ClaudeResetGrantsClient.stats(
                     for: preferred?.0, accountIndex: index, now: now, calendar: RingResetFormat.tokyoCalendar,
                     desktopObservedAt: preferred?.1, retryAt: retryAt[key(account)]
