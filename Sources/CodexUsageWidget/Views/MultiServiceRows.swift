@@ -225,6 +225,7 @@ struct ServiceRowModel: Identifiable {
             if stat.title == "Account" { rows[0].account = rows[0].account ?? stat.valueText; continue }
             if stat.title == "Reset ticket" { rows[0].tickets.append(stat.valueText); continue }
             if stat.title == "Reset tickets updated" { continue }
+            if stat.title == ClaudeResetGrantsClient.noteStat { rows[0].notes.append("リセットチケット: \(stat.valueText)"); continue }
             if stat.title == "Reset ticket expiry" {
                 if let date = ISO8601DateFormatter().date(from: stat.valueText) { rows[0].ticketExpiries.append(date) }
                 continue
