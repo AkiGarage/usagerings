@@ -10,7 +10,7 @@ import XCTest
 final class ClaudeDesktopResetCacheTests: XCTestCase {
     private enum Body {
         // Two unused `type: full` grants ending 2026-11-17T07:59Z and 2026-12-10T22:00Z.
-        static let twoTickets = "KLUv/WB1AxUNAPYXRyJAi6oDwLiPlBLaEnjxI0rWkqRnimF4Jnexsk0kt95RFIELPgA7AD0A/CuN61vmCyIlBYphGW13HOaJZABCC6FFgBKVDikdChRSubJXYR/+5UECKK1sjvU2MGYdE7LyRbfQO1giIQEJIjHteQxScoDeNuzEOa3kbdcAAA2f5Eq+spwn0+HQ8J0rGZYQhJWw2z5FHubY4P5pY3keX688K0zBAnkSEFYqGmMsjpU8EYh2+/LeNGswVvjHogKMD9f0rCyMeQ55EyuZw7hNnoRkzkReGtMr9t3h9O15OSBYCBQR5S9UtRfeGsZdLBw27jXazLpFbQ/HsHNLR5QaWEklKCl1IgzM+B/KWFZReAdjto5tMU8yx0SufMPQjbcBMyBQIkGISD3miQcu5N8CjsC+KRIH7Ae6EdclV7eZMRw0FrsAyIPQA/RZN6a/NeChVOx1hFC9S7jY761PliL25jEFw66xQbfGDuljxTCHVHooYFtEygdje7CASqCP48mddugBRzK5hFRYnIyzS9PCKMGsDE+FrAVXN0JLLxez5gsR+Bk="
+        static let twoTickets = "KLUv/WCeAyUOALZZTCMwbasDoFD7lVEZEYRdi5FvS3pDXQ0Y0qawqQEchq9SHQwMw0IAPwBDAHpmHMPxzzje4jpvFGsxUB7rtPfoUlNEBZRiSrECtSgrsVbCQFGKMu1tsi8fNakBtZg+6HojHLueCmEaJ3zaI7dQSGtBUHFb9uK8mPI2bE3OzCYkfzBhT/PmctK4/tPvsaBM+cyyJl2JRMu3MnWcQhiYyn4bGZqY55P72J7T9BmbBXE1NTAwZTzXaCAzmiKQ1u9NPNTO4bjJRzcd5HyAr8mp6ZJ3wdS5nAtpalDnzuTmuXbGxkewxT03CAVMoRbFct41HQSRxn9aaw3x13LuA3EJwQi1ZtdvtvcAHYaw6YiiELClLGoFSIAkSZI/BSVFHtz4H1qjWabJR47dRvumJmWeC2V66NGONyBAQmIQsrwBDyQPrujfhx2BtamUDNgNxB/Xra4OhDEwPKadABgwoRvoU98Yga0BN6PisSMo413Sxb63jx1m2nNqFSHt7teWMC7kHlMwLGA16NpYrD9WHHNIJRIDXhEREwk/lQHIGOgt0MfxlE57aAxGMnMJsfALxfLe0+Mas3Y9tWctE/ohtHi5mDdfiFDO"
         // The same two grants with resets_left 0.
         static let spent = "KLUv/WAZA10MAMZWQyJAiVYHALWAVkhsRkBFjSj2S3Jm5Cg6k9QbN4HY72CKopgbOgA1ADsAm0+ZXRAqIVgQZdKtY+HRc4CUWEpsICVLHZQ6EKy0zt6asBfuO0oBSbG7prUuNG4dH2F/sVnkOlrikQ2PEnsnlhU7azdtMDTc5Oy8ivLR1eHQcPvsTHvkgB2206c4Yo4O6r507Wjja/ZlpSka7yqN3XiqcI2xNKwcPZFst8tbp1ujccJ9LSbA+GhcLisK49FC1gQ7szCqc4TwdHkxGGCIlCAU4/aoQCUG6WlP8i4ysxXWNYy6UFjoNM/J5tYupns0DDfN0s9aAkytJKm10ANhxu4jGYsqCdfRuKlDXTw6c0ycfR1IMCBgIiFEtgeK6YF0/l1jBNZNXXbAdiAVcaXl6hwZg86xqgXAF0Kn6xPNGLjWWlOlIk/uUi/me8vJVsSUPaZg2KFo0LWxjb3xDaeCBodWOjtg3CWHQqDL8fROc2gDQ59UWHwG26VpYZRg1sNTImv56ozQouVi1nwhwjwD"
         // `cedar_ember: null`, as the plain usage keys always return.
@@ -94,9 +94,11 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let reading = cache.reading(organization: orgB.uppercased(), now: now)
         XCTAssertEqual(reading?.observedAt, Date(timeIntervalSince1970: 1_794_445_388))
         let stats = tickets(reading)
-        // Both raw grants are type "full", which does not say what they clear: no kind label.
-        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
-        XCTAssertFalse(stats.contains { $0.valueText.contains("available") || $0.valueText.contains("全リセット") })
+        // Both raw grants are type "full", but their labels and cleared limits distinguish kinds.
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST（Fableリセット）;期限 12/11 07:00 JST（完全リセット）")
+        XCTAssertFalse(stats.contains { $0.valueText.contains("available") })
+        XCTAssertTrue(stats.contains { $0.valueText.contains("Fableリセット") })
+        XCTAssertTrue(stats.contains { $0.valueText.contains("完全リセット") })
         XCTAssertEqual(stats.filter { $0.title == "Reset ticket expiry" }.map(\.valueText),
                        ["2026-11-17T07:59:00Z", "2026-12-10T22:00:00Z"])
         XCTAssertTrue(stats.allSatisfy { $0.accountIndex == 1 })
@@ -159,7 +161,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let stats = ClaudeResetGrantsClient.stats(for: cache.reading(organization: orgB, now: now)!.outcome,
                                                   accountIndex: 1, now: later,
                                                   calendar: RingResetFormat.tokyoCalendar)
-        XCTAssertEqual(Self.card(stats, 1), "利用可能 1件||期限 12/11 07:00 JST")
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 1件||期限 12/11 07:00 JST（完全リセット）")
     }
 
     func testRejectsNonUUIDOrganizationAndMissingDirectory() {
@@ -196,7 +198,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let t0 = now
         await usage.refreshNow(accounts, timeZone: .current, now: { t0 })
         let stats = usage.section(accounts: accounts, now: t0, timeZone: .current)?.section.stats ?? []
-        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST（Fableリセット）;期限 12/11 07:00 JST（完全リセット）")
         // A keeps its own section: unknown, never B's count or rows.
         XCTAssertEqual(Self.card(stats, 0), "未確認|公式APIは券情報を返しません|")
         XCTAssertEqual(stats.filter { $0.title == ClaudeResetGrantsClient.ticketStat }.map(\.accountIndex), [1, 1])
@@ -210,7 +212,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
         let t0 = now
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
-        XCTAssertEqual(card(usage, account, at: t0), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
+        XCTAssertEqual(card(usage, account, at: t0), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST（Fableリセット）;期限 12/11 07:00 JST（完全リセット）")
         try write(org: orgB, body: Body.spent, date: "Thu, 12 Nov 2026 01:20:00 GMT", modified: now.addingTimeInterval(300))
         await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(400) })
         XCTAssertEqual(card(usage, account, at: t0.addingTimeInterval(400)), "利用可能 0件|Claude Desktop・10:20 JST 確認|")
@@ -237,7 +239,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         await usage.refreshNow(accounts, timeZone: .current, now: { t0 })
         let stats = usage.section(accounts: accounts, now: t0, timeZone: .current)?.section.stats ?? []
         XCTAssertEqual(Self.card(stats, 0), "未確認|取得制限中・11:15 JST 以降に再取得|")
-        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST（Fableリセット）;期限 12/11 07:00 JST（完全リセット）")
     }
 
     func testFreshDesktopNegativeStillReplacesTheOAuthNote() async throws {
@@ -281,7 +283,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         XCTAssertEqual(card(usage, account, at: t0), "利用可能 0件|Claude Desktop・10:10 JST 確認|")
         current.withLock { $0 = orgB }
         await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(200) })
-        XCTAssertEqual(card(usage, account, at: t0.addingTimeInterval(200)), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
+        XCTAssertEqual(card(usage, account, at: t0.addingTimeInterval(200)), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST（Fableリセット）;期限 12/11 07:00 JST（完全リセット）")
     }
 
     func testLaterOAuthFailureDoesNotBringBackDesktopTicketsANewerOAuthAnswerSuperseded() async throws {
@@ -351,7 +353,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
             } else {
                 XCTAssertEqual(extras.availableCount, 2)
                 XCTAssertEqual(extras.note, "Claude Desktop・10:03 JST 確認")
-                XCTAssertEqual(extras.tickets.compactMap(\.expiresText), ["期限 11/17 16:59 JST", "期限 12/11 07:00 JST"])
+                XCTAssertEqual(extras.tickets.compactMap(\.expiresText), ["期限 11/17 16:59 JST（Fableリセット）", "期限 12/11 07:00 JST（完全リセット）"])
             }
             if let directory = ProcessInfo.processInfo.environment["USAGERINGS_CLAUDE_CARD_OUTPUT"] {
                 let renderer = ImageRenderer(content: RingDetailCardView(model: model)

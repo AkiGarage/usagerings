@@ -332,6 +332,46 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(ClaudeDesktopResetCacheTests.card(empty, 0), "利用可能 0件||")
     }
 
+    func testFableAndCompleteResetKindsUseActualGrantLabelAndScope() {
+        // Both live kinds have raw type "full"; never classify from that field or from expiry.
+        // Synthetic dates and grant labels (no identifiers or credentials) exercise the real payload shape.
+        let body = Self.json("""
+        {"cedar_ember":{"eligible":true,"grants":[
+          {"label":"New model launch: one Fable reset for Pro","type":"full",
+           "clears":["five_hour","seven_day_overage_included"],
+           "resets_left":1,"paused":false,"usable_now":true,"ends_at":"2027-01-16T12:00:00Z"},
+          {"label":"One full limit reset (January 2027)","type":"full",
+           "clears":["five_hour","seven_day","seven_day_overage_included"],
+           "resets_left":1,"paused":false,"usable_now":true,"ends_at":"2027-01-20T12:00:00Z"},
+          {"type":"full","clears":["five_hour"],"resets_left":1,
+           "paused":false,"usable_now":true,"ends_at":"2027-01-21T12:00:00Z"}
+        ]}}
+        """)
+        guard case .loaded(let grants) = ClaudeResetGrantsClient.parse(body) else {
+            return XCTFail("expected real-grant-shaped payload to load")
+        }
+        XCTAssertEqual(grants.map(\.kind), [.fable, .full, .unknown])
+        let stats = ClaudeResetGrantsClient.stats(
+            for: .loaded(grants), accountIndex: 1, now: now, calendar: tokyoCalendar()
+        )
+        XCTAssertEqual(
+            ClaudeDesktopResetCacheTests.card(stats, 1),
+            "利用可能 3件||期限 1/16 21:00 JST（Fableリセット）;期限 1/20 21:00 JST（完全リセット）;期限 1/21 21:00 JST"
+        )
+        XCTAssertTrue(stats.allSatisfy { $0.accountIndex == 1 })
+    }
+
+    func testConflictingFableLabelAndWeeklyScopeIsNotMislabelled() {
+        let body = Self.json("""
+        {"cedar_ember":{"eligible":true,"grants":[
+          {"label":"Fable reset","type":"full","clears":["five_hour","seven_day"],
+           "resets_left":1,"paused":false,"usable_now":true,"ends_at":"2027-01-16T12:00:00Z"}
+        ]}}
+        """)
+        guard case .loaded(let grants) = ClaudeResetGrantsClient.parse(body) else { return XCTFail("expected loaded") }
+        XCTAssertEqual(grants.map(\.kind), [.unknown])
+    }
+
     /// API shape seen live: stored tickets come back with usable_now:false. They are inventory and
     /// must be counted (CodexBar docs/claude.md), but shown as held, not as 使用可.
     func testStoredTicketsWithUsableNowFalseAreCountedButNotLabelledUsable() {
