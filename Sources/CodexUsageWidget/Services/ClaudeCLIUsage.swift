@@ -79,6 +79,8 @@ final class ClaudeCLIUsage: Sendable {
 
     typealias Runner = @Sendable (_ arguments: [String], _ environment: [String: String]?) async throws
         -> CodexUsageService.CommandResult
+    /// Reset grants cached by Claude Desktop for the organization of this config dir, or nil.
+    typealias DesktopResets = @Sendable (_ configDir: String?, _ now: Date) -> ClaudeDesktopResetCache.Reading?
 
     private struct Entry {
         var section: ProviderSection?
@@ -90,6 +92,16 @@ final class ClaudeCLIUsage: Sendable {
         var failureReason: UsageFailureReason?
         var failureMessage: String?
         var grants: ClaudeResetGrantsOutcome?
+        /// When OAuth last gave an eligible answer (`.loaded`, empty included) for this login. Kept
+        /// across later 429/transport failures, so Desktop tickets older than it stay superseded.
+        var oauthLoadedAt: Date?
+        /// Grants Claude Desktop cached for this login's organization; replaced (never kept) each cycle.
+        var desktopResets: ClaudeDesktopResetCache.Reading?
+        /// Newest Desktop observation adopted for this folder's organization. A later read for the
+        /// same organization dated before it (the newer entry was evicted, leaving an older variant)
+        /// is refused, so tickets a newer response already spent cannot come back. A different
+        /// organization (the folder was logged into another account) starts its own mark.
+        var desktopHighWater: (organization: String, at: Date)?
     }
 
     private struct State {
@@ -107,13 +119,16 @@ final class ClaudeCLIUsage: Sendable {
     private let maxCacheAge: TimeInterval
     private let failureLog: FetchFailureLog?
     private let grantsClient: ClaudeResetGrantsClient?
+    private let desktopResets: DesktopResets?
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     static let grantsRefreshInterval: TimeInterval = 900
 
     init(runner: @escaping Runner, refreshInterval: TimeInterval = 120, maxCacheAge: TimeInterval = 600,
-         failureLog: FetchFailureLog? = nil, grantsClient: ClaudeResetGrantsClient? = nil) {
+         failureLog: FetchFailureLog? = nil, grantsClient: ClaudeResetGrantsClient? = nil,
+         desktopResets: DesktopResets? = nil) {
         self.runner = runner
+        self.desktopResets = desktopResets
         self.refreshInterval = refreshInterval
         self.maxCacheAge = maxCacheAge
         self.failureLog = failureLog
@@ -124,7 +139,12 @@ final class ClaudeCLIUsage: Sendable {
         ClaudeCLIUsage(runner: { arguments, environment in
             try await SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
                                        environment: environment).run(arguments)
-        }, failureLog: .live(), grantsClient: .live())
+        }, failureLog: .live(), grantsClient: .live(), desktopResets: liveDesktopResets)
+    }
+
+    static let liveDesktopResets: DesktopResets = { configDir, now in
+        guard let organization = ClaudeDesktopResetCache.organization(configDir: configDir) else { return nil }
+        return ClaudeDesktopResetCache().reading(organization: organization, now: now)
     }
 
     struct Result {
@@ -268,7 +288,7 @@ final class ClaudeCLIUsage: Sendable {
                 var entry = s.entries[Self.key(account)] ?? Entry()
                 entry.attemptedAt = started
                 if let parsedValue {
-                    if entry.sourceID != reportedValue { entry.grants = nil }
+                    if entry.sourceID != reportedValue { entry.grants = nil; entry.oauthLoadedAt = nil }
                     entry.section = parsedValue; entry.fetchedAt = started
                     entry.sourceID = reportedValue
                     entry.maskedEmail = maskedValue
@@ -279,6 +299,7 @@ final class ClaudeCLIUsage: Sendable {
                     entry.failureMessage = failureValue.message
                     if failureValue.reason == .logout {
                         entry.grants = nil
+                        entry.oauthLoadedAt = nil
                         entry.section = nil
                         entry.fetchedAt = nil
                     }
@@ -287,6 +308,28 @@ final class ClaudeCLIUsage: Sendable {
                 return true
             }
             guard current else { return }
+            if let desktopResets {
+                // Local and bounded (at most two cache files), so read every cycle. The result
+                // replaces the last one, nil included: a vanished entry must not leave old tickets up.
+                let reading = failureValue?.reason == .logout ? nil : desktopResets(account.configDir, now())
+                let stored = state.withLock { s -> Bool in
+                    guard s.generation == generation else { return false }
+                    var entry = s.entries[Self.key(account)] ?? Entry()
+                    let floor = reading.flatMap { reading in
+                        entry.desktopHighWater.flatMap { $0.organization == reading.organization ? $0.at : nil }
+                    } ?? .distantPast
+                    if let reading, reading.observedAt >= floor {
+                        entry.desktopResets = reading
+                        entry.desktopHighWater = (reading.organization, reading.observedAt)
+                    } else {
+                        entry.desktopResets = nil
+                        if failureValue?.reason == .logout { entry.desktopHighWater = nil }
+                    }
+                    s.entries[Self.key(account)] = entry
+                    return true
+                }
+                guard stored else { return }
+            }
             guard failureValue?.reason != .logout, let grantsClient else { continue }
             let grantsStarted = now()
             let grantsDue = state.withLock { s -> Bool in
@@ -307,6 +350,7 @@ final class ClaudeCLIUsage: Sendable {
                 guard s.generation == generation else { return false }
                 var entry = s.entries[Self.key(account)] ?? Entry()
                 entry.grants = grants
+                if case .loaded = grants { entry.oauthLoadedAt = grantsStarted }
                 s.entries[Self.key(account)] = entry
                 return true
             }
@@ -328,9 +372,10 @@ final class ClaudeCLIUsage: Sendable {
         for (index, account) in accounts.enumerated() {
             let entry = entries[key(account)]
             let id = (salt.map { account.accountID(salt: $0) } ?? account.accountID()).merging(entry?.sourceID)
-            if let grants = entry?.grants {
+            if let preferred = preferredGrants(entry, now: now) {
                 combined.stats += ClaudeResetGrantsClient.stats(
-                    for: grants, accountIndex: index, now: now, calendar: RingResetFormat.tokyoCalendar
+                    for: preferred.0, accountIndex: index, now: now, calendar: RingResetFormat.tokyoCalendar,
+                    desktopObservedAt: preferred.1
                 )
             }
             let age = entry?.fetchedAt.map { now.timeIntervalSince($0) } ?? .infinity
@@ -365,6 +410,31 @@ final class ClaudeCLIUsage: Sendable {
         guard anyValue || !combined.stats.isEmpty else { return nil }
         combined.accountInventoryComplete = true
         return Result(section: combined, fromCache: anyCached, maskedEmails: maskedEmails)
+    }
+
+    /// How long a Desktop answer of "no tickets" (null, ineligible, spent, malformed) may stand in
+    /// for the current OAuth result. Desktop refreshes grants only while Settings → Usage is open,
+    /// so an older negative is an old observation, not a current zero.
+    static let desktopNegativeFreshness: TimeInterval = 30 * 60
+
+    /// Desktop's cached grants win unless the OAuth endpoint itself answered (eligible) more recently
+    /// (today it answers "surface" ineligible, so in practice Desktop is the only real source).
+    /// Held tickets are shown at any age, dated; a Desktop negative only when fresh, otherwise the
+    /// current OAuth outcome (e.g. the rate-limit note) stays. Second element: Desktop observation time.
+    private static func preferredGrants(_ entry: Entry?, now: Date) -> (ClaudeResetGrantsOutcome, Date?)? {
+        guard let entry else { return nil }
+        let oauth = entry.grants.map { ($0, Date?.none) }
+        guard let desktop = entry.desktopResets else { return oauth }
+        // Any eligible OAuth answer, empty included, is a newer statement about the same tickets.
+        if let loadedAt = entry.oauthLoadedAt, loadedAt > desktop.observedAt {
+            return oauth
+        }
+        if case .loaded(let grants) = desktop.outcome,
+           !ClaudeResetGrantsClient.heldGrants(grants, now: now).isEmpty {
+            return (desktop.outcome, desktop.observedAt)
+        }
+        guard now.timeIntervalSince(desktop.observedAt) < desktopNegativeFreshness else { return oauth }
+        return (desktop.outcome, desktop.observedAt)
     }
 
     static func previousValueText(_ fetched: Date, now: Date) -> String {

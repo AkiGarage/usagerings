@@ -18,8 +18,13 @@ let package = Package(
         .executableTarget(
             name: "CodexUsageWidget",
             dependencies: [
+                "UsageRingsZstd",
                 .product(name: "Sparkle", package: "Sparkle")
             ]
+        ),
+        .target(
+            name: "UsageRingsZstd",
+            exclude: ["LICENSE", "README.md"]
         ),
         .target(
             name: "CodexBarReleaseDetection"

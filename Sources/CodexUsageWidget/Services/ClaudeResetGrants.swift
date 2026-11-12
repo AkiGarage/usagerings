@@ -235,7 +235,7 @@ struct ClaudeResetGrantsClient: Sendable {
     }
 
     static func stats(for outcome: ClaudeResetGrantsOutcome, accountIndex: Int, now: Date,
-                      calendar: Calendar) -> [ProviderStat] {
+                      calendar: Calendar, desktopObservedAt: Date? = nil) -> [ProviderStat] {
         switch outcome {
         case .loaded(let grants):
             guard grants.count <= maximumTickets,
@@ -245,15 +245,17 @@ struct ClaudeResetGrantsClient: Sendable {
             }
             // Inventory, not "spendable this instant": usable_now is false while e.g. the window is
             // still fresh, yet the stored ticket remains (CodexBar docs/claude.md counts it the same way).
-            let usable = grants.filter {
-                $0.resetsLeft > 0 && !$0.paused && ($0.endsAt.map { $0 > now } ?? true)
-            }
+            let usable = heldGrants(grants, now: now)
             let tickets = usable.flatMap { grant in Array(repeating: grant, count: grant.resetsLeft) }
             guard !tickets.isEmpty else { return [] }
             // A held ticket that cannot be spent this instant is never labelled 使用可.
             let usableNowCount = tickets.filter(\.usableNow).count
-            let summary = usableNowCount == tickets.count
+            var summary = usableNowCount == tickets.count
                 ? "\(tickets.count) available" : "\(tickets.count) held · \(usableNowCount) usable now"
+            if let observed = desktopObservedAt {
+                // A cached Desktop response is a past observation; say when it was true.
+                summary += " · Claude Desktop \(UsageDurationFormat.timestamp(observed, now: now, calendar: calendar)) JST 確認"
+            }
             var stats = [ProviderStat(title: "Reset tickets", valueText: summary, accountIndex: accountIndex)]
             for ticket in tickets {
                 let text = MultiUsageService.ticketText(
@@ -288,6 +290,10 @@ struct ClaudeResetGrantsClient: Sendable {
         case .notOffered, .notLoggedIn:
             return []
         }
+    }
+
+    static func heldGrants(_ grants: [ClaudeResetGrant], now: Date) -> [ClaudeResetGrant] {
+        grants.filter { $0.resetsLeft > 0 && !$0.paused && ($0.endsAt.map { $0 > now } ?? true) }
     }
 
     static let notUsableNowStatus = "保有・今は使用不可"
