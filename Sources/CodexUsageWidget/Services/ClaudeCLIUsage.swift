@@ -95,6 +95,10 @@ final class ClaudeCLIUsage: Sendable {
         var grantsFetchedAt: Date?
         /// Grants Claude Desktop cached for this login's organization; replaced (never kept) each cycle.
         var desktopResets: ClaudeDesktopResetCache.Reading?
+        /// Newest Desktop observation ever adopted for this folder. A later read dated before it
+        /// (the newer entry was evicted, leaving an older variant) is refused, so tickets that a
+        /// newer response already spent cannot come back.
+        var desktopHighWater: Date?
     }
 
     private struct State {
@@ -307,7 +311,13 @@ final class ClaudeCLIUsage: Sendable {
                 let stored = state.withLock { s -> Bool in
                     guard s.generation == generation else { return false }
                     var entry = s.entries[Self.key(account)] ?? Entry()
-                    entry.desktopResets = reading
+                    if let reading, reading.observedAt >= (entry.desktopHighWater ?? .distantPast) {
+                        entry.desktopResets = reading
+                        entry.desktopHighWater = reading.observedAt
+                    } else {
+                        entry.desktopResets = nil
+                        if failureValue?.reason == .logout { entry.desktopHighWater = nil }
+                    }
                     s.entries[Self.key(account)] = entry
                     return true
                 }
@@ -400,7 +410,7 @@ final class ClaudeCLIUsage: Sendable {
     /// so an older negative is an old observation, not a current zero.
     static let desktopNegativeFreshness: TimeInterval = 30 * 60
 
-    /// Desktop's cached grants win unless the OAuth endpoint itself returned grants more recently
+    /// Desktop's cached grants win unless the OAuth endpoint itself answered (eligible) more recently
     /// (today it answers "surface" ineligible, so in practice Desktop is the only real source).
     /// Held tickets are shown at any age, dated; a Desktop negative only when fresh, otherwise the
     /// current OAuth outcome (e.g. the rate-limit note) stays. Second element: Desktop observation time.
@@ -408,8 +418,8 @@ final class ClaudeCLIUsage: Sendable {
         guard let entry else { return nil }
         let oauth = entry.grants.map { ($0, Date?.none) }
         guard let desktop = entry.desktopResets else { return oauth }
-        if case .loaded(let grants)? = entry.grants, !grants.isEmpty,
-           let fetched = entry.grantsFetchedAt, fetched > desktop.observedAt {
+        // Any eligible OAuth answer, empty included, is a newer statement about the same tickets.
+        if case .loaded? = entry.grants, let fetched = entry.grantsFetchedAt, fetched > desktop.observedAt {
             return oauth
         }
         if case .loaded(let grants) = desktop.outcome,

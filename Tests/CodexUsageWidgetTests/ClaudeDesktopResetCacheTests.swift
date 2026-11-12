@@ -116,6 +116,17 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         XCTAssertNil(cache.reading(organization: orgB, now: now))
     }
 
+    func testNewestFileTooShortToReadStillBlocksOlderTickets() throws {
+        try write(org: orgB, variant: 1, body: Body.twoTickets, date: responseDate, modified: now.addingTimeInterval(-86_000))
+        for size in [0, 10, 24] {
+            let key = ClaudeDesktopResetCache.keys(organization: orgB)[0]
+            let url = directory.appendingPathComponent(ClaudeDesktopResetCache.entryFileName(forKey: key))
+            try Data(repeating: 0x30, count: size).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-60)], ofItemAtPath: url.path)
+            XCTAssertNil(cache.reading(organization: orgB, now: now), "size \(size)")
+        }
+    }
+
     func testHashCollisionWithAnotherKeyIsRejected() throws {
         try write(org: orgB, body: Body.twoTickets, date: responseDate, modified: now,
                   storedKey: ClaudeDesktopResetCache.keys(organization: orgA)[0])
@@ -236,6 +247,40 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
         XCTAssertEqual(usage.section(accounts: account, now: t0, timeZone: .current)?.section.stats
             .filter { $0.title.hasPrefix("Reset ticket") || $0.title == "リセットチケット" }, [])
+    }
+
+    func testEvictedNewerSpentEntryDoesNotBringBackOlderTickets() async throws {
+        try write(org: orgB, variant: 1, body: Body.twoTickets, date: "Wed, 11 Nov 2026 01:00:00 GMT",
+                  modified: now.addingTimeInterval(-86_000))
+        let newer = try write(org: orgB, variant: 0, body: Body.spent, date: responseDate, modified: now.addingTimeInterval(-700))
+        let cache = self.cache, orgB = self.orgB
+        let usage = ClaudeCLIUsage(runner: { _, _ in Self.cliResult }, grantsClient: Self.notOfferedClient,
+                                   desktopResets: { _, now in cache.reading(organization: orgB, now: now) })
+        let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
+        let t0 = now
+        func tickets(_ at: Date) -> [ProviderStat] {
+            usage.section(accounts: account, now: at, timeZone: .current)?.section.stats.filter { $0.title.hasPrefix("Reset ticket") } ?? []
+        }
+        await usage.refreshNow(account, timeZone: .current, now: { t0 })
+        XCTAssertEqual(tickets(t0), [])
+        try FileManager.default.removeItem(at: newer)
+        await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(200) })
+        XCTAssertEqual(tickets(t0.addingTimeInterval(200)), [])
+    }
+
+    func testNewerEmptyOAuthAnswerOverridesOlderDesktopTickets() async throws {
+        try write(org: orgB, body: Body.twoTickets, date: "Wed, 11 Nov 2026 01:00:00 GMT", modified: now.addingTimeInterval(-86_000))
+        let cache = self.cache, orgB = self.orgB
+        let empty = ClaudeResetGrantsClient(loadToken: { _ in "test-token" }, transport: { _ in
+            (Data(#"{"cedar_ember":{"eligible":true,"grants":[]}}"#.utf8), 200, nil)
+        })
+        let usage = ClaudeCLIUsage(runner: { _, _ in Self.cliResult }, grantsClient: empty,
+                                   desktopResets: { _, now in cache.reading(organization: orgB, now: now) })
+        let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
+        let t0 = now
+        await usage.refreshNow(account, timeZone: .current, now: { t0 })
+        XCTAssertEqual(usage.section(accounts: account, now: t0, timeZone: .current)?.section.stats
+            .filter { $0.title.hasPrefix("Reset ticket") }, [])
     }
 
     /// Opt-in check against this Mac's real Claude Desktop cache and Claude Code logins. Reads only;

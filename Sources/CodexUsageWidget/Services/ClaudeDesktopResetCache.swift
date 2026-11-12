@@ -85,13 +85,16 @@ struct ClaudeDesktopResetCache: Sendable {
     /// hold tickets that a newer response already spent.
     func reading(organization raw: String, now: Date) -> Reading? {
         guard let organization = Self.normalizedOrganization(raw) else { return nil }
-        let candidates = Self.keys(organization: organization).compactMap { key -> (key: String, bytes: [UInt8], modified: Date)? in
+        // A file that exists but cannot be read whole (mid-rewrite, truncated, oversized) stays a
+        // candidate with no bytes, so it still outranks older entries and makes the answer nil.
+        let candidates = Self.keys(organization: organization).compactMap { key -> (key: String, bytes: [UInt8]?, modified: Date)? in
             let url = directory.appendingPathComponent(Self.entryFileName(forKey: key), isDirectory: false)
             guard let file = Self.contents(of: url) else { return nil }
             return (key, file.bytes, file.modified)
         }
         guard let newest = candidates.max(by: { $0.modified < $1.modified }),
-              let parsed = Self.parse(entry: newest.bytes),
+              let bytes = newest.bytes,
+              let parsed = Self.parse(entry: bytes),
               parsed.key == newest.key
         else { return nil }
         let observedAt = parsed.date ?? newest.modified
@@ -99,17 +102,18 @@ struct ClaudeDesktopResetCache: Sendable {
         return Reading(outcome: ClaudeResetGrantsClient.parse(parsed.body), observedAt: observedAt)
     }
 
-    /// Bytes and mtime from one descriptor, bounded. A read, not a map: Chromium truncates these
-    /// files underneath readers, and a mapped page going away is SIGBUS.
-    private static func contents(of url: URL) -> (bytes: [UInt8], modified: Date)? {
+    /// Bytes and mtime from one descriptor, bounded; nil only when there is no such regular file.
+    /// Bytes are nil when the file exists but is not a whole-readable entry. A read, not a map:
+    /// Chromium truncates these files underneath readers, and a mapped page going away is SIGBUS.
+    private static func contents(of url: URL) -> (bytes: [UInt8]?, modified: Date)? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var info = stat()
-        guard fstat(handle.fileDescriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
-              info.st_size > headerBytes, info.st_size <= maxEntryBytes,
-              let data = try? handle.read(upToCount: maxEntryBytes) else { return nil }
+        guard fstat(handle.fileDescriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
         let modified = Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
                             + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+        guard info.st_size > headerBytes, info.st_size <= maxEntryBytes,
+              let data = try? handle.read(upToCount: maxEntryBytes) else { return (nil, modified) }
         return ([UInt8](data), modified)
     }
 
