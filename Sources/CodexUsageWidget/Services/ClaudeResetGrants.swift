@@ -137,6 +137,23 @@ struct ClaudeResetGrantsClient: Sendable {
         }
     }
 
+    static let fallbackCLIVersion = "2.1.319"
+    static let userAgent = "claude-cli/\(installedCLIVersion() ?? fallbackCLIVersion) (external, cli)"
+
+    /// Newest installed Claude Code version (file names in ~/.local/share/claude/versions; empty
+    /// placeholder files from an interrupted update are skipped), or nil.
+    static func installedCLIVersion(directory: String = NSHomeDirectory() + "/.local/share/claude/versions") -> String? {
+        let manager = FileManager.default
+        let versions = ((try? manager.contentsOfDirectory(atPath: directory)) ?? []).compactMap { name -> [Int]? in
+            let parts = name.split(separator: ".").compactMap { Int($0) }
+            guard parts.count == 3, name.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil,
+                  let size = (try? manager.attributesOfItem(atPath: directory + "/" + name))?[.size] as? Int,
+                  size > 0 else { return nil }
+            return parts
+        }
+        return versions.max { $0.lexicographicallyPrecedes($1) }.map { $0.map(String.init).joined(separator: ".") }
+    }
+
     private func request(token: String) -> URLRequest {
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "GET"
@@ -144,6 +161,9 @@ struct ClaudeResetGrantsClient: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Claude only includes reset grants for recent Claude Code clients, which identify as
+        // `claude-cli/<version> (external, cli)` (Claude Code 2.1.319's own builder, KB()).
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.httpShouldHandleCookies = false
         return request
     }
@@ -234,61 +254,70 @@ struct ClaudeResetGrantsClient: Sendable {
         return max(ClaudeCLIUsage.grantsRefreshInterval, seconds ?? 0)
     }
 
-    static func stats(for outcome: ClaudeResetGrantsOutcome, accountIndex: Int, now: Date,
-                      calendar: Calendar, desktopObservedAt: Date? = nil) -> [ProviderStat] {
+    /// Stat keys the card and panel read for one Claude account's tickets (values are Japanese).
+    static let countStat = "Reset tickets"          // "2" when known, "未確認" otherwise
+    static let noteStat = "Reset tickets note"      // one short line: where/when, or why unknown
+    static let ticketStat = "Reset ticket"          // "期限 11/17 16:59 JST" per ticket
+    static let expiryStat = "Reset ticket expiry"   // ISO 8601, same order as ticketStat
+    static let unknownCount = "未確認"
+
+    /// Always returns the ticket section for one account: a count only when it is really known
+    /// (held tickets, an eligible empty answer, or a fresh Desktop negative), otherwise 未確認 with
+    /// the reason. `outcome` nil = nothing fetched yet. `desktopObservedAt` = the outcome is a
+    /// Claude Desktop cache observation. `retryAt` = when the next OAuth attempt may run.
+    static func stats(for outcome: ClaudeResetGrantsOutcome?, accountIndex: Int, now: Date,
+                      calendar: Calendar, desktopObservedAt: Date? = nil, retryAt: Date? = nil) -> [ProviderStat] {
+        func stat(_ title: String, _ value: String) -> ProviderStat {
+            ProviderStat(title: title, valueText: value, accountIndex: accountIndex)
+        }
+        func time(_ date: Date) -> String { "\(UsageDurationFormat.timestamp(date, now: now, calendar: calendar)) JST" }
+        func unknown(_ reason: String) -> [ProviderStat] { [stat(countStat, unknownCount), stat(noteStat, reason)] }
+        let source = desktopObservedAt.map { "Claude Desktop・\(time($0)) 確認" }
+        let retry = retryAt.flatMap { $0 > now ? "・\(time($0)) 以降に再取得" : nil } ?? ""
         switch outcome {
         case .loaded(let grants):
             guard grants.count <= maximumTickets,
                   grants.allSatisfy({ (0...maximumTickets).contains($0.resetsLeft) }),
                   grants.reduce(0, { $0 + $1.resetsLeft }) <= maximumTickets else {
-                return note("取得できません", accountIndex: accountIndex)
+                return unknown("取得できません")
             }
             // Inventory, not "spendable this instant": usable_now is false while e.g. the window is
             // still fresh, yet the stored ticket remains (CodexBar docs/claude.md counts it the same way).
-            let usable = heldGrants(grants, now: now)
-            let tickets = usable.flatMap { grant in Array(repeating: grant, count: grant.resetsLeft) }
-            guard !tickets.isEmpty else { return [] }
-            // A held ticket that cannot be spent this instant is never labelled 使用可.
-            let usableNowCount = tickets.filter(\.usableNow).count
-            var summary = usableNowCount == tickets.count
-                ? "\(tickets.count) available" : "\(tickets.count) held · \(usableNowCount) usable now"
-            if let observed = desktopObservedAt {
-                // A cached Desktop response is a past observation; say when it was true.
-                summary += " · Claude Desktop \(UsageDurationFormat.timestamp(observed, now: now, calendar: calendar)) JST 確認"
-            }
-            var stats = [ProviderStat(title: "Reset tickets", valueText: summary, accountIndex: accountIndex)]
+            let tickets = heldGrants(grants, now: now)
+                .flatMap { grant in Array(repeating: grant, count: grant.resetsLeft) }
+                .sorted { ($0.endsAt ?? .distantFuture) < ($1.endsAt ?? .distantFuture) }
+            var stats = [stat(countStat, "\(tickets.count)")]
+            if let source { stats.append(stat(noteStat, source)) }
             for ticket in tickets {
-                let text = MultiUsageService.ticketText(
-                    CodexExtrasParser.Ticket(title: title(for: ticket.kind),
-                                             status: ticket.usableNow ? "available" : Self.notUsableNowStatus,
-                                             resetType: nil, grantedAt: nil, expiresAt: ticket.endsAt),
-                    now: now,
-                    calendar: calendar
-                )
-                stats.append(ProviderStat(title: "Reset ticket", valueText: text, accountIndex: accountIndex))
+                // type "full" does not say which limits it clears (a Fable-only grant is "full" too),
+                // so only session/weekly name their kind.
+                var text = ticket.endsAt.map { "期限 \(time($0))" } ?? "期限なし"
+                if let kind = kindLabel(ticket.kind) { text += "（\(kind)）" }
+                if !ticket.usableNow { text += "・\(notUsableNowStatus)" }
+                stats.append(stat(ticketStat, text))
             }
             let formatter = ISO8601DateFormatter()
-            for ticket in tickets {
-                guard let endsAt = ticket.endsAt else { continue }
-                stats.append(ProviderStat(title: "Reset ticket expiry",
-                                          valueText: formatter.string(from: endsAt),
-                                          accountIndex: accountIndex))
-            }
+            stats += tickets.compactMap { $0.endsAt.map { stat(expiryStat, formatter.string(from: $0)) } }
             return stats
+        case .notOffered where source != nil:
+            // Only a fresh Desktop answer reaches here (ClaudeCLIUsage drops stale negatives).
+            return [stat(countStat, "0"), stat(noteStat, source!)]
+        case .notOffered:
+            return unknown("公式APIは券情報を返しません")
         case .loginExpired:
-            return note("Claude Codeを一度使うとログインが更新されます", accountIndex: accountIndex)
+            return unknown("Claude Codeを一度使うとログインが更新されます")
         case .unauthorized:
-            return note("Claude Codeで再ログインしてください", accountIndex: accountIndex)
-        case .rateLimited(let seconds):
-            return note("取得の回数制限中（最短\(Int(min(ceil(seconds / 60), Double(Int.max / 2))))分間隔で再取得）", accountIndex: accountIndex)
-        case .httpFailure(429):
-            return note("取得の回数制限中（\(Int(ClaudeCLIUsage.grantsRefreshInterval / 60))分ごとに再取得）", accountIndex: accountIndex)
+            return unknown("Claude Codeで再ログインしてください")
+        case .rateLimited, .httpFailure(429):
+            return unknown("取得制限中" + retry)
         case .httpFailure(let status):
-            return note("取得できません（HTTP \(status)）", accountIndex: accountIndex)
+            return unknown("取得できません（HTTP \(status)）")
         case .transportFailure, .malformed:
-            return note("取得できません", accountIndex: accountIndex)
-        case .notOffered, .notLoggedIn:
-            return []
+            return unknown("取得できません")
+        case .notLoggedIn:
+            return unknown("ログインがありません")
+        case nil:
+            return unknown("取得中")
         }
     }
 
@@ -296,18 +325,13 @@ struct ClaudeResetGrantsClient: Sendable {
         grants.filter { $0.resetsLeft > 0 && !$0.paused && ($0.endsAt.map { $0 > now } ?? true) }
     }
 
-    static let notUsableNowStatus = "保有・今は使用不可"
+    static let notUsableNowStatus = "今は使用不可"
 
-    private static func note(_ text: String, accountIndex: Int) -> [ProviderStat] {
-        [ProviderStat(title: "リセットチケット", valueText: text, accountIndex: accountIndex)]
-    }
-
-    private static func title(for kind: ClaudeResetGrant.Kind) -> String {
+    private static func kindLabel(_ kind: ClaudeResetGrant.Kind) -> String? {
         switch kind {
         case .session: "5時間リセット"
         case .weekly: "週リセット"
-        case .full: "全リセット"
-        case .unknown: "リセット"
+        case .full, .unknown: nil
         }
     }
 

@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import os
+import SwiftUI
 import XCTest
 @testable import CodexUsageWidget
 
@@ -64,6 +66,17 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
 
     private var cache: ClaudeDesktopResetCache { ClaudeDesktopResetCache(directory: directory) }
 
+    /// One account's ticket block exactly as the hover card builds it: "見出し|補足|期限;期限".
+    static func card(_ stats: [ProviderStat], _ account: Int) -> String {
+        guard let extras = RingDetailCardModel.claudeTicketExtras(stats.filter { $0.accountIndex == account }) else { return "なし" }
+        let headline = extras.availableCount.map { "利用可能 \($0)件" } ?? extras.headline ?? "-"
+        return "\(headline)|\(extras.note ?? "")|\(extras.tickets.compactMap(\.expiresText).joined(separator: ";"))"
+    }
+
+    private func card(_ usage: ClaudeCLIUsage, _ accounts: [ClaudeCLIAccount], at date: Date, _ account: Int = 0) -> String {
+        Self.card(usage.section(accounts: accounts, now: date, timeZone: .current)?.section.stats ?? [], account)
+    }
+
     private func tickets(_ reading: ClaudeDesktopResetCache.Reading?, index: Int = 1) -> [ProviderStat] {
         guard let reading else { return [] }
         return ClaudeResetGrantsClient.stats(for: reading.outcome, accountIndex: index, now: now,
@@ -81,12 +94,9 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let reading = cache.reading(organization: orgB.uppercased(), now: now)
         XCTAssertEqual(reading?.observedAt, Date(timeIntervalSince1970: 1_794_445_388))
         let stats = tickets(reading)
-        XCTAssertEqual(stats.first?.title, "Reset tickets")
-        XCTAssertEqual(stats.first?.valueText, "2 available · Claude Desktop 10:03 JST 確認")
-        XCTAssertEqual(stats.filter { $0.title == "Reset ticket" }.map(\.valueText), [
-            "全リセット · 使用可 · 期限 11/17 16:59",
-            "全リセット · 使用可 · 期限 12/11 07:00"
-        ])
+        // Both raw grants are type "full", which does not say what they clear: no kind label.
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
+        XCTAssertFalse(stats.contains { $0.valueText.contains("available") || $0.valueText.contains("全リセット") })
         XCTAssertEqual(stats.filter { $0.title == "Reset ticket expiry" }.map(\.valueText),
                        ["2026-11-17T07:59:00Z", "2026-12-10T22:00:00Z"])
         XCTAssertTrue(stats.allSatisfy { $0.accountIndex == 1 })
@@ -98,15 +108,15 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         try write(org: orgA, body: Body.ineligible, date: "Sun, 08 Nov 2026 13:52:19 GMT", modified: now.addingTimeInterval(-300_000))
         let a = cache.reading(organization: orgA, now: now)
         XCTAssertEqual(a?.outcome, .notOffered)
-        XCTAssertEqual(tickets(a, index: 0), [])
-        XCTAssertEqual(tickets(cache.reading(organization: orgB, now: now)).first?.valueText.hasPrefix("2 available"), true)
+        XCTAssertEqual(Self.card(tickets(a, index: 0), 0), "利用可能 0件|Claude Desktop・11/8 22:52 JST 確認|")
+        XCTAssertEqual(Self.card(tickets(cache.reading(organization: orgB, now: now)), 1).hasPrefix("利用可能 2件|"), true)
     }
 
     func testNewerSpentOrNullResponseSupersedesOlderTickets() throws {
         try write(org: orgB, variant: 1, body: Body.twoTickets, date: "Wed, 11 Nov 2026 01:00:00 GMT",
                   modified: now.addingTimeInterval(-86_000))
         try write(org: orgB, variant: 0, body: Body.spent, date: responseDate, modified: now.addingTimeInterval(-700))
-        XCTAssertEqual(tickets(cache.reading(organization: orgB, now: now)), [])
+        XCTAssertEqual(Self.card(tickets(cache.reading(organization: orgB, now: now)), 1), "利用可能 0件|Claude Desktop・10:03 JST 確認|")
         try write(org: orgB, variant: 0, body: Body.nullBlock, date: responseDate, modified: now.addingTimeInterval(-600))
         XCTAssertEqual(cache.reading(organization: orgB, now: now)?.outcome, .notOffered)
     }
@@ -149,7 +159,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let stats = ClaudeResetGrantsClient.stats(for: cache.reading(organization: orgB, now: now)!.outcome,
                                                   accountIndex: 1, now: later,
                                                   calendar: RingResetFormat.tokyoCalendar)
-        XCTAssertEqual(stats.first?.valueText, "1 available")
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 1件||期限 12/11 07:00 JST")
     }
 
     func testRejectsNonUUIDOrganizationAndMissingDirectory() {
@@ -186,10 +196,10 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let t0 = now
         await usage.refreshNow(accounts, timeZone: .current, now: { t0 })
         let stats = usage.section(accounts: accounts, now: t0, timeZone: .current)?.section.stats ?? []
-        let ticketStats = stats.filter { $0.title.hasPrefix("Reset ticket") }
-        XCTAssertEqual(ticketStats.filter { $0.title == "Reset ticket" }.count, 2)
-        XCTAssertTrue(ticketStats.allSatisfy { $0.accountIndex == 1 }, "\(ticketStats)")
-        XCTAssertFalse(stats.contains { $0.accountIndex == 0 && $0.title.hasPrefix("Reset ticket") })
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
+        // A keeps its own section: unknown, never B's count or rows.
+        XCTAssertEqual(Self.card(stats, 0), "未確認|公式APIは券情報を返しません|")
+        XCTAssertEqual(stats.filter { $0.title == ClaudeResetGrantsClient.ticketStat }.map(\.accountIndex), [1, 1])
     }
 
     func testNextCycleWithSpentResponseClearsTicketsInsteadOfKeepingThem() async throws {
@@ -200,16 +210,13 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
         let t0 = now
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
-        XCTAssertEqual(usage.section(accounts: account, now: t0, timeZone: .current)?.section.stats
-            .filter { $0.title == "Reset ticket" }.count, 2)
+        XCTAssertEqual(card(usage, account, at: t0), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
         try write(org: orgB, body: Body.spent, date: "Thu, 12 Nov 2026 01:20:00 GMT", modified: now.addingTimeInterval(300))
         await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(400) })
-        XCTAssertEqual(usage.section(accounts: account, now: t0.addingTimeInterval(400), timeZone: .current)?.section.stats
-            .filter { $0.title.hasPrefix("Reset ticket") }, [])
+        XCTAssertEqual(card(usage, account, at: t0.addingTimeInterval(400)), "利用可能 0件|Claude Desktop・10:20 JST 確認|")
         try FileManager.default.removeItem(at: url)
         await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(800) })
-        XCTAssertEqual(usage.section(accounts: account, now: t0.addingTimeInterval(800), timeZone: .current)?.section.stats
-            .filter { $0.title.hasPrefix("Reset ticket") }, [])
+        XCTAssertEqual(card(usage, account, at: t0.addingTimeInterval(800)), "未確認|公式APIは券情報を返しません|")
     }
 
     func testStaleDesktopNegativeKeepsTheCurrentRateLimitNoteWhileHeldTicketsStillShow() async throws {
@@ -229,12 +236,8 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let t0 = now
         await usage.refreshNow(accounts, timeZone: .current, now: { t0 })
         let stats = usage.section(accounts: accounts, now: t0, timeZone: .current)?.section.stats ?? []
-        let a = stats.filter { $0.accountIndex == 0 && ($0.title.hasPrefix("Reset ticket") || $0.title == "リセットチケット") }
-        XCTAssertEqual(a.map(\.title), ["リセットチケット"])
-        XCTAssertTrue(a.first?.valueText.hasPrefix("取得の回数制限中") ?? false, "\(a)")
-        let b = stats.filter { $0.accountIndex == 1 && $0.title.hasPrefix("Reset ticket") }
-        XCTAssertEqual(b.first?.valueText, "2 available · Claude Desktop 10:03 JST 確認")
-        XCTAssertEqual(b.filter { $0.title == "Reset ticket" }.count, 2)
+        XCTAssertEqual(Self.card(stats, 0), "未確認|取得制限中・11:15 JST 以降に再取得|")
+        XCTAssertEqual(Self.card(stats, 1), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
     }
 
     func testFreshDesktopNegativeStillReplacesTheOAuthNote() async throws {
@@ -246,8 +249,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
         let t0 = now
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
-        XCTAssertEqual(usage.section(accounts: account, now: t0, timeZone: .current)?.section.stats
-            .filter { $0.title.hasPrefix("Reset ticket") || $0.title == "リセットチケット" }, [])
+        XCTAssertEqual(card(usage, account, at: t0), "利用可能 0件|Claude Desktop・10:03 JST 確認|")
     }
 
     func testEvictedNewerSpentEntryDoesNotBringBackOlderTickets() async throws {
@@ -259,14 +261,11 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
                                    desktopResets: { _, now in cache.reading(organization: orgB, now: now) })
         let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
         let t0 = now
-        func tickets(_ at: Date) -> [ProviderStat] {
-            usage.section(accounts: account, now: at, timeZone: .current)?.section.stats.filter { $0.title.hasPrefix("Reset ticket") } ?? []
-        }
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
-        XCTAssertEqual(tickets(t0), [])
+        XCTAssertEqual(card(usage, account, at: t0), "利用可能 0件|Claude Desktop・10:03 JST 確認|")
         try FileManager.default.removeItem(at: newer)
         await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(200) })
-        XCTAssertEqual(tickets(t0.addingTimeInterval(200)), [])
+        XCTAssertEqual(card(usage, account, at: t0.addingTimeInterval(200)), "未確認|公式APIは券情報を返しません|")
     }
 
     func testSwitchingTheFolderToAnotherOrganizationDoesNotInheritItsHighWater() async throws {
@@ -279,12 +278,10 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
         let t0 = now
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
-        XCTAssertEqual(usage.section(accounts: account, now: t0, timeZone: .current)?.section.stats
-            .filter { $0.title == "Reset ticket" }.count, 0)
+        XCTAssertEqual(card(usage, account, at: t0), "利用可能 0件|Claude Desktop・10:10 JST 確認|")
         current.withLock { $0 = orgB }
         await usage.refreshNow(account, timeZone: .current, now: { t0.addingTimeInterval(200) })
-        XCTAssertEqual(usage.section(accounts: account, now: t0.addingTimeInterval(200), timeZone: .current)?.section.stats
-            .filter { $0.title == "Reset ticket" }.count, 2)
+        XCTAssertEqual(card(usage, account, at: t0.addingTimeInterval(200)), "利用可能 2件|Claude Desktop・10:03 JST 確認|期限 11/17 16:59 JST;期限 12/11 07:00 JST")
     }
 
     func testLaterOAuthFailureDoesNotBringBackDesktopTicketsANewerOAuthAnswerSuperseded() async throws {
@@ -303,9 +300,7 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
         await usage.refreshNow(account, timeZone: .current, now: { t1 })
         XCTAssertEqual(calls.withLock { $0 }, 2)
-        let stats = usage.section(accounts: account, now: t1, timeZone: .current)?.section.stats ?? []
-        XCTAssertEqual(stats.filter { $0.title.hasPrefix("Reset ticket") }, [])
-        XCTAssertTrue(stats.contains { $0.title == "リセットチケット" && $0.valueText.hasPrefix("取得の回数制限中") }, "\(stats)")
+        XCTAssertEqual(card(usage, account, at: t1), "未確認|取得制限中・10:45 JST 以降に再取得|")
     }
 
     func testNewerEmptyOAuthAnswerOverridesOlderDesktopTickets() async throws {
@@ -319,8 +314,54 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
         let t0 = now
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
-        XCTAssertEqual(usage.section(accounts: account, now: t0, timeZone: .current)?.section.stats
-            .filter { $0.title.hasPrefix("Reset ticket") }, [])
+        XCTAssertEqual(card(usage, account, at: t0), "利用可能 0件||")
+    }
+
+    /// A unknown (429) and B with two Desktop tickets, through the real hover-card path:
+    /// ClaudeCLIUsage -> CollapsedUsageBar -> RingDetailCardModel. Set USAGERINGS_CLAUDE_CARD_OUTPUT
+    /// to a directory to also write the rendered cards as PNGs.
+    @MainActor
+    func testHoverCardsShowEachAccountsOwnTicketBlock() async throws {
+        try write(org: orgA, body: Body.ineligible, date: "Sun, 08 Nov 2026 13:52:19 GMT", modified: now.addingTimeInterval(-300_000))
+        try write(org: orgB, body: Body.twoTickets, date: responseDate, modified: now.addingTimeInterval(-700))
+        let cache = self.cache, orgA = self.orgA, orgB = self.orgB
+        let configs = ["/tmp/test-claude-a": orgA, "/tmp/test-claude-b": orgB]
+        let limited = ClaudeResetGrantsClient(loadToken: { _ in "test-token" }, transport: { _ in (Data(), 429, "0") })
+        let usage = ClaudeCLIUsage(runner: { _, _ in Self.cliResult }, grantsClient: limited,
+                                   desktopResets: { configDir, now in
+                                       configDir.flatMap { configs[$0] }.flatMap { cache.reading(organization: $0, now: now) }
+                                   })
+        let accounts = [ClaudeCLIAccount(label: "A", configDir: "/tmp/test-claude-a"),
+                        ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
+        let t0 = now
+        await usage.refreshNow(accounts, timeZone: .current, now: { t0 })
+        let section = try XCTUnwrap(usage.section(accounts: accounts, now: t0, timeZone: .current)?.section)
+        let snapshot = MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: t0)
+        let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil).filter { $0.provider == .claude }
+        XCTAssertEqual(bars.count, 2)
+        for bar in bars {
+            let model = try XCTUnwrap(RingDetailCardModel.make(bar: bar, now: t0))
+            let extras = try XCTUnwrap(model.extras, "every Claude account keeps its ticket heading")
+            XCTAssertEqual(model.stats, [])
+            if bar.accountIndex == 0 {
+                XCTAssertNil(extras.availableCount)
+                XCTAssertEqual(extras.headline, "未確認")
+                XCTAssertEqual(extras.note, "取得制限中・10:30 JST 以降に再取得")
+                XCTAssertEqual(extras.tickets, [])
+            } else {
+                XCTAssertEqual(extras.availableCount, 2)
+                XCTAssertEqual(extras.note, "Claude Desktop・10:03 JST 確認")
+                XCTAssertEqual(extras.tickets.compactMap(\.expiresText), ["期限 11/17 16:59 JST", "期限 12/11 07:00 JST"])
+            }
+            if let directory = ProcessInfo.processInfo.environment["USAGERINGS_CLAUDE_CARD_OUTPUT"] {
+                let renderer = ImageRenderer(content: RingDetailCardView(model: model)
+                    .padding(16).background(Color(white: 0.10)).environment(\.colorScheme, .dark))
+                renderer.scale = 2
+                let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: URL(fileURLWithPath: directory).appendingPathComponent("claude-tickets-\(bar.accountIndex ?? 0).png"))
+            }
+        }
     }
 
     /// Opt-in check against this Mac's real Claude Desktop cache and Claude Code logins. Reads only;

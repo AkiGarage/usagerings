@@ -115,6 +115,8 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-ant-oat-test-token")
         XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+        XCTAssertTrue(request.value(forHTTPHeaderField: "User-Agent")?
+            .range(of: #"^claude-cli/\d+\.\d+\.\d+ \(external, cli\)$"#, options: .regularExpression) != nil)
         XCTAssertEqual(recorder.requests.count, 1)
     }
 
@@ -239,10 +241,11 @@ final class ClaudeResetGrantsTests: XCTestCase {
         await release.open()
         await first.value
         let section = usage.section(accounts: [account], now: t0.addingTimeInterval(2), timeZone: .current)
-        XCTAssertFalse(section?.section.stats.contains { $0.title == "Reset tickets" } ?? true)
+        // The discarded response leaves the account unknown, never a count.
+        XCTAssertEqual(ClaudeDesktopResetCacheTests.card(section?.section.stats ?? [], 0), "未確認|取得中|")
     }
 
-    func testRateLimitHonorsRetryAfterAndShowsNoteWhenCLIHasNoValue() async {
+    func testRateLimitHonorsRetryAfterWithoutCreatingEmptyCard() async {
         let calls = GrantCallLog()
         let client = tokenClient { request in
             calls.record(request)
@@ -255,8 +258,9 @@ final class ClaudeResetGrantsTests: XCTestCase {
         let t0 = now
         await usage.refreshNow([account], timeZone: .current, now: { t0 })
         let result = usage.section(accounts: [account], now: t0, timeZone: .current)
-        XCTAssertEqual(result?.section.stats.map(\.valueText), ["取得の回数制限中（最短60分間隔で再取得）"])
-        XCTAssertTrue(result?.section.windows.isEmpty ?? false)
+        // A rate-limit note alone is not a real usage/ticket reading.
+        // The provider must remain pending, rather than creating an empty ring.
+        XCTAssertNil(result)
         await usage.refreshNow([], timeZone: .current, now: { t0.addingTimeInterval(1) })
         await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(901) })
         XCTAssertEqual(calls.count, 1)
@@ -274,11 +278,11 @@ final class ClaudeResetGrantsTests: XCTestCase {
         // It is still never labelled 使用可.
         let notUsableYet = ClaudeResetGrant(kind: .session, resetsLeft: 1, endsAt: nil, paused: false, usableNow: false)
         let heldStats = ClaudeResetGrantsClient.stats(for: .loaded([notUsableYet]), accountIndex: 0, now: t0, calendar: tokyoCalendar())
-        XCTAssertEqual(heldStats.first { $0.title == "Reset tickets" }?.valueText, "1 held · 0 usable now")
-        XCTAssertEqual(heldStats.filter { $0.title == "Reset ticket" }.map(\.valueText), ["5時間リセット · 保有・今は使用不可"])
-        XCTAssertFalse(heldStats.contains { $0.valueText.contains("使用可") })
+        XCTAssertEqual(ClaudeDesktopResetCacheTests.card(heldStats, 0), "利用可能 1件||期限なし（5時間リセット）・今は使用不可")
+        XCTAssertEqual(RingDetailCardModel.claudeTicketExtras(heldStats)?.tickets.map(\.isGreyedOut), [true])
         let extreme = ClaudeResetGrant(kind: .session, resetsLeft: Int.max, endsAt: nil, paused: false, usableNow: true)
-        XCTAssertEqual(ClaudeResetGrantsClient.stats(for: .loaded([extreme]), accountIndex: 0, now: t0, calendar: tokyoCalendar()).map(\.valueText), ["取得できません"])
+        XCTAssertEqual(ClaudeDesktopResetCacheTests.card(ClaudeResetGrantsClient.stats(for: .loaded([extreme]), accountIndex: 0, now: t0, calendar: tokyoCalendar()), 0),
+                       "未確認|取得できません|")
     }
 
     func testLoginChangeAndLogoutDiscardOldTicketsWithoutBypassingCooldown() async {
@@ -316,26 +320,16 @@ final class ClaudeResetGrantsTests: XCTestCase {
             ClaudeResetGrant(kind: .unknown, resetsLeft: 1, endsAt: nil, paused: false, usableNow: true)
         ]
         let stats = ClaudeResetGrantsClient.stats(for: .loaded(grants), accountIndex: 2, now: now, calendar: calendar)
-        XCTAssertEqual(stats.first?.title, "Reset tickets")
-        XCTAssertEqual(stats.first?.valueText, "4 available")
-        XCTAssertEqual(stats.filter { $0.title == "Reset tickets" }.count, 1)
-        XCTAssertEqual(stats.filter { $0.title == "Reset ticket" }.count, 4)
-        XCTAssertEqual(stats.filter { $0.title == "Reset ticket expiry" }.count, 3)
+        // Paused, expired and empty grants drop out; 2 + 1 + 1 held, soonest expiry first, no-expiry last.
+        XCTAssertEqual(ClaudeDesktopResetCacheTests.card(stats, 2),
+                       "利用可能 4件||期限 18:00 JST（5時間リセット）;期限 18:00 JST（5時間リセット）;期限 19:00 JST（週リセット）;期限なし")
+        XCTAssertEqual(stats.filter { $0.title == ClaudeResetGrantsClient.expiryStat }.map(\.valueText),
+                       [now.addingTimeInterval(3_600), now.addingTimeInterval(3_600), now.addingTimeInterval(7_200)]
+                           .map { ISO8601DateFormatter().string(from: $0) })
         XCTAssertTrue(stats.allSatisfy { $0.accountIndex == 2 })
-        XCTAssertEqual(stats.filter { $0.title == "Reset ticket" }.map(\.valueText).first,
-                       MultiUsageService.ticketText(
-                           CodexExtrasParser.Ticket(title: "5時間リセット", status: "available",
-                                                    resetType: nil, grantedAt: nil,
-                                                    expiresAt: now.addingTimeInterval(3_600)),
-                           now: now, calendar: calendar))
-        XCTAssertTrue(stats[1].valueText.hasPrefix("5時間リセット · 使用可 · 期限 "))
-        XCTAssertTrue(stats[3].valueText.hasPrefix("週リセット · 使用可 · 期限 "))
-        XCTAssertTrue(stats[4].valueText.hasPrefix("リセット · 使用可"))
-        XCTAssertEqual(stats[5].valueText, ISO8601DateFormatter().string(from: now.addingTimeInterval(3_600)))
-        XCTAssertEqual(stats[6].valueText, ISO8601DateFormatter().string(from: now.addingTimeInterval(3_600)))
-        XCTAssertEqual(stats[7].valueText, ISO8601DateFormatter().string(from: now.addingTimeInterval(7_200)))
+        // An eligible answer with no grants is a known zero.
         let empty = ClaudeResetGrantsClient.stats(for: .loaded([]), accountIndex: 0, now: now, calendar: calendar)
-        XCTAssertTrue(empty.isEmpty)
+        XCTAssertEqual(ClaudeDesktopResetCacheTests.card(empty, 0), "利用可能 0件||")
     }
 
     /// API shape seen live: stored tickets come back with usable_now:false. They are inventory and
@@ -350,11 +344,9 @@ final class ClaudeResetGrantsTests: XCTestCase {
         """)
         guard case .loaded(let grants) = ClaudeResetGrantsClient.parse(body) else { return XCTFail("not loaded") }
         let stats = ClaudeResetGrantsClient.stats(for: .loaded(grants), accountIndex: 1, now: now, calendar: tokyoCalendar())
-        XCTAssertEqual(stats.first { $0.title == "Reset tickets" }?.valueText, "3 held · 1 usable now")
-        let tickets = stats.filter { $0.title == "Reset ticket" }.map(\.valueText)
-        XCTAssertEqual(tickets.count, 3)
-        XCTAssertEqual(tickets.filter { $0.hasPrefix("5時間リセット · 保有・今は使用不可 · 期限 ") }.count, 2)
-        XCTAssertEqual(tickets.filter { $0.hasPrefix("週リセット · 使用可 · 期限 ") }.count, 1)
+        XCTAssertEqual(ClaudeDesktopResetCacheTests.card(stats, 1),
+                       "利用可能 3件||期限 1/16 21:00 JST（5時間リセット）・今は使用不可;期限 1/16 21:00 JST（5時間リセット）・今は使用不可;期限 1/20 21:00 JST（週リセット）")
+        XCTAssertEqual(RingDetailCardModel.claudeTicketExtras(stats)?.tickets.map(\.isGreyedOut), [true, true, false])
     }
 
     func testFailureNotesAndSilentOutcomes() {
@@ -362,21 +354,20 @@ final class ClaudeResetGrantsTests: XCTestCase {
         func stats(_ outcome: ClaudeResetGrantsOutcome) -> [ProviderStat] {
             ClaudeResetGrantsClient.stats(for: outcome, accountIndex: 1, now: now, calendar: calendar)
         }
-        XCTAssertEqual(stats(.loginExpired).map(\.valueText),
-                       ["Claude Codeを一度使うとログインが更新されます"])
-        XCTAssertEqual(stats(.unauthorized).map(\.valueText), ["Claude Codeで再ログインしてください"])
-        XCTAssertEqual(stats(.httpFailure(429)).map(\.valueText), ["取得の回数制限中（15分ごとに再取得）"])
-        XCTAssertEqual(stats(.httpFailure(500)).map(\.valueText), ["取得できません（HTTP 500）"])
-        XCTAssertEqual(stats(.transportFailure).map(\.valueText), ["取得できません"])
-        XCTAssertEqual(stats(.malformed).map(\.valueText), ["取得できません"])
-        for outcome in [ClaudeResetGrantsOutcome.loginExpired, .unauthorized, .httpFailure(500),
-                        .transportFailure, .malformed] {
-            XCTAssertEqual(stats(outcome).count, 1)
-            XCTAssertEqual(stats(outcome).first?.title, "リセットチケット")
-            XCTAssertEqual(stats(outcome).first?.accountIndex, 1)
-        }
-        XCTAssertTrue(stats(.notOffered).isEmpty)
-        XCTAssertTrue(stats(.notLoggedIn).isEmpty)
+        func shown(_ outcome: ClaudeResetGrantsOutcome?) -> String { ClaudeDesktopResetCacheTests.card(ClaudeResetGrantsClient.stats(
+            for: outcome, accountIndex: 1, now: now, calendar: calendar, retryAt: now.addingTimeInterval(900)), 1) }
+        // Every failure keeps the heading as 未確認 with one short reason; none is shown as 0.
+        XCTAssertEqual(shown(.loginExpired), "未確認|Claude Codeを一度使うとログインが更新されます|")
+        XCTAssertEqual(shown(.unauthorized), "未確認|Claude Codeで再ログインしてください|")
+        XCTAssertEqual(shown(.httpFailure(429)), "未確認|取得制限中・17:15 JST 以降に再取得|")
+        XCTAssertEqual(shown(.rateLimited(3600)), "未確認|取得制限中・17:15 JST 以降に再取得|")
+        XCTAssertEqual(shown(.httpFailure(500)), "未確認|取得できません（HTTP 500）|")
+        XCTAssertEqual(shown(.transportFailure), "未確認|取得できません|")
+        XCTAssertEqual(shown(.malformed), "未確認|取得できません|")
+        XCTAssertEqual(shown(.notOffered), "未確認|公式APIは券情報を返しません|")
+        XCTAssertEqual(shown(.notLoggedIn), "未確認|ログインがありません|")
+        XCTAssertEqual(shown(nil), "未確認|取得中|")
+        XCTAssertTrue(stats(.malformed).allSatisfy { $0.accountIndex == 1 })
     }
 
     func testNotesRenderAsPanelNotesForTheClaudeRow() {
@@ -425,11 +416,11 @@ final class ClaudeResetGrantsTests: XCTestCase {
 
         let section = usage.section(accounts: [a, b], now: t0, timeZone: .current)!.section
         XCTAssertEqual(section.forAccount(0).stats.filter { $0.title == "Reset tickets" }.map(\.valueText),
-                       ["3 available"])
+                       ["3"])
         XCTAssertEqual(section.forAccount(0).stats.filter { $0.title == "Reset ticket" }.count, 3)
         XCTAssertEqual(section.forAccount(0).stats.first { $0.title == "Reset tickets" }?.accountIndex, 0)
         XCTAssertEqual(section.forAccount(1).stats.filter { $0.title == "Reset tickets" }.map(\.valueText),
-                       ["3 available"])
+                       ["3"])
         XCTAssertEqual(calls.count, 2)
         XCTAssertEqual(calls.seenDirs, ["/tmp/claude-test-config", nil])
 

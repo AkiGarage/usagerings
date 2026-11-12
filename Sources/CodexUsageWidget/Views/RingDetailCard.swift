@@ -158,6 +158,24 @@ struct RingDetailCardModel: Equatable {
         let creditsText: String?
         let availableCount: Int?
         let tickets: [TicketRow]
+        /// Right-hand value of the リセットチケット line when the count is not known (Claude: 未確認).
+        var headline: String? = nil
+        /// One small line under that heading: where/when the tickets were seen, or why unknown.
+        var note: String? = nil
+    }
+
+    /// Claude's per-account ticket stats (ClaudeResetGrantsClient) as the same card block Codex and
+    /// GLM use; nil when the account has no ticket section.
+    static func claudeTicketExtras(_ stats: [ProviderStat]) -> Extras? {
+        typealias Keys = ClaudeResetGrantsClient
+        guard let count = stats.first(where: { $0.title == Keys.countStat })?.valueText else { return nil }
+        let rows = stats.filter { $0.title == Keys.ticketStat }.enumerated().map { index, stat in
+            TicketRow(id: index, title: nil, status: nil, expiresText: stat.valueText,
+                      isGreyedOut: stat.valueText.hasSuffix(Keys.notUsableNowStatus))
+        }
+        return Extras(creditsText: nil, availableCount: Int(count), tickets: rows,
+                      headline: Int(count) == nil ? count : nil,
+                      note: stats.first(where: { $0.title == Keys.noteStat })?.valueText)
     }
 
     let title: String
@@ -192,7 +210,7 @@ struct RingDetailCardModel: Equatable {
     static func visibleStats(for bar: CollapsedUsageBar) -> [ProviderStat] {
         switch bar.provider {
         case .claude:
-            return bar.stats.filter { ["Reset tickets", "Reset ticket", "リセットチケット"].contains($0.title) }
+            return []  // tickets are drawn from claudeTicketExtras, like Codex and GLM
         case .minimax, .kimi, .deepseek:
             return bar.stats.filter {
                 !["Account", "5h", "Reset tickets updated", "Reset ticket expiry"].contains($0.title)
@@ -227,6 +245,7 @@ struct RingDetailCardModel: Equatable {
             ? Extras(creditsText: codexExtras?.creditsText, availableCount: codexExtras?.availableCount,
                      tickets: tickets)
             : nil
+        if bar.provider == .claude, let claude = claudeTicketExtras(bar.stats) { extras = claude }
         var ticketFailureText: String?
         if bar.provider == .zai || bar.id == "zai", let inventory = bar.zaiResetTickets {
             switch inventory {
@@ -474,6 +493,12 @@ struct RingDetailCardView: View {
                         if let creditsText = extras.creditsText { extraLine(label: "クレジット", value: creditsText) }
                         if let availableCount = extras.availableCount {
                             extraLine(label: "リセットチケット", value: "利用可能 \(availableCount)件")
+                        } else if let headline = extras.headline {
+                            extraLine(label: "リセットチケット", value: headline)
+                        }
+                        if let note = extras.note {
+                            Text(note).font(UsageLayout.legendFont).foregroundStyle(.secondary).lineLimit(1)
+                                .minimumScaleFactor(0.8)
                         }
                         ForEach(extras.tickets) { ticket in
                             VStack(alignment: .leading, spacing: 1) {

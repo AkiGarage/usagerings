@@ -166,7 +166,7 @@ final class ClaudeCLIUsage: Sendable {
         // can never start under a new generation and the stored task is always cancellable.
         let signature = Self.signature(accounts), keys = Set(accounts.map(Self.key))
         let interval = refreshInterval
-        let (entries, old) = state.withLock { s -> ([String: Entry], Task<Void, Never>?) in
+        let (entries, retryAt, old) = state.withLock { s -> ([String: Entry], [String: Date], Task<Void, Never>?) in
             let old = Self.rotate(&s, signature: signature, keys: keys)
             let due = accounts.filter { now.timeIntervalSince(s.entries[Self.key($0)]?.attemptedAt ?? .distantPast) >= interval }
             if !due.isEmpty, !s.refreshing {
@@ -174,11 +174,12 @@ final class ClaudeCLIUsage: Sendable {
                 let generation = s.generation
                 s.task = Task.detached { [self] in await self.runRefresh(due, timeZone: timeZone, generation: generation) }
             }
-            return (s.entries, old)
+            return (s.entries, s.grantsRetryAt, old)
         }
         old?.cancel()
         return Self.build(accounts: accounts, entries: entries, now: now,
-                          staleAge: staleAge, maxCacheAge: maxCacheAge, salt: salt)
+                          staleAge: staleAge, maxCacheAge: maxCacheAge, salt: salt,
+                          tickets: grantsClient != nil || desktopResets != nil ? retryAt : nil)
     }
 
     /// Test hook: refresh the given accounts sequentially and wait.
@@ -364,18 +365,25 @@ final class ClaudeCLIUsage: Sendable {
     }
 
     private static func build(accounts: [ClaudeCLIAccount], entries: [String: Entry], now: Date,
-                              staleAge: TimeInterval, maxCacheAge: TimeInterval, salt: Data?) -> Result? {
+                              staleAge: TimeInterval, maxCacheAge: TimeInterval, salt: Data?,
+                              tickets retryAt: [String: Date]? = nil) -> Result? {
         var combined = ProviderSection(provider: .claude, windows: [], stats: [], failureText: nil)
         var anyValue = false
+        var anyTicketData = false
         var anyCached = false
         var maskedEmails: [Int: String] = [:]
         for (index, account) in accounts.enumerated() {
             let entry = entries[key(account)]
             let id = (salt.map { account.accountID(salt: $0) } ?? account.accountID()).merging(entry?.sourceID)
-            if let preferred = preferredGrants(entry, now: now) {
+            if let retryAt {
+                // Every account gets its own ticket section, 未確認 included, so A never borrows B's.
+                let preferred = preferredGrants(entry, now: now)
+                // Only an actual eligible result (even an explicit zero) can stand alone without
+                // CLI usage. A 429, notOffered, or missing credentials is not ticket data.
+                if let preferred, case .loaded = preferred.0 { anyTicketData = true }
                 combined.stats += ClaudeResetGrantsClient.stats(
-                    for: preferred.0, accountIndex: index, now: now, calendar: RingResetFormat.tokyoCalendar,
-                    desktopObservedAt: preferred.1
+                    for: preferred?.0, accountIndex: index, now: now, calendar: RingResetFormat.tokyoCalendar,
+                    desktopObservedAt: preferred?.1, retryAt: retryAt[key(account)]
                 )
             }
             let age = entry?.fetchedAt.map { now.timeIntervalSince($0) } ?? .infinity
@@ -407,7 +415,7 @@ final class ClaudeCLIUsage: Sendable {
             combined.accounts.append(item)
             if let masked = entry?.maskedEmail { maskedEmails[index] = masked }
         }
-        guard anyValue || !combined.stats.isEmpty else { return nil }
+        guard anyValue || anyTicketData else { return nil }
         combined.accountInventoryComplete = true
         return Result(section: combined, fromCache: anyCached, maskedEmails: maskedEmails)
     }

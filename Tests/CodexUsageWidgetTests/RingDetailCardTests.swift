@@ -166,13 +166,20 @@ final class RingDetailCardTests: XCTestCase {
             XCTAssertTrue(model.isLockedOut(.five, leftPercent: 0))
             XCTAssertFalse(model.isLockedOut(.week, leftPercent: 60))
             XCTAssertEqual(model.rows.first { $0.kind == .week }?.leftPercent, 60)
+            // Tickets render as the shared リセットチケット block, never as raw "title: value" stats.
+            XCTAssertEqual(model.stats, [])
+            let extras = try XCTUnwrap(model.extras)
             if bar.accountIndex == 0 {
-                XCTAssertEqual(model.stats.map(\.title), ["Reset tickets", "Reset ticket"])
-                XCTAssertTrue(model.stats.last?.valueText.contains("週リセット") == true)
-                XCTAssertTrue(model.stats.last?.valueText.contains("期限 ") == true)
-                XCTAssertFalse(model.stats.contains { $0.valueText.contains("internal-source") })
+                XCTAssertEqual(extras.availableCount, 1)
+                XCTAssertNil(extras.headline)
+                XCTAssertEqual(extras.tickets.count, 1)
+                XCTAssertTrue(extras.tickets[0].expiresText?.hasPrefix("期限 ") == true)
+                XCTAssertTrue(extras.tickets[0].expiresText?.hasSuffix(" JST（週リセット）") == true)
             } else {
-                XCTAssertEqual(model.stats, rateStats)
+                XCTAssertNil(extras.availableCount)
+                XCTAssertEqual(extras.headline, "未確認")
+                XCTAssertEqual(extras.note, "取得制限中")
+                XCTAssertEqual(extras.tickets, [])
             }
             if let directory = ProcessInfo.processInfo.environment["USAGERINGS_CLAUDE_CARD_OUTPUT"] {
                 let renderer = ImageRenderer(content: RingDetailCardView(model: model)
@@ -185,7 +192,7 @@ final class RingDetailCardTests: XCTestCase {
         }
         let failedBar = CollapsedUsageBar(id: "claude", label: "A", title: "Claude", providerColor: .white,
                                          limit: nil, stats: rateStats, provider: .claude)
-        XCTAssertEqual(RingDetailCardModel.make(bar: failedBar, now: now)?.stats, rateStats)
+        XCTAssertEqual(RingDetailCardModel.make(bar: failedBar, now: now)?.extras?.headline, "未確認")
     }
 
     func testDeepSeekAndOtherStatsOnlyProvidersHideInternalStats() throws {
