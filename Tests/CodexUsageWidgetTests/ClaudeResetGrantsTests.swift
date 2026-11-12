@@ -269,8 +269,14 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(ClaudeResetGrantsClient.retryInterval(retryDate.string(from: t0.addingTimeInterval(7200)), now: t0), 7200)
         XCTAssertEqual(ClaudeResetGrantsClient.retryInterval("invalid", now: t0), 900)
         XCTAssertEqual(ClaudeResetGrantsClient.retryInterval("NaN", now: t0), 900)
-        let unavailable = ClaudeResetGrant(kind: .session, resetsLeft: 1, endsAt: nil, paused: false, usableNow: false)
-        XCTAssertTrue(ClaudeResetGrantsClient.stats(for: .loaded([unavailable]), accountIndex: 0, now: t0, calendar: tokyoCalendar()).isEmpty)
+        // usable_now only says whether a ticket can be spent this instant (e.g. not while a window is
+        // still fresh); a stored, unpaused, unexpired ticket still counts toward the inventory.
+        // It is still never labelled 使用可.
+        let notUsableYet = ClaudeResetGrant(kind: .session, resetsLeft: 1, endsAt: nil, paused: false, usableNow: false)
+        let heldStats = ClaudeResetGrantsClient.stats(for: .loaded([notUsableYet]), accountIndex: 0, now: t0, calendar: tokyoCalendar())
+        XCTAssertEqual(heldStats.first { $0.title == "Reset tickets" }?.valueText, "1 held · 0 usable now")
+        XCTAssertEqual(heldStats.filter { $0.title == "Reset ticket" }.map(\.valueText), ["5時間リセット · 保有・今は使用不可"])
+        XCTAssertFalse(heldStats.contains { $0.valueText.contains("使用可") })
         let extreme = ClaudeResetGrant(kind: .session, resetsLeft: Int.max, endsAt: nil, paused: false, usableNow: true)
         XCTAssertEqual(ClaudeResetGrantsClient.stats(for: .loaded([extreme]), accountIndex: 0, now: t0, calendar: tokyoCalendar()).map(\.valueText), ["取得できません"])
     }
@@ -330,6 +336,25 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(stats[7].valueText, ISO8601DateFormatter().string(from: now.addingTimeInterval(7_200)))
         let empty = ClaudeResetGrantsClient.stats(for: .loaded([]), accountIndex: 0, now: now, calendar: calendar)
         XCTAssertTrue(empty.isEmpty)
+    }
+
+    /// API shape seen live: stored tickets come back with usable_now:false. They are inventory and
+    /// must be counted (CodexBar docs/claude.md), but shown as held, not as 使用可.
+    func testStoredTicketsWithUsableNowFalseAreCountedButNotLabelledUsable() {
+        let body = Self.json("""
+        {"cedar_ember":{"eligible":true,"grants":[
+          {"resets_left":2,"ends_at":"2027-01-16T12:00:00Z","paused":false,"usable_now":false,"type":"session"},
+          {"resets_left":1,"ends_at":"2027-01-20T12:00:00Z","paused":false,"usable_now":true,"type":"weekly"},
+          {"resets_left":4,"ends_at":"2027-01-20T12:00:00Z","paused":true,"usable_now":false,"type":"full"}
+        ]}}
+        """)
+        guard case .loaded(let grants) = ClaudeResetGrantsClient.parse(body) else { return XCTFail("not loaded") }
+        let stats = ClaudeResetGrantsClient.stats(for: .loaded(grants), accountIndex: 1, now: now, calendar: tokyoCalendar())
+        XCTAssertEqual(stats.first { $0.title == "Reset tickets" }?.valueText, "3 held · 1 usable now")
+        let tickets = stats.filter { $0.title == "Reset ticket" }.map(\.valueText)
+        XCTAssertEqual(tickets.count, 3)
+        XCTAssertEqual(tickets.filter { $0.hasPrefix("5時間リセット · 保有・今は使用不可 · 期限 ") }.count, 2)
+        XCTAssertEqual(tickets.filter { $0.hasPrefix("週リセット · 使用可 · 期限 ") }.count, 1)
     }
 
     func testFailureNotesAndSilentOutcomes() {

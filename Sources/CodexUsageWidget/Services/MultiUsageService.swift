@@ -310,7 +310,9 @@ struct MultiUsageService: Sendable {
                     if let commandRunner {
                         result = try commandRunner(arguments)
                     } else {
-                        let runner = SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: 30)
+                        let runner = SubprocessRunner(
+                            executableURL: URL(fileURLWithPath: cliPath), timeout: 30,
+                            environment: provider == .codex ? CodexUsageService.codexEnvironmentOverride() : nil)
                         result = try await runner.run(arguments)
                     }
                     if result.timedOut && !retried { retried = true; continue }
