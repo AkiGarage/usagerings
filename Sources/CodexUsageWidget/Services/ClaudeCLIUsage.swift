@@ -92,7 +92,9 @@ final class ClaudeCLIUsage: Sendable {
         var failureReason: UsageFailureReason?
         var failureMessage: String?
         var grants: ClaudeResetGrantsOutcome?
-        var grantsFetchedAt: Date?
+        /// When OAuth last gave an eligible answer (`.loaded`, empty included) for this login. Kept
+        /// across later 429/transport failures, so Desktop tickets older than it stay superseded.
+        var oauthLoadedAt: Date?
         /// Grants Claude Desktop cached for this login's organization; replaced (never kept) each cycle.
         var desktopResets: ClaudeDesktopResetCache.Reading?
         /// Newest Desktop observation adopted for this folder's organization. A later read for the
@@ -286,7 +288,7 @@ final class ClaudeCLIUsage: Sendable {
                 var entry = s.entries[Self.key(account)] ?? Entry()
                 entry.attemptedAt = started
                 if let parsedValue {
-                    if entry.sourceID != reportedValue { entry.grants = nil }
+                    if entry.sourceID != reportedValue { entry.grants = nil; entry.oauthLoadedAt = nil }
                     entry.section = parsedValue; entry.fetchedAt = started
                     entry.sourceID = reportedValue
                     entry.maskedEmail = maskedValue
@@ -297,6 +299,7 @@ final class ClaudeCLIUsage: Sendable {
                     entry.failureMessage = failureValue.message
                     if failureValue.reason == .logout {
                         entry.grants = nil
+                        entry.oauthLoadedAt = nil
                         entry.section = nil
                         entry.fetchedAt = nil
                     }
@@ -347,7 +350,7 @@ final class ClaudeCLIUsage: Sendable {
                 guard s.generation == generation else { return false }
                 var entry = s.entries[Self.key(account)] ?? Entry()
                 entry.grants = grants
-                entry.grantsFetchedAt = grantsStarted
+                if case .loaded = grants { entry.oauthLoadedAt = grantsStarted }
                 s.entries[Self.key(account)] = entry
                 return true
             }
@@ -423,7 +426,7 @@ final class ClaudeCLIUsage: Sendable {
         let oauth = entry.grants.map { ($0, Date?.none) }
         guard let desktop = entry.desktopResets else { return oauth }
         // Any eligible OAuth answer, empty included, is a newer statement about the same tickets.
-        if case .loaded? = entry.grants, let fetched = entry.grantsFetchedAt, fetched > desktop.observedAt {
+        if let loadedAt = entry.oauthLoadedAt, loadedAt > desktop.observedAt {
             return oauth
         }
         if case .loaded(let grants) = desktop.outcome,

@@ -287,6 +287,27 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
             .filter { $0.title == "Reset ticket" }.count, 2)
     }
 
+    func testLaterOAuthFailureDoesNotBringBackDesktopTicketsANewerOAuthAnswerSuperseded() async throws {
+        try write(org: orgB, body: Body.twoTickets, date: "Wed, 11 Nov 2026 01:00:00 GMT", modified: now.addingTimeInterval(-86_000))
+        let cache = self.cache, orgB = self.orgB
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let client = ClaudeResetGrantsClient(loadToken: { _ in "test-token" }, transport: { _ in
+            calls.withLock { $0 += 1; return $0 } == 1
+                ? (Data(#"{"cedar_ember":{"eligible":true,"grants":[]}}"#.utf8), 200, nil)
+                : (Data(), 429, "60")
+        })
+        let usage = ClaudeCLIUsage(runner: { _, _ in Self.cliResult }, grantsClient: client,
+                                   desktopResets: { _, now in cache.reading(organization: orgB, now: now) })
+        let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
+        let t0 = now, t1 = now.addingTimeInterval(ClaudeCLIUsage.grantsRefreshInterval + 1)
+        await usage.refreshNow(account, timeZone: .current, now: { t0 })
+        await usage.refreshNow(account, timeZone: .current, now: { t1 })
+        XCTAssertEqual(calls.withLock { $0 }, 2)
+        let stats = usage.section(accounts: account, now: t1, timeZone: .current)?.section.stats ?? []
+        XCTAssertEqual(stats.filter { $0.title.hasPrefix("Reset ticket") }, [])
+        XCTAssertTrue(stats.contains { $0.title == "リセットチケット" && $0.valueText.hasPrefix("取得の回数制限中") }, "\(stats)")
+    }
+
     func testNewerEmptyOAuthAnswerOverridesOlderDesktopTickets() async throws {
         try write(org: orgB, body: Body.twoTickets, date: "Wed, 11 Nov 2026 01:00:00 GMT", modified: now.addingTimeInterval(-86_000))
         let cache = self.cache, orgB = self.orgB
