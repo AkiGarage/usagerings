@@ -105,3 +105,38 @@ Sync commit: f949d06e9e2507b8154faf17efb79ff232511fc2 (OpenDesign addition and s
 
 After TLC passes, follow `verify-usagerings` for isolated real views. For real
 OpenDesign data on a logged-in Mac, use its explicit opt-in XCTest command.
+
+## One-shot reset refresh
+
+`docs/formal/reset-refresh/ResetRefresh.tla` supplements UsageRefresh without
+changing its existing invariants or FetchCache's display rules. Read its Japanese
+invariants first. Run with a local TLC jar and Java already installed:
+
+`TLA2TOOLS=/absolute/tla2tools.jar JAVA=/absolute/java python3 docs/formal/reset-refresh/check.py .build/reset-proof`
+
+The checker preserves transcripts and state files in the requested worktree
+folder, and requires each Fault config to violate its named invariant. Use
+`/statechart` with `docs/formal/reset-refresh/view.mjs` to inspect the results.
+The correct model reaches 218 states / 779 steps with all five invariants holding.
+
+| Model | Production code / regression proof |
+|---|---|
+| Learn, Plan, AtMostOneTimer | ResetRefreshPlanner.track / next; scheduleResetRefresh owns one shared cancellable timer; duplicate-window and repeated-planning tests |
+| Fire, consumed, AtMostOnce | fireTime count == 0; recordFire before refresh; echoed-reset and failed-reset tests |
+| Poll, Busy, Complete, AtMostOneFetch | isRefreshing guard; apply re-plans after clearing the fetch slot; controllable in-flight test |
+| Stop, NoFetchAfterStop | stop disables scheduling and cancels callback; cancellation-race test |
+| CurrentGuard, OnlyCurrentDeadline | timer generation rejects replaced callbacks; deadline-change test |
+
+Bounds: one provider, two reset deadlines, three abstract ticks; grace is folded
+into a due tick. No network or OS timing assumptions are proved. Multi-account
+windows coalesce in Swift; service retry policies and display retention stay in
+their existing models. Faults turn off one guard each; never weaken an invariant.
+Coverage reviewed against base 4c8b674d4e0fdd8aac402b1481ad8405b019b16c plus this
+working-tree change. The existing guard's f949d06 sync commit is unavailable in
+this shallow checkout; do not claim the historical drift audit passed or advance
+its sync commit without checking that history.
+
+After TLC, run `swift test --filter ResetRefresh` using the injected service,
+clock and scheduler. These drive the production store and parser with synthetic
+responses and no credentials. Follow `verify-usagerings` for isolated real views;
+demo export cannot demonstrate a timer firing.

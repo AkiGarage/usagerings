@@ -11,7 +11,7 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 - 横・縦のレイアウト、パネルとバーそれぞれの拡大縮小、明暗テーマ、透明度の調整。
 - ローカルのClaude Codeログから読み取る使用制限。アカウント名は初期状態で非表示で、表示する場合も一部を伏せます。
 
-全体は約1分ごとに更新します。個別のデータ取得にはキャッシュや、制限に応じた待機時間があります。取得できない値は未取得として扱い、「まだ使える」とは判断しません。UIには日本語と英語が含まれます。
+全体は約1分ごとに更新します。将来のリセット時刻が分かる場合は、その20秒後（タイマーの許容幅0.5秒）に対象サービスだけを1回再取得します。新しい取得結果で時刻が変われば予約を差し替え、同時刻のアカウント・枠は1回のサービス取得にまとめます。取得中は完了を待ち、監視停止後は実行しません。プロンプト送信やモデルトークンの消費はありません。失敗時は通常の更新・再試行方針に戻り、リセット専用の追加確認は行いません。個別のデータ取得にはキャッシュや、制限に応じた待機時間があります。取得できない値は未取得として扱い、「まだ使える」とは判断しません。UIには日本語と英語が含まれます。
 
 ## 対応プロバイダーと必要なもの
 
@@ -26,7 +26,7 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 | OpenDesign（Go） | OpenDesignのcontrol API。公式アプリのAMRログインが保存したcontrolKeyで認証 | OpenDesignアプリ（または `od amr login`）でログイン済みであること。Design Planの5時間枠・7日枠を表示 |
 | Grok | CodexBarCLI（`--source cli`）。公式Grok Build CLIの利用状況を読みます | ログイン済みのGrok Build CLI（`grok`） |
 
-**macOS 14以降**に対応します。ビルドには **Swift 5.9以降**を含むXcode Command Line Toolsと、固定バージョンのSparkleを取得するインターネット接続が必要です。使用する開発ツールを`xcode-select`で選択してください。
+**macOS 14以降**に対応します。ビルドには **Swift 5.9以降**を含むXcode Command Line Toolsと、固定バージョンのSparkleを取得するインターネット接続が必要です。XCTestの実行にはフル版Xcodeが必要です。`DEVELOPER_DIR`での選択方法は[開発手順](CONTRIBUTING.md#development)を参照してください。
 
 **OpenDesign以外のすべての項目（Codex・Claude・Antigravity・Grok・GLM・MiniMax・Kimi・DeepSeek）の表示にCodexBarCLIが必要です。** OpenDesignはCodexBarCLIを経由せず、OpenDesignのcontrol APIから直接読みます。 参照先は `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI` に固定されており、`PATH`の検索や参照先を変える設定はありません。CodexBarのメニューバーアプリを起動し続ける必要はありません。このCLIがない場合は、各項目にその旨を表示します。
 
