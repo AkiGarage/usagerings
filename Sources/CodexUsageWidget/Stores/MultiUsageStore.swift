@@ -373,6 +373,7 @@ final class MultiUsageStore: ObservableObject {
     static func retainingStaleValues(in fresh: MultiUsageSnapshot, previous: MultiUsageSnapshot?, now: Date) -> MultiUsageSnapshot {
         let sections = fresh.sections.map { section -> ProviderSection in
             if section.provider == .antigravity, !ResetRefreshPlanner.isConclusive(section),
+               section.failureReason != .logout,
                var old = previous?.sections.first(where: { $0.provider == .antigravity }) {
                 old.windows.removeAll { window in
                     window.observedAt.map { now.timeIntervalSince($0) >= AntigravityRefreshPolicy.displayMaxAge } ?? true

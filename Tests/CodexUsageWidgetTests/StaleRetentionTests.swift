@@ -44,8 +44,10 @@ final class StaleRetentionTests: XCTestCase {
         for message in ["noQuota", "rejected key", "unverified peer", "missing project", "not installed", "parse fail", "logout"] {
             let failure = providers.map { ProviderSection(provider: $0, windows: [], stats: [], failureText: message, failureReason: message == "logout" ? .logout : .other) }
             let result = retain(failure, previous: stamped, at: now.addingTimeInterval(1))
-            XCTAssertTrue(result.sections.filter { $0.provider != .antigravity }.allSatisfy { $0.windows.isEmpty && !$0.isStale }, message)
-            XCTAssertEqual(result.sections.first { $0.provider == .antigravity }, stamped.sections.first { $0.provider == .antigravity }, message)
+            XCTAssertTrue(result.sections.filter { $0.provider != .antigravity || message == "logout" }.allSatisfy { $0.windows.isEmpty && !$0.isStale }, message)
+            if message != "logout" {
+                XCTAssertEqual(result.sections.first { $0.provider == .antigravity }, stamped.sections.first { $0.provider == .antigravity }, message)
+            }
         }
     }
 
