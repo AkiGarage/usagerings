@@ -44,3 +44,44 @@ stateDiagram-v2
 
 TLC はこの環境に入っていないため、同等の全状態探索を `docs/fetch_cache_check.py`（Python, 標準ライブラリのみ）で行う。
 実行: `python3 -B docs/fetch_cache_check.py`（正常系は OK、故障系は violation を報告して終了コード1）。
+
+## リセット時刻の専用取得
+
+`MultiUsageStore` は、正常な最新の取得結果に将来のリセット時刻がある場合、
+その20秒後に対象プロバイダーだけを1回取得する。タイマーの許容幅は0.5秒。
+通常の60秒ポーリングやサービス内の一時失敗再試行は変えない。
+リセット専用の2回目・3回目の確認は行わない。既に過ぎた未知の期限からは予約しない。
+既知の予約はスリープ復帰時に追いつき、取得中なら完了後に再計画する。
+正常な取得が次の期間を示していれば旧予約は取り消す。
+
+1本の共有タイマーが全アカウント・使用枠の最も早い期限を待つため、
+各プロバイダー／アカウントの保留タイマーも最大1本となる。
+同時に期限を迎えた枠は1回のプロバイダー取得にまとめる。
+`resetTimerGeneration` で差し替え済み・停止済みのコールバックを無効化し、
+`isRefreshing` で通常取得との重複を防ぐ。停止前の応答の適用を防ぐ既存の世代管理、
+および `FetchCache.tla` の表示・保持ルールは変更しない。
+
+日本語の不変条件と対応コードは `formal/reset-refresh/ResetRefresh.tla` と
+`.cursor/skills/usagerings-formal-verification/SKILL.md` に記載。
+TLC 1.7.4配布jar（出力では TLC2 2.19）で218状態・779遷移を検査し、5条件すべて成立。
+5つの `Fault-*.cfg` がそれぞれ対応する違反を検出した。
+
+```mermaid
+stateDiagram-v2
+    [*] --> NoDeadline
+    NoDeadline --> Pending: 正常な取得で将来の期限
+    Pending --> Pending: 期限変更で差し替え
+    Pending --> Fetching: 期限と猶予が経過
+    Pending --> Fetching: 通常取得
+    Fetching --> Pending: 完了後に未消費の予約を再計画
+    Fetching --> Checked: リセット専用取得の完了
+    Checked --> Pending: 次の将来の期限
+    Pending --> Stopped: stop
+    Fetching --> Stopped: stop
+    Checked --> Stopped: stop
+```
+
+モデルは1サービス・2期限・猶予経過を表す抽象時計を扱う。
+実秒数、複数アカウントの解析、CLI内のキャッシュ・再試行、OSによる配送遅延は
+Swiftテストまたはサービスの既存検査の対象であり、このモデルの保証外。
+生成された全体図では、状態ラベル内に留まる遷移と時刻進行を省略する。
