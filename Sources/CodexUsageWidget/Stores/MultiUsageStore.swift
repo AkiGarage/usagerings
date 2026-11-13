@@ -16,7 +16,7 @@ enum ResetRefreshPlanner {
 
     static func fireTime(_ key: ResetKey, _ done: Attempts, now: Date) -> Date? {
         guard done.count == 0 else { return nil }
-        return max(key.at.addingTimeInterval(grace), now)
+        return key.at <= now ? now : key.at.addingTimeInterval(grace)
     }
 
     /// Earliest fire across every pending reset; `attempts` holds every reset still in play.
