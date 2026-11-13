@@ -8,9 +8,57 @@
       "sources": [
         "Sources/CodexUsageWidget/Stores/MultiUsageStore.swift",
         "Sources/CodexUsageWidget/Models/UsageSnapshot.swift",
-        "Sources/CodexUsageWidget/Models/MultiUsageSnapshot.swift"
+        "Sources/CodexUsageWidget/Models/MultiUsageSnapshot.swift",
+        "Sources/CodexUsageWidget/Stores/ProviderRefreshBudget.swift"
       ],
-      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c",
+      "previous_sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2",
+      "artifacts": [
+        "docs/formal/Fault-ApplyAfterStop.cfg",
+        "docs/formal/Fault-DropQueuedRefresh.cfg",
+        "docs/formal/Fault-FailAsSuccess.cfg",
+        "docs/formal/Fault-KeepDeferredAcrossReset.cfg",
+        "docs/formal/Fault-KeepStaleAcrossReset.cfg",
+        "docs/formal/Fault-NoSingleFlight-Period.cfg",
+        "docs/formal/Fault-NoSingleFlight-Stale.cfg",
+        "docs/formal/Fault-RemapByIndex.cfg",
+        "docs/formal/Fault-ReplaceDeferred.cfg",
+        "docs/formal/UsageRefreshChart.cfg",
+        "docs/formal/refresh-view.mjs",
+        "docs/formal/refresh-chart.mmd",
+        "docs/formal/refresh-statechart.md",
+        "docs/formal/check-refresh.sh",
+        ".cursor/skills/usagerings-formal-verification/SKILL.md",
+        "script/formal_guard.py",
+        "Tests/FormalGuardTests.py",
+        "Tests/CodexUsageWidgetTests/ProviderRefreshBudgetTests.swift"
+      ],
+      "sync_sha256": {
+        ".cursor/skills/usagerings-formal-verification/SKILL.md": "f1c97b25d8e3e12587254b9c0eb955e58d4c8c9bb9d2e53b0b695d5cd2c7e060",
+        "Sources/CodexUsageWidget/Models/MultiUsageSnapshot.swift": "d476d0e09a86c8cc9b41954bd60454b8bc464832cce310dfcb47f3fb36dc2edc",
+        "Sources/CodexUsageWidget/Models/UsageSnapshot.swift": "e2d5a157b38678d08937e278a27defedece4eeaa5811b5afee1f75ce4e0b489e",
+        "Sources/CodexUsageWidget/Stores/MultiUsageStore.swift": "209d1577511de0a96ccc9c165d2870a93d6124d2681aa1d54293018cfb2dd106",
+        "Sources/CodexUsageWidget/Stores/ProviderRefreshBudget.swift": "0d34f04e9bcba64a0c1fec23257a695fefcff716e181205fb468e27cc559bffc",
+        "Tests/CodexUsageWidgetTests/ProviderRefreshBudgetTests.swift": "a2a7388c5393579c0ad5705c1476a1cb5ed1f5ed329adc9143337fd6949ca1eb",
+        "Tests/FormalGuardTests.py": "d2b516a66803176749e5aadd4df9a5c02445574fa561585bebbd0576ed3a6f61",
+        "docs/formal/Fault-ApplyAfterStop.cfg": "44b244b2fadfa940f04dc43ce60f189ebc8bc8459f9e767069984b83dcf483f5",
+        "docs/formal/Fault-DropQueuedRefresh.cfg": "d93b88ca8d078bdcec02b6f7cd33f2d960470537281fc94504ba25a3f1128470",
+        "docs/formal/Fault-FailAsSuccess.cfg": "7ad2fcedbb36177d6831b4ae23d1a56561da92eb7a3e5ffb3f55065aa6b4a0b8",
+        "docs/formal/Fault-KeepDeferredAcrossReset.cfg": "b3bad887fbb1209bc6aa54f94e868992fdc3b2cfab89fcd30f0e1c6172d3fdb7",
+        "docs/formal/Fault-KeepStaleAcrossReset.cfg": "8e3ee757b0d074b1fa24644a7b2e7712f841b1956698e503d08e2c7f8048e09b",
+        "docs/formal/Fault-NoSingleFlight-Period.cfg": "9ce857ec95e58b5f08e58b8ba25ca68a42ac174c00e9365bc7c8eb83031d0c6c",
+        "docs/formal/Fault-NoSingleFlight-Stale.cfg": "160dad6c7ffde09188edcfeb416aec7de7159b77fb53dacb2251fe99458b6728",
+        "docs/formal/Fault-RemapByIndex.cfg": "b24e9e5e51ad6f894ef6a46b89da9aac5bc09c5661c324e8824b61bdb80e5b71",
+        "docs/formal/Fault-ReplaceDeferred.cfg": "d2f7b0aaa2b8cf35997af4342900091aab49bc177f426435b6b67b170624ea93",
+        "docs/formal/UsageRefresh.cfg": "bdcfd56d86b5712cd274d444102c8990b78ed267b68f46e8480d87b8c517a19a",
+        "docs/formal/UsageRefresh.tla": "bc93c3ac85cc3397c805f4b65054f3780152a1403304697a98308cad1aa05a7f",
+        "docs/formal/UsageRefreshChart.cfg": "c4958670ba7063049cb15e4575f5d5ea5e8f7d70dcbe3d55abc4038f97308157",
+        "docs/formal/check-refresh.sh": "b4777094ba6c9d22dbcda7cae6c6b39b4245e5dcb450ad0af6c62f2a4b8498a3",
+        "docs/formal/refresh-chart.mmd": "3a4d73fca047a8d9ffa7e5fb731cf9eacdf022abbc8e2cf6cfac6d6ab17f37b0",
+        "docs/formal/refresh-statechart.md": "b03c8eaef533d54d8cbb9e9fb719027e83e7504d73f79f5c362ab22f1eea8446",
+        "docs/formal/refresh-view.mjs": "a5e73a2fe34c053d2a9ffb5053c4c4358be4f798e1dfa8b95b5890ed4ab1ba1d",
+        "script/formal_guard.py": "f7305407aadedeeeefeea2c5a514bbb32a6578916a84f12931a143fafd02011a"
+      }
     },
     {
       "tla": "docs/formal/UsageRead.tla",
@@ -20,7 +68,13 @@
       "sources": [
         "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
       ],
-      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c",
+      "previous_sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2",
+      "sync_sha256": {
+        "Sources/CodexUsageWidget/Services/MultiUsageService.swift": "ecb54b738a5deee9343d864945923354a9a85e5ffdf0a610447fc2084938fcf6",
+        "docs/formal/UsageRead.cfg": "cd99dac79f8eb38584cfa9a4edfd310041cf5ea11c319f0bda0ab6b0f8fc4045",
+        "docs/formal/UsageRead.tla": "3707223152e6bf6c9d4c052b4837d927eb3bd978cb9f33fdd0d10511affc8c58"
+      }
     },
     {
       "tla": "docs/formal/opendesign/OpenDesignRead.tla",
@@ -31,7 +85,14 @@
         "Sources/CodexUsageWidget/Services/OpenDesignUsage.swift",
         "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
       ],
-      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c",
+      "previous_sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2",
+      "sync_sha256": {
+        "Sources/CodexUsageWidget/Services/MultiUsageService.swift": "ecb54b738a5deee9343d864945923354a9a85e5ffdf0a610447fc2084938fcf6",
+        "Sources/CodexUsageWidget/Services/OpenDesignUsage.swift": "75df47905a8d4d8f2f135aaecea1165e7bd1530b6c179b795ab17af567479460",
+        "docs/formal/opendesign/OpenDesignRead.cfg": "17a44a0b4d43fd6b936055c627894c5d413a2ddbf36f205520759f87a1568abb",
+        "docs/formal/opendesign/OpenDesignRead.tla": "dee27763bd11957517028e07045a13fbc68851ad973ab05ef0b870d89f4d7316"
+      }
     },
     {
       "tla": "docs/formal/opendesign/VerticalTabFit.tla",
@@ -45,7 +106,50 @@
         "Sources/CodexUsageWidget/Views/EdgeTabView.swift",
         "Sources/CodexUsageWidget/Views/RingDetailCard.swift"
       ],
-      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c",
+      "previous_sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2",
+      "sync_sha256": {
+        "Sources/CodexUsageWidget/App/AppDelegate.swift": "b0bf88df440b062474c37a5a07269065094015890deec1fd4a5a46a41458e446",
+        "Sources/CodexUsageWidget/Views/EdgeTabView.swift": "e87e4a06dec7c84746f229282f3d6d8d784c5067824b0fc08b25b9ab97617238",
+        "Sources/CodexUsageWidget/Views/MultiCollapsedUsageView.swift": "838a26cde72af4a357af67d6376a2371bddffd12502e50fcb8e23d844730c9aa",
+        "Sources/CodexUsageWidget/Views/MultiEdgeTabView.swift": "a2e82f9eb61eb8e18b665e9cb9de94114da9cef09091362267508eb150fbf573",
+        "Sources/CodexUsageWidget/Views/RingDetailCard.swift": "087d1efc8d24c07859adf84bd1e20e1cc105fb4bc3a44a7497c0f765090a35af",
+        "docs/formal/opendesign/VerticalTabFit.cfg": "cd7f5cbe8e8e2e946ff7d257bf96cb600526a9fc0298ba18bbd4c2d573fd4969",
+        "docs/formal/opendesign/VerticalTabFit.tla": "5cd58730398a316c831b274a3db25fdd6c3db783ccd7308d70010bc828a2b0ad"
+      }
+    },
+    {
+      "tla": "docs/formal/ProviderBudget.tla",
+      "cfgs": [
+        "docs/formal/ProviderBudget.cfg"
+      ],
+      "sources": [
+        "Sources/CodexUsageWidget/Stores/ProviderRefreshBudget.swift",
+        "Sources/CodexUsageWidget/Stores/MultiUsageStore.swift"
+      ],
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c",
+      "artifacts": [
+        "docs/formal/BudgetFault-Backoff.cfg",
+        "docs/formal/BudgetFault-Interval.cfg",
+        "docs/formal/BudgetFault-Override.cfg",
+        "docs/formal/BudgetFault-UserReason.cfg",
+        "docs/formal/ProviderBudgetChart.cfg",
+        "docs/formal/budget-view.mjs",
+        "docs/formal/budget-chart.mmd"
+      ],
+      "sync_sha256": {
+        "Sources/CodexUsageWidget/Stores/MultiUsageStore.swift": "209d1577511de0a96ccc9c165d2870a93d6124d2681aa1d54293018cfb2dd106",
+        "Sources/CodexUsageWidget/Stores/ProviderRefreshBudget.swift": "0d34f04e9bcba64a0c1fec23257a695fefcff716e181205fb468e27cc559bffc",
+        "docs/formal/BudgetFault-Backoff.cfg": "ac530171e06d51252494ba308b9e7b110360495307b7b3f323327fed73a2d2a3",
+        "docs/formal/BudgetFault-Interval.cfg": "87e767adce3e22b4c7ce224121806ede2e027dab5cdabc7255382dfe1b461697",
+        "docs/formal/BudgetFault-Override.cfg": "e147d008631c013374735c2dd50f7d5b4ab52434cbd877e000e7a2ce38fac759",
+        "docs/formal/BudgetFault-UserReason.cfg": "f1d85cfca9b83829154175fca669db214d890cdd51f764b8815f20040b326c10",
+        "docs/formal/ProviderBudget.cfg": "4338b401dedd77347acaff9ceef1a5143f453e861fcf7f4513ebf0f86f048a00",
+        "docs/formal/ProviderBudget.tla": "cf97ae43cb301222ea7b10c7ebbc9d02d239aeae53092978fa5a38f9795d3f82",
+        "docs/formal/ProviderBudgetChart.cfg": "8e9d7d51d8afd982fd469bfda0fc34cfab12e5346ffeb82b5d5654cdecdaa272",
+        "docs/formal/budget-chart.mmd": "cd50e09e83fd62d88d66367c5ead332677d8917c5858b0274a5d425b9f8cb70d",
+        "docs/formal/budget-view.mjs": "1477b02e7d43ddabbdec85c074973cd06ba3662f47d8034ef8306d974359fa11"
+      }
     }
   ]
 }

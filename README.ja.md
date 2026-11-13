@@ -11,7 +11,11 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 - 横・縦のレイアウト、パネルとバーそれぞれの拡大縮小、明暗テーマ、透明度の調整。
 - ローカルのClaude Codeログから読み取る使用制限。アカウント名は初期状態で非表示で、表示する場合も一部を伏せます。
 
-全体は約1分ごとに更新します。個別のデータ取得にはキャッシュや、制限に応じた待機時間があります。取得できない値は未取得として扱い、「まだ使える」とは判断しません。UIには日本語と英語が含まれます。
+全体は約1分ごとに更新します。Antigravityの自動取得は既定15分間隔で、失敗すると30分、60分、最大120分待機し、成功すると通常間隔に戻ります。手動更新とリセット時刻の対象プロバイダー更新は待機を迂回します。既存の1回の即時再試行は維持します。他のプロバイダーの既定間隔とGeminiアプリのローカルタブ観測は変更しません。保持値の観測時刻は更新せず、リセット時刻または5時間で失効します。
+
+詳細設定：UserDefaultsの `providerRefreshIntervalSeconds.<provider>`（例：`providerRefreshIntervalSeconds.antigravity`）に60〜86400秒を指定し、アプリを再起動すると間隔を変更できます。不正値は既定値に戻り、指定のない他プロバイダーには追加の待機を設けません。これらはアプリの更新方針であり、サービスの利用上限ではありません。
+
+取得できない値は未取得として扱い、「まだ使える」とは判断しません。UIには日本語と英語が含まれます。
 
 ## 対応プロバイダーと必要なもの
 
@@ -19,7 +23,7 @@ AIサービスの残り使用量とリセット時刻を、画面に浮かぶ小
 | --- | --- | --- |
 | OpenAI Codex | CodexBarCLI | CodexBarのインストールとCodex設定 |
 | Claude Code | CodexBarCLI（`--source cli`）。制限表示はClaude Codeログでも補完 | CodexBarCLIで読めるログイン済みのClaude Code |
-| Google Antigravity | CodexBarCLI（`--source cli`）。公式の `agy -p /usage` 報告を読むだけで、プロンプトは送らず枠も使いません | ログイン済みのAntigravity CLI（`agy` 1.1.11以降） |
+| Google Antigravity | CodexBarCLI（`--source cli`）。`agy -p /usage` 報告を読みます。CLI取得自体がモデルの枠を消費する場合があります | ログイン済みのAntigravity CLI（`agy` 1.1.11以降） |
 | Z.ai / GLM Coding Plan | CodexBarCLI。追加情報はZ.aiのリセット券API | CodexBarのZ.ai設定 |
 | MiniMax / Kimi | CodexBarCLI | CodexBarで対象プロバイダーを設定 |
 | DeepSeek | CodexBarCLI | CodexBarのDeepSeek設定。残高・使用実績を表示（割合の上限は表示しません） |

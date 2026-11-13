@@ -22,3 +22,12 @@ Keep changes focused. Describe the problem, resulting behavior, and checks perfo
 Never commit credentials, personal logs, account details, local paths, generated app bundles, or build output. Use reserved example domains and clearly synthetic credentials in tests. Changes to authentication, SSH, signing, workflows, or release behavior need particular attention to permissions and recovery.
 
 CI uses a hosted macOS runner with read-only repository permissions. Contributions do not trigger publishing or automatic merging. Maintainers review pull requests before merging.
+
+Changes to provider refresh admission or display merging must keep the formal
+models in sync. Follow `.cursor/skills/usagerings-formal-verification/SKILL.md`;
+run `bash docs/formal/check-refresh.sh /absolute/new/evidence-directory`,
+`python3 -B Tests/FormalGuardTests.py` and
+`python3 -B script/formal_guard.py .`, as well as Swift tests. The repository guard
+checks exact verified contents in `.formal/guard.json` even before the runner
+commits a change; update fingerprints only after reviewing and rechecking the
+mapped models, configs and sources. See `docs/formal/refresh-statechart.md`.

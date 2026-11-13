@@ -1,0 +1,13 @@
+---
+title: "UsageRings: partial refresh and retained observations (one request projection)"
+---
+stateDiagram-v2
+  s0: No observation
+  s1: Fetching selected providers
+  s2: Showing failure
+  s3: Showing observed usage
+  [*] --> s0
+  s0 --> s1: refresh selects provider targets
+  s1 --> s2: merge selected results and preserve untouched values
+  s1 --> s3: merge selected results and preserve untouched values
+  s1 --> s0: merge selected results and preserve untouched values
