@@ -434,7 +434,8 @@ struct MultiCollapsedUsageView: View {
                 }
                 .help(Self.accessibilitySummary(for: bar, rows: rows))
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Self.accessibilitySummary(for: bar, rows: rows))
+                .accessibilityLabel(bar.ringName)
+                .accessibilityValue(UsageAccessibility.ring(bar: bar, rows: rows, now: Date()).value)
             }
         }
         .frame(width: size.width, height: size.height)
@@ -461,25 +462,7 @@ struct MultiCollapsedUsageView: View {
     }
 
     static func accessibilitySummary(for bar: CollapsedUsageBar, rows: [ServiceRowModel]) -> String {
-        if bar.isBlocked { return "\(bar.ringName): \(bar.isStale ? "\(bar.failureText ?? "Stale"); " : "")\(CollapsedUsageBar.detailText(for: bar))" }
-        let arcs = g1(for: bar, rows: rows)
-        let windows = [arcs.outer, arcs.inner].compactMap { $0 }
-        guard !windows.isEmpty else {
-            if let failure = bar.failureText { return "\(bar.ringName): \(failure)" }
-            let details = RingDetailCardModel.visibleStats(for: bar)
-                .map { "\($0.title): \($0.valueText)" }.joined(separator: "; ")
-            return "\(bar.ringName): \(details.isEmpty ? "No data" : details)"
-        }
-        let values = windows.map { limit in
-            let label: String
-            switch ServiceRowModel.kind(limit.title) {
-            case .five: label = "5h"
-            case .week: label = "Weekly"
-            case .other: label = ServiceRowModel.shortLabel(limit.title)
-            }
-            return "\(label): \(limit.leftText), \(limit.resetText)"
-        }
-        return "\(bar.ringName): " + (bar.isStale ? "\(bar.failureText ?? "Stale"); " : "") + values.joined(separator: "; ")
+        UsageAccessibility.ring(bar: bar, rows: rows, now: Date()).summary
     }
 
     private static func scale(for value: Double) -> CGFloat {
@@ -623,5 +606,16 @@ struct TabG1Gauge: View {
             }
         }
         .frame(width: diameter, height: diameter)
+        .overlay(alignment: .topTrailing) {
+            if !blocked, let tone = [outer, weekly].compactMap({ $0?.tone }).first(where: { $0 == .critical })
+                ?? [outer, weekly].compactMap({ $0?.tone }).first(where: { $0 == .warning }),
+               let symbol = UsageAccessibility.statusSymbol(tone) {
+                Image(systemName: symbol)
+                    .font(.system(size: max(5, diameter * 0.26), weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .background(Circle().fill(dark ? Color.black : Color.white))
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }

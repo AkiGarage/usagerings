@@ -4,6 +4,10 @@ A compact, floating macOS dashboard for AI usage limits. Keep remaining quota an
 
 [日本語](README.ja.md)
 
+## Accessibility
+
+VoiceOver reads each compact ring by provider/account, with the displayed quota windows, percent left and reset time. Panel quota rows expose these details as a single readout; missing data and locked quotas are announced explicitly. Use VoiceOver keyboard navigation to read compact rings. Enable macOS **System Settings → Keyboard → Keyboard navigation** to move focus through panel quota readouts with Tab / Shift-Tab. Existing panel buttons remain separate controls. Low-quota warnings use circle/triangle exclamation symbols as well as color and numeric values.
+
 ## What it shows
 
 - Remaining usage as colored rings, with session, weekly, or monthly windows when a provider reports them.
