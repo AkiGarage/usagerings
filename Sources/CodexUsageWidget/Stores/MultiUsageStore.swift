@@ -2,21 +2,21 @@ import AppKit
 import Foundation
 
 /// A reset one provider announced (rounded up to the whole second).
-struct ResetKey: Hashable { let provider: ProviderID; let at: Date }
+struct ResetKey: Hashable {
+    enum Account: Hashable { case identified(AccountID), index(Int) }
+    let provider: ProviderID
+    let at: Date
+    var account: Account = .index(0)
+}
 
-/// Plans one refresh right after each reset a provider announced, plus a few spaced
-/// retries while the provider still echoes the passed reset or fails. Pure, for tests.
+/// Plans exactly one targeted refresh per announced reset. Pure, for tests.
 enum ResetRefreshPlanner {
-    struct Attempts: Equatable { var count = 0; var last: Date? }
-    static let offsets: [TimeInterval] = [5, 36, 127]
-    /// Minimum spacing from the previous attempt for the same reset (sleep/wake catch-up).
-    static let gaps: [TimeInterval] = [0, 31, 91]
+    struct Attempts: Equatable { var count = 0 }
+    static let grace: TimeInterval = 20
 
     static func fireTime(_ key: ResetKey, _ done: Attempts, now: Date) -> Date? {
-        guard done.count < offsets.count else { return nil }
-        var fire = key.at.addingTimeInterval(offsets[done.count])
-        if let last = done.last { fire = max(fire, last.addingTimeInterval(gaps[done.count])) }
-        return max(fire, now)
+        guard done.count == 0 else { return nil }
+        return key.at <= now ? now : key.at.addingTimeInterval(grace)
     }
 
     /// Earliest fire across every pending reset; `attempts` holds every reset still in play.
@@ -26,7 +26,7 @@ enum ResetRefreshPlanner {
 
     /// Resets due at `now`: one targeted refresh serves all of them.
     static func due(attempts: [ResetKey: Attempts], now: Date) -> Set<ResetKey> {
-        Set(attempts.filter { (fireTime($0.key, $0.value, now: now) ?? .distantFuture) <= now.addingTimeInterval(1) }.keys)
+        Set(attempts.filter { (fireTime($0.key, $0.value, now: now) ?? .distantFuture) <= now }.keys)
     }
 
     static func recordFire(_ keys: Set<ResetKey>, attempts: [ResetKey: Attempts], now: Date) -> [ResetKey: Attempts] {
@@ -34,40 +34,56 @@ enum ResetRefreshPlanner {
         for key in keys {
             var done = attempts[key] ?? Attempts()
             done.count += 1
-            done.last = now
             attempts[key] = done
         }
         return attempts
     }
 
     static func resets(in section: ProviderSection) -> Set<ResetKey> {
-        Set(section.windows.compactMap { $0.resetAt.map {
-            ResetKey(provider: section.provider, at: Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)))
-        } })
+        Set(section.windows.compactMap { window in
+            window.resetAt.map {
+                ResetKey(provider: section.provider, at: Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)),
+                         account: accountKey(section.accounts.first { $0.index == (window.accountIndex ?? 0) },
+                                             index: window.accountIndex ?? 0))
+            }
+        })
+    }
+
+    private static func accountKey(_ account: ProviderAccount?, index: Int) -> ResetKey.Account {
+        account?.id.map { .identified($0) } ?? .index(index)
     }
 
     /// A reading that can settle a reset: fetched now, nothing failed or retained.
     static func isConclusive(_ section: ProviderSection) -> Bool {
         section.failureText == nil && section.failureReason == nil && !section.isStale && !section.windows.isEmpty
-            && !section.accounts.contains { $0.failureText != nil || $0.isStale }
+            && !section.accounts.contains { $0.failureText != nil || $0.failureReason != nil || $0.isStale }
     }
 
-    /// Merge a fetch into the tracked resets. A conclusive reading for a provider replaces
-    /// its resets (a passed one it no longer echoes is done; one it still echoes keeps its
-    /// retry count). A failed or absent reading keeps them, so retries continue after a
-    /// transient failure. Untouched providers are left as they are.
+    /// Fresh accounts replace their own deadlines; failed accounts keep known ones.
+    /// A deadline future at fetch start remains eligible if the fetch spans its reset.
     static func track(_ attempts: [ResetKey: Attempts], sections: [ProviderSection], fetched: Set<ProviderID>,
-                      skipped: Set<ProviderID>, now: Date) -> [ResetKey: Attempts] {
-        // A reset more than a day old that a provider still echoes is not chased (same cutoff
-        // on both sides, so pruning and re-adding can never loop).
-        let cutoff = now.addingTimeInterval(-86_400)
-        var attempts = attempts.filter { !skipped.contains($0.key.provider) && $0.key.at > cutoff }
+                      skipped: Set<ProviderID>, now: Date, knownAt: Date? = nil) -> [ResetKey: Attempts] {
+        var attempts = attempts.filter { !skipped.contains($0.key.provider) }
         for section in sections where fetched.contains(section.provider) && !skipped.contains(section.provider) {
-            let seen = resets(in: section).filter { $0.at > cutoff }
-            if isConclusive(section) {
-                attempts = attempts.filter { $0.key.provider != section.provider || seen.contains($0.key) }
+            guard !section.isStale else { continue }
+            if section.accounts.isEmpty, section.failureText != nil || section.failureReason != nil { continue }
+            let seen = resets(in: section)
+            let healthy: Set<ResetKey.Account>
+            if section.accounts.isEmpty {
+                healthy = Set(seen.map(\.account))
+            } else {
+                healthy = Set(section.accounts.filter {
+                    $0.failureText == nil && $0.failureReason == nil && !$0.isStale
+                }.map { accountKey($0, index: $0.index) })
             }
-            for key in seen where attempts[key] == nil { attempts[key] = Attempts() }
+            let complete = isConclusive(section)
+            attempts = attempts.filter {
+                $0.key.provider != section.provider || seen.contains($0.key)
+                    || (!complete && !healthy.contains($0.key.account))
+            }
+            for key in seen where healthy.contains(key.account) && key.at > (knownAt ?? now) && attempts[key] == nil {
+                attempts[key] = Attempts()
+            }
         }
         return attempts
     }
@@ -102,10 +118,12 @@ final class MultiUsageStore: ObservableObject {
     /// Per-instance so tests can shorten the HUD lifetime without affecting other stores.
     var opacityHUDDuration: TimeInterval = 1.2
     private var expiryTask: Task<Void, Never>?
-    private var resetTask: Task<Void, Never>?
+    private var cancelResetTimer: (() -> Void)?
+    private var resetTimerGeneration: UInt = 0
     private var resetAttempts: [ResetKey: ResetRefreshPlanner.Attempts] = [:]
     /// Providers the in-flight fetch covers (all when it is a regular refresh).
     private var inFlightTargets: Set<ProviderID> = []
+    private var inFlightStartedAt = Date.distantPast
     private var inFlightSkipped: Set<ProviderID> = []
     private var queuedFullRefresh = false
     private var stopGeneration: UInt = 0
@@ -113,6 +131,15 @@ final class MultiUsageStore: ObservableObject {
     private var wakeObservers: [NSObjectProtocol] = []
     /// Injected for tests.
     var resetClock: () -> Date = { Date() }
+    /// Returns cancellation; a generation check also rejects callbacks already enqueued.
+    var resetScheduler: (TimeInterval, @escaping @MainActor () -> Void) -> (() -> Void) = { delay, fire in
+        let task = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay), tolerance: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            fire()
+        }
+        return { task.cancel() }
+    }
     /// Gemini app quota: read from Aki's open Chrome usage tab on its own activity schedule,
     /// never by the regular or reset refresh (those make no Gemini request at all).
     private(set) var geminiMonitor: GeminiAppUsageMonitor?
@@ -212,8 +239,9 @@ final class MultiUsageStore: ObservableObject {
         expiryTask?.cancel()
         expiryTask = nil
         resetSchedulingEnabled = false
-        resetTask?.cancel()
-        resetTask = nil
+        resetTimerGeneration &+= 1
+        cancelResetTimer?()
+        cancelResetTimer = nil
         for observer in wakeObservers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             NotificationCenter.default.removeObserver(observer)
@@ -226,16 +254,17 @@ final class MultiUsageStore: ObservableObject {
     /// recorded only when a refresh actually starts, so apply() re-plans it at once
     /// unless that in-flight result already settled it.
     func scheduleResetRefresh() {
-        resetTask?.cancel()
-        resetTask = nil
-        guard resetSchedulingEnabled, case .live = dataSource,
+        resetTimerGeneration &+= 1
+        cancelResetTimer?()
+        cancelResetTimer = nil
+        guard resetSchedulingEnabled, !isRefreshing, case .live = dataSource,
               let fire = ResetRefreshPlanner.next(attempts: resetAttempts, now: resetClock()) else { return }
-        resetTask = Task { @MainActor [weak self] in
-            let delay = max(0, fire.timeIntervalSince(self?.resetClock() ?? fire))
-            try? await Task.sleep(for: .seconds(delay), tolerance: .milliseconds(500))
-            guard !Task.isCancelled, let self else { return }
-            self.resetTask = nil
-            guard !self.isRefreshing else { return } // queued: apply() re-plans
+        let generation = resetTimerGeneration
+        cancelResetTimer = resetScheduler(max(0, fire.timeIntervalSince(resetClock()))) { [weak self] in
+            guard let self, self.resetSchedulingEnabled, generation == self.resetTimerGeneration else { return }
+            self.resetTimerGeneration &+= 1
+            self.cancelResetTimer = nil
+            guard !self.isRefreshing else { return } // apply() re-plans without consuming the reset
             let now = self.resetClock()
             let due = ResetRefreshPlanner.due(attempts: self.resetAttempts, now: now)
             guard !due.isEmpty else { self.scheduleResetRefresh(); return }
@@ -259,6 +288,7 @@ final class MultiUsageStore: ObservableObject {
             return
         case let .live(service, _):
             isRefreshing = true
+            inFlightStartedAt = resetClock()
             var skip = preferences?.providersToSkip() ?? []
             if preferences?.cloudSyncEnabled == true, preferences?.cloudSyncStopping == false {
                 // iPhone sync needs Codex, Claude and Grok even when hidden on the Mac.
@@ -327,10 +357,10 @@ final class MultiUsageStore: ObservableObject {
             publish(codexSnapshot)
         }
         resetAttempts = ResetRefreshPlanner.track(resetAttempts, sections: fetched.sections, fetched: targets,
-                                                  skipped: inFlightSkipped.union([.gemini]), now: resetClock())
-        scheduleResetRefresh()
+                                                  skipped: inFlightSkipped.union([.gemini]), now: resetClock(), knownAt: inFlightStartedAt)
         isRefreshing = false
         refreshIfQueued()
+        scheduleResetRefresh()
     }
 
     private func refreshIfQueued() {

@@ -11,7 +11,7 @@ A compact, floating macOS dashboard for AI usage limits. Keep remaining quota an
 - Horizontal or vertical layout, independent panel/bar zoom, light/dark appearance, and adjustable opacity.
 - Local Claude Code rate-limit events. Account labels are hidden by default; optional labels are masked.
 
-The dashboard refreshes about once a minute. Individual providers can cache results or back off after rate limits. Missing data is shown as unavailable; it is not a promise of unused quota. Some interface labels are currently Japanese.
+The dashboard refreshes about once a minute. Known future reset times also trigger one refresh of the affected provider after a 20-second grace period (timer tolerance: 0.5 seconds). Deadlines are replaced when fresh data changes them; overlapping account/window resets share a provider fetch. Reset checks wait for any active fetch and stop when monitoring stops. They do not send prompts or spend model tokens. A failed reset check waits for the normal polling/retry policy; it does not start additional reset checks. Individual providers can cache results or back off after rate limits. Missing data is shown as unavailable; it is not a promise of unused quota. Some interface labels are currently Japanese.
 
 ## Providers and requirements
 
@@ -26,7 +26,7 @@ The dashboard refreshes about once a minute. Individual providers can cache resu
 | OpenDesign (Go) | OpenDesign control API, authenticated with the control key from the official app's AMR login | A signed-in OpenDesign app (or `od amr login`); shows the Design Plan 5-hour and 7-day windows |
 | Grok | CodexBarCLI (`--source cli`), which reads the official Grok Build CLI billing report | Grok Build CLI (`grok`) installed and signed in |
 
-Requires **macOS 14 or later**. Building requires Xcode Command Line Tools with **Swift 5.9 or later** and internet access to resolve the pinned Sparkle dependency. The command-line tools must be selected with `xcode-select`.
+Requires **macOS 14 or later**. Building requires Xcode Command Line Tools with **Swift 5.9 or later** and internet access to resolve the pinned Sparkle dependency. Running the XCTest suite requires full Xcode; see [the development setup](CONTRIBUTING.md#development) for selecting it with `DEVELOPER_DIR`.
 
 **CodexBarCLI is required for every section except OpenDesign: Codex, Claude, Antigravity, Grok, GLM, MiniMax, Kimi, and DeepSeek.** OpenDesign is read directly from its control API and never from CodexBarCLI. This version looks for it at `/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI`; it does not search `PATH` or offer a CLI-path setting. The CodexBar menu bar app does not need to stay open. Without it, every section reports the missing helper.
 
