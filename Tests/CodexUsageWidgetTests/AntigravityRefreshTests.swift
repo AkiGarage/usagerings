@@ -142,7 +142,7 @@ final class AntigravityRefreshStoreTests: XCTestCase {
     }
 
     func testResetPlannerWaitsForFloorThenFetchesImmediately() async throws {
-        let calls = Calls(resetAt: epoch.addingTimeInterval(-1))
+        let calls = Calls(resetAt: epoch.addingTimeInterval(10))
         let store = MultiUsageStore(service: MultiUsageService(commandRunner: calls.run, retryDelay: 0), snapshotURLs: [])
         var now = epoch
         store.resetClock = { now }
@@ -162,6 +162,10 @@ final class AntigravityRefreshStoreTests: XCTestCase {
         XCTAssertEqual(calls.count(.antigravity), 2)
         XCTAssertEqual(calls.count(.grok), 1)
         XCTAssertFalse(store.snapshot.sections.first { $0.provider == .antigravity }!.isStale)
+        now = epoch.addingTimeInterval(600)
+        store.scheduleResetRefresh()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(calls.count(.antigravity), 2)
     }
 
     private func settle(_ store: MultiUsageStore) async throws {
