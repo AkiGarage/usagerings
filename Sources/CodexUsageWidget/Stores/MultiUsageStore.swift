@@ -107,7 +107,8 @@ final class MultiUsageStore: ObservableObject {
     /// Providers the in-flight fetch covers (all when it is a regular refresh).
     private var inFlightTargets: Set<ProviderID> = []
     private var inFlightSkipped: Set<ProviderID> = []
-    private var queuedFullRefresh = false
+    private var queuedRefreshTrigger: AntigravityRefreshPolicy.Trigger?
+    private var antigravityPolicy = AntigravityRefreshPolicy()
     private var stopGeneration: UInt = 0
     private var resetSchedulingEnabled = false
     private var wakeObservers: [NSObjectProtocol] = []
@@ -156,13 +157,13 @@ final class MultiUsageStore: ObservableObject {
             attachGeminiMonitor(monitor)
         }
         geminiMonitor?.start()
-        refresh()
+        refresh(trigger: .periodic)
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.refreshInterval), tolerance: .seconds(5))
                 guard !Task.isCancelled else { return }
-                self?.refresh()
+                self?.refresh(trigger: .periodic)
             }
         }
         observeWakeAndClock()
@@ -202,7 +203,7 @@ final class MultiUsageStore: ObservableObject {
 
     func stop() {
         stopGeneration &+= 1
-        queuedFullRefresh = false
+        queuedRefreshTrigger = nil
         // Keep the in-flight slot occupied until its CLI fetch actually finishes.
         geminiMonitor?.stop()
         refreshTask?.cancel()
@@ -228,8 +229,16 @@ final class MultiUsageStore: ObservableObject {
     func scheduleResetRefresh() {
         resetTask?.cancel()
         resetTask = nil
-        guard resetSchedulingEnabled, case .live = dataSource,
-              let fire = ResetRefreshPlanner.next(attempts: resetAttempts, now: resetClock()) else { return }
+        guard resetSchedulingEnabled, case .live = dataSource else { return }
+        let now = resetClock()
+        let fires = resetAttempts.compactMap { key, attempts -> Date? in
+            guard let fire = ResetRefreshPlanner.fireTime(key, attempts, now: now) else { return nil }
+            if key.provider == .antigravity, let floor = antigravityPolicy.nextFetchDate(trigger: .reset) {
+                return max(fire, floor)
+            }
+            return fire
+        }
+        guard let fire = fires.min() else { return }
         resetTask = Task { @MainActor [weak self] in
             let delay = max(0, fire.timeIntervalSince(self?.resetClock() ?? fire))
             try? await Task.sleep(for: .seconds(delay), tolerance: .milliseconds(500))
@@ -237,18 +246,22 @@ final class MultiUsageStore: ObservableObject {
             self.resetTask = nil
             guard !self.isRefreshing else { return } // queued: apply() re-plans
             let now = self.resetClock()
-            let due = ResetRefreshPlanner.due(attempts: self.resetAttempts, now: now)
+            let due = ResetRefreshPlanner.due(attempts: self.resetAttempts, now: now).filter {
+                $0.provider != .antigravity || self.antigravityPolicy.shouldFetch(now: now, trigger: .reset)
+            }
             guard !due.isEmpty else { self.scheduleResetRefresh(); return }
             self.resetAttempts = ResetRefreshPlanner.recordFire(due, attempts: self.resetAttempts, now: now)
-            self.refresh(only: Set(due.map(\.provider)))
+            self.refresh(only: Set(due.map(\.provider)), trigger: .reset)
         }
     }
 
     /// `only`: fetch just these providers and keep every other section as it is,
     /// so a reset of one service costs no request to the others (Antigravity included).
-    func refresh(only targets: Set<ProviderID>? = nil) {
+    func refresh(only targets: Set<ProviderID>? = nil, trigger: AntigravityRefreshPolicy.Trigger = .manual) {
         guard !isRefreshing else {
-            if targets == nil { queuedFullRefresh = true }
+            if targets == nil, queuedRefreshTrigger == nil || trigger != .periodic {
+                queuedRefreshTrigger = trigger
+            }
             return
         }
         switch dataSource {
@@ -267,11 +280,20 @@ final class MultiUsageStore: ObservableObject {
             let others = targets.map { Set(ProviderID.allCases).subtracting($0) } ?? []
             inFlightTargets = Set(ProviderID.allCases).subtracting(skip).subtracting(others)
             inFlightSkipped = skip
-            let disabled = skip.union(others)
+            let now = resetClock()
+            var disabled = skip.union(others)
+            if inFlightTargets.contains(.antigravity) {
+                if antigravityPolicy.shouldFetch(now: now, trigger: trigger) {
+                    antigravityPolicy.recordAttempt(at: now)
+                } else {
+                    inFlightTargets.remove(.antigravity)
+                    disabled.insert(.antigravity)
+                }
+            }
             let cloudDataComplete = disabled.isDisjoint(with: [.codex, .claude, .grok])
             let generation = stopGeneration
             Task {
-                let snapshot = await service.fetchAll(disabled: disabled)
+                let snapshot = await service.fetchAll(now: now, disabled: disabled)
                 guard generation == self.stopGeneration else {
                     // Only a full request made after stop() may restart the store.
                     self.isRefreshing = false
@@ -299,6 +321,14 @@ final class MultiUsageStore: ObservableObject {
     private func apply(_ fetched: MultiUsageSnapshot, partial: Bool = false, cloudDataComplete: Bool = true) {
         let targets = inFlightTargets
         var snapshot = fetched
+        if targets.contains(.antigravity) {
+            let section = fetched.sections.first { $0.provider == .antigravity }
+            antigravityPolicy.recordResult(success: section.map(ResetRefreshPlanner.isConclusive) ?? false, at: resetClock())
+        } else if !inFlightSkipped.contains(.antigravity), let previous = rawSnapshot?.sections.first(where: { $0.provider == .antigravity }) {
+            snapshot = MultiUsageSnapshot(sections: MultiUsageSnapshot.ordered(fetched.sections.filter { $0.provider != .antigravity } + [previous]),
+                                          codexSnapshot: fetched.codexSnapshot, updatedAt: fetched.updatedAt,
+                                          hiddenProviders: fetched.hiddenProviders)
+        }
         if partial, let previous = rawSnapshot {
             // Untouched providers keep their current sections and Codex snapshot.
             let sections = previous.sections.filter { !targets.contains($0.provider) }
@@ -310,7 +340,7 @@ final class MultiUsageStore: ObservableObject {
         snapshot = Self.withGemini(geminiMonitor?.section ?? rawSnapshot?.sections.first { $0.provider == .gemini }, in: snapshot)
         preferences?.reconcileAccounts(in: snapshot)
         preferences?.reconcileProviders(in: snapshot)
-        var displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: Date())
+        var displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: resetClock())
         // Gemini keeps its own observation times and stale marking.
         displaySnapshot = Self.withGemini(snapshot.sections.first { $0.provider == .gemini }, in: displaySnapshot)
         rawSnapshot = displaySnapshot
@@ -334,14 +364,21 @@ final class MultiUsageStore: ObservableObject {
     }
 
     private func refreshIfQueued() {
-        guard queuedFullRefresh else { return }
-        queuedFullRefresh = false
-        refresh()
+        guard let trigger = queuedRefreshTrigger else { return }
+        queuedRefreshTrigger = nil
+        refresh(trigger: trigger)
     }
 
     /// Keep display data only; decisions and the published Codex snapshot use the fresh result.
     static func retainingStaleValues(in fresh: MultiUsageSnapshot, previous: MultiUsageSnapshot?, now: Date) -> MultiUsageSnapshot {
         let sections = fresh.sections.map { section -> ProviderSection in
+            if section.provider == .antigravity, !ResetRefreshPlanner.isConclusive(section),
+               var old = previous?.sections.first(where: { $0.provider == .antigravity }) {
+                old.windows.removeAll { window in
+                    window.observedAt.map { now.timeIntervalSince($0) >= AntigravityRefreshPolicy.displayMaxAge } ?? true
+                }
+                if !old.windows.isEmpty { return old }
+            }
             var result = section
             // Cache entries carry their own original observation time.
             result.windows = result.windows.compactMap { window in
@@ -381,9 +418,12 @@ final class MultiUsageStore: ObservableObject {
 
     private func scheduleExpiry() {
         guard let rawSnapshot else { return }
-        let now = Date()
+        let now = resetClock()
         let staleDeadlines = rawSnapshot.sections.flatMap { section in
             section.windows.compactMap { window -> Date? in
+                if section.provider == .antigravity {
+                    return window.observedAt?.addingTimeInterval(AntigravityRefreshPolicy.displayMaxAge)
+                }
                 let stale = section.isStale || (section.accounts.first { $0.index == (window.accountIndex ?? 0) }?.isStale ?? false)
                 guard stale, let observed = window.observedAt else { return nil }
                 return min(observed.addingTimeInterval(UsageLimit.staleMaxAge), window.resetAt ?? .distantFuture)
@@ -395,13 +435,17 @@ final class MultiUsageStore: ObservableObject {
         expiryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow + 0.01)))
             guard !Task.isCancelled, let self, let current = self.rawSnapshot else { return }
-            let now = Date()
+            let now = self.resetClock()
             let blockExpired = current.sections.flatMap { $0.claudeProfileBlocks.values }
                 .contains { !$0.isActive(at: now) }
             let sections = current.sections.map { section -> ProviderSection in
                 var section = section
                 section.claudeProfileBlocks = section.claudeProfileBlocks.filter { $0.value.isActive(at: now) }
+                let isAntigravity = section.provider == .antigravity
                 section.windows.removeAll { window in
+                    if isAntigravity {
+                        return window.observedAt.map { now.timeIntervalSince($0) >= AntigravityRefreshPolicy.displayMaxAge } ?? true
+                    }
                     let stale = section.isStale || (section.accounts.first { $0.index == (window.accountIndex ?? 0) }?.isStale ?? false)
                     return stale && !window.isRetainable(at: now)
                 }

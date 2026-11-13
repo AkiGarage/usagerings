@@ -33,16 +33,19 @@ final class StaleRetentionTests: XCTestCase {
         XCTAssertFalse(expired.sections[0].isStale)
     }
 
-    func testSharedTransportFailureRetainsAllThreeAndActionableFailuresDoNot() {
+    func testSharedFailuresKeepAntigravityFreshAndPreserveOtherStaleRules() {
         let providers: [ProviderID] = [.claude, .antigravity, .grok]
         let initial = snapshot(providers.map { ProviderSection(provider: $0, windows: [limit(0)], stats: [], failureText: nil) }, at: now)
         let stamped = MultiUsageStore.retainingStaleValues(in: initial, previous: nil, now: now)
         let transient = providers.map { ProviderSection(provider: $0, windows: [], stats: [], failureText: "transport error", failureReason: .transport) }
         let retained = retain(transient, previous: stamped, at: now.addingTimeInterval(1))
-        XCTAssertTrue(retained.sections.allSatisfy { $0.isStale && $0.windows.count == 1 })
+        XCTAssertTrue(retained.sections.filter { $0.provider != .antigravity }.allSatisfy { $0.isStale && $0.windows.count == 1 })
+        XCTAssertEqual(retained.sections.first { $0.provider == .antigravity }, stamped.sections.first { $0.provider == .antigravity })
         for message in ["noQuota", "rejected key", "unverified peer", "missing project", "not installed", "parse fail", "logout"] {
             let failure = providers.map { ProviderSection(provider: $0, windows: [], stats: [], failureText: message, failureReason: message == "logout" ? .logout : .other) }
-            XCTAssertTrue(retain(failure, previous: stamped, at: now.addingTimeInterval(1)).sections.allSatisfy { $0.windows.isEmpty && !$0.isStale }, message)
+            let result = retain(failure, previous: stamped, at: now.addingTimeInterval(1))
+            XCTAssertTrue(result.sections.filter { $0.provider != .antigravity }.allSatisfy { $0.windows.isEmpty && !$0.isStale }, message)
+            XCTAssertEqual(result.sections.first { $0.provider == .antigravity }, stamped.sections.first { $0.provider == .antigravity }, message)
         }
     }
 
