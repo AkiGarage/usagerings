@@ -61,8 +61,28 @@ Run: `docs/formal/check-refresh.sh`. It must print PASS for UsageRefresh and PAS
 | Reset, Sleep, Wake, Reorder | ResetRefreshPlanner, wake and clock-change replans, account order changes |
 | Request, queued, runQueued | refresh() during a fetch queues one full refresh; apply() starts it (Fault-DropQueuedRefresh) |
 | Stop, Restart, gen, GenGuard | stop() bumps the generation; an older fetch is not applied (Fault-ApplyAfterStop) |
-Bounds: 2 accounts, 4 requests, 2 periods, 2 stops (63808 distinct states). Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
-Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit 280d6ee (providerError counts as transient, i.e. the model's "transient" outcome).
+Bounds: 2 accounts, 4 requests, 2 periods, 2 stops. The original full-refresh model had 63,808 distinct states; the current model also explores partial target masks. Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
+Real views: verify-usagerings. Drift guard: `python3 -B script/formal_guard.py .`
+with `.formal/guard.json` (reviewed base commit plus exact verified-content hashes).
+The refresh/budget sync base is 4c8b674d4e0fdd8aac402b1481ad8405b019b16c;
+its uncommitted budget change is identified by `sync_sha256`, not a nonexistent commit.
+ProviderError remains the model's "transient" outcome.
+
+### Provider refresh budgets and partial merges
+
+Any refresh admission/merge change requires updating UsageRefresh and ProviderBudget,
+their coverage, mutation configs, charts and content hashes together. Run
+`bash docs/formal/check-refresh.sh /absolute/new/evidence-directory`; it checks both
+full models, all seven existing mutations, two partial-merge mutations and four
+budget mutations. Read every result. No full-check bound or old invariant is weakened.
+The interval, override, backoff, queued reason and untouched-value rules, coverage,
+bounds, shortest fault paths and diagram regeneration commands are documented in
+`docs/formal/refresh-statechart.md`. The statechart-generated views are
+`docs/formal/refresh-chart.mmd` and `docs/formal/budget-chart.mmd`.
+Run `python3 -B Tests/FormalGuardTests.py` and `python3 -B script/formal_guard.py .`;
+then run `swift build && swift test`, including ProviderRefreshBudgetTests.
+The machine-local legacy guard is unchanged; use the repository guard for exact
+verified uncommitted content in shallow runner worktrees.
 
 ## OpenDesign and fitted vertical tab
 

@@ -1,0 +1,13 @@
+---
+title: "UsageRings: provider refresh budget (one check projection)"
+---
+stateDiagram-v2
+  s0: Provider eligible
+  s1: Fetching provider
+  s2: Normal interval wait
+  s3: Error backoff
+  [*] --> s0
+  s0 --> s1: refresh admitted or deferred
+  s1 --> s2: record outcome and next eligible time
+  s1 --> s3: record outcome and next eligible time
+  s2 --> s0: clock advances

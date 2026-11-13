@@ -108,6 +108,8 @@ final class MultiUsageStore: ObservableObject {
     private var inFlightTargets: Set<ProviderID> = []
     private var inFlightSkipped: Set<ProviderID> = []
     private var queuedFullRefresh = false
+    private var queuedRefreshReason: ProviderRefreshBudget.Reason = .automatic
+    private var refreshBudget = ProviderRefreshBudget(intervals: [:])
     private var stopGeneration: UInt = 0
     private var resetSchedulingEnabled = false
     private var wakeObservers: [NSObjectProtocol] = []
@@ -120,6 +122,7 @@ final class MultiUsageStore: ObservableObject {
     init(service: MultiUsageService = MultiUsageService(), snapshotURLs: [URL]? = nil,
          preferences: PanelPreferences? = nil, cloudTransport: CloudSnapshotTransport = CloudKitSnapshotTransport()) {
         self.preferences = preferences
+        refreshBudget = ProviderRefreshBudget(intervals: ProviderRefreshBudget.intervals(defaults: preferences?.defaults ?? .standard))
         if let preferences {
             cloudSender = CloudSnapshotSender(defaults: preferences.defaults, transport: cloudTransport, enabled: preferences.cloudSyncEnabled)
         }
@@ -156,13 +159,13 @@ final class MultiUsageStore: ObservableObject {
             attachGeminiMonitor(monitor)
         }
         geminiMonitor?.start()
-        refresh()
+        refresh(reason: .automatic)
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.refreshInterval), tolerance: .seconds(5))
                 guard !Task.isCancelled else { return }
-                self?.refresh()
+                self?.refresh(reason: .automatic)
             }
         }
         observeWakeAndClock()
@@ -203,6 +206,7 @@ final class MultiUsageStore: ObservableObject {
     func stop() {
         stopGeneration &+= 1
         queuedFullRefresh = false
+        queuedRefreshReason = .automatic
         // Keep the in-flight slot occupied until its CLI fetch actually finishes.
         geminiMonitor?.stop()
         refreshTask?.cancel()
@@ -240,15 +244,18 @@ final class MultiUsageStore: ObservableObject {
             let due = ResetRefreshPlanner.due(attempts: self.resetAttempts, now: now)
             guard !due.isEmpty else { self.scheduleResetRefresh(); return }
             self.resetAttempts = ResetRefreshPlanner.recordFire(due, attempts: self.resetAttempts, now: now)
-            self.refresh(only: Set(due.map(\.provider)))
+            self.refresh(only: Set(due.map(\.provider)), reason: .reset)
         }
     }
 
     /// `only`: fetch just these providers and keep every other section as it is,
     /// so a reset of one service costs no request to the others (Antigravity included).
-    func refresh(only targets: Set<ProviderID>? = nil) {
+    func refresh(only targets: Set<ProviderID>? = nil, reason: ProviderRefreshBudget.Reason = .userInitiated) {
         guard !isRefreshing else {
-            if targets == nil { queuedFullRefresh = true }
+            if targets == nil {
+                queuedFullRefresh = true
+                if reason == .userInitiated { queuedRefreshReason = .userInitiated }
+            }
             return
         }
         switch dataSource {
@@ -264,21 +271,22 @@ final class MultiUsageStore: ObservableObject {
                 // iPhone sync needs Codex, Claude and Grok even when hidden on the Mac.
                 skip.subtract([.codex, .claude, .grok])
             }
+            let deferred = refreshBudget.deferred(at: resetClock(), reason: reason)
             let others = targets.map { Set(ProviderID.allCases).subtracting($0) } ?? []
-            inFlightTargets = Set(ProviderID.allCases).subtracting(skip).subtracting(others)
+            inFlightTargets = Set(ProviderID.allCases).subtracting(skip).subtracting(others).subtracting(deferred)
             inFlightSkipped = skip
-            let disabled = skip.union(others)
+            let disabled = skip.union(others).union(deferred)
             let cloudDataComplete = disabled.isDisjoint(with: [.codex, .claude, .grok])
             let generation = stopGeneration
             Task {
-                let snapshot = await service.fetchAll(disabled: disabled)
+                let snapshot = await service.fetchAll(now: self.resetClock(), disabled: disabled)
                 guard generation == self.stopGeneration else {
                     // Only a full request made after stop() may restart the store.
                     self.isRefreshing = false
                     self.refreshIfQueued()
                     return
                 }
-                self.apply(snapshot, partial: targets != nil, cloudDataComplete: cloudDataComplete)
+                self.apply(snapshot, partial: targets != nil || !deferred.isEmpty, cloudDataComplete: cloudDataComplete)
             }
         }
     }
@@ -298,10 +306,20 @@ final class MultiUsageStore: ObservableObject {
 
     private func apply(_ fetched: MultiUsageSnapshot, partial: Bool = false, cloudDataComplete: Bool = true) {
         let targets = inFlightTargets
+        let now = resetClock()
+        for section in fetched.sections where targets.contains(section.provider) {
+            refreshBudget.record(section, at: now)
+        }
         var snapshot = fetched
         if partial, let previous = rawSnapshot {
             // Untouched providers keep their current sections and Codex snapshot.
-            let sections = previous.sections.filter { !targets.contains($0.provider) }
+            let sections = previous.sections.filter { !targets.contains($0.provider) }.map { section in
+                var section = section
+                if refreshBudget.contains(section.provider) {
+                    section.windows.removeAll { !$0.isRetainable(at: now) }
+                }
+                return section
+            }
                 + fetched.sections.filter { targets.contains($0.provider) }
             snapshot = MultiUsageSnapshot(sections: MultiUsageSnapshot.ordered(sections),
                                           codexSnapshot: targets.contains(.codex) ? fetched.codexSnapshot : previous.codexSnapshot,
@@ -310,7 +328,7 @@ final class MultiUsageStore: ObservableObject {
         snapshot = Self.withGemini(geminiMonitor?.section ?? rawSnapshot?.sections.first { $0.provider == .gemini }, in: snapshot)
         preferences?.reconcileAccounts(in: snapshot)
         preferences?.reconcileProviders(in: snapshot)
-        var displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: Date())
+        var displaySnapshot = Self.retainingStaleValues(in: snapshot, previous: rawSnapshot, now: now)
         // Gemini keeps its own observation times and stale marking.
         displaySnapshot = Self.withGemini(snapshot.sections.first { $0.provider == .gemini }, in: displaySnapshot)
         rawSnapshot = displaySnapshot
@@ -336,7 +354,9 @@ final class MultiUsageStore: ObservableObject {
     private func refreshIfQueued() {
         guard queuedFullRefresh else { return }
         queuedFullRefresh = false
-        refresh()
+        let reason = queuedRefreshReason
+        queuedRefreshReason = .automatic
+        refresh(reason: reason)
     }
 
     /// Keep display data only; decisions and the published Codex snapshot use the fresh result.
@@ -385,7 +405,7 @@ final class MultiUsageStore: ObservableObject {
         let staleDeadlines = rawSnapshot.sections.flatMap { section in
             section.windows.compactMap { window -> Date? in
                 let stale = section.isStale || (section.accounts.first { $0.index == (window.accountIndex ?? 0) }?.isStale ?? false)
-                guard stale, let observed = window.observedAt else { return nil }
+                guard stale || refreshBudget.contains(section.provider), let observed = window.observedAt else { return nil }
                 return min(observed.addingTimeInterval(UsageLimit.staleMaxAge), window.resetAt ?? .distantFuture)
             }
         }
@@ -401,9 +421,10 @@ final class MultiUsageStore: ObservableObject {
             let sections = current.sections.map { section -> ProviderSection in
                 var section = section
                 section.claudeProfileBlocks = section.claudeProfileBlocks.filter { $0.value.isActive(at: now) }
+                let budgeted = self.refreshBudget.contains(section.provider)
                 section.windows.removeAll { window in
                     let stale = section.isStale || (section.accounts.first { $0.index == (window.accountIndex ?? 0) }?.isStale ?? false)
-                    return stale && !window.isRetainable(at: now)
+                    return (stale || budgeted) && !window.isRetainable(at: now)
                 }
                 return section
             }
@@ -412,7 +433,7 @@ final class MultiUsageStore: ObservableObject {
             self.rawSnapshot = expired
             self.snapshot = self.visible(expired)
             self.scheduleExpiry()
-            if blockExpired { self.refresh() }
+            if blockExpired { self.refresh(reason: .automatic) }
         }
     }
 

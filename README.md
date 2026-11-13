@@ -11,7 +11,9 @@ A compact, floating macOS dashboard for AI usage limits. Keep remaining quota an
 - Horizontal or vertical layout, independent panel/bar zoom, light/dark appearance, and adjustable opacity.
 - Local Claude Code rate-limit events. Account labels are hidden by default; optional labels are masked.
 
-The dashboard refreshes about once a minute. Individual providers can cache results or back off after rate limits. Missing data is shown as unavailable; it is not a promise of unused quota. Some interface labels are currently Japanese.
+The dashboard refreshes about once a minute. Antigravity automatic checks are at least 15 minutes apart; a failed check waits 30, then 60, then at most 120 minutes. Success restores the normal interval. Explicit Refresh and the targeted reset-time refresh bypass this budget. The existing single immediate retry remains. Other providers keep their existing schedules; Gemini app usage uses its separate local-tab observation schedule. Cached readings keep their original observation time and expire at reset or after five hours.
+
+Advanced configuration: set the local UserDefaults key `providerRefreshIntervalSeconds.<provider>` (for example `providerRefreshIntervalSeconds.antigravity`) to an interval in seconds, from 60 through 86400, then restart the app. Invalid values use the default; providers without an override have no additional budget. These are refresh policy defaults, not provider limits. Missing data is shown as unavailable; it is not a promise of unused quota. Some interface labels are currently Japanese.
 
 ## Providers and requirements
 
@@ -19,7 +21,7 @@ The dashboard refreshes about once a minute. Individual providers can cache resu
 | --- | --- | --- |
 | OpenAI Codex | CodexBarCLI | CodexBar installed and its Codex provider configured |
 | Claude Code | CodexBarCLI (`--source cli`); local Claude Code logs supplement limit notices | Claude Code signed in and readable by CodexBarCLI |
-| Google Antigravity | CodexBarCLI (`--source cli`), which reads the official `agy -p /usage` report; no prompt is sent and no quota is spent | Antigravity CLI (`agy` 1.1.11 or later) installed and signed in |
+| Google Antigravity | CodexBarCLI (`--source cli`), which reads `agy -p /usage`; CLI checks may themselves consume model quota | Antigravity CLI (`agy` 1.1.11 or later) installed and signed in |
 | Z.ai / GLM Coding Plan | CodexBarCLI; Z.ai reset-ticket API for optional detail | CodexBar's Z.ai provider configured |
 | MiniMax / Kimi | CodexBarCLI | The corresponding provider configured in CodexBar |
 | DeepSeek | CodexBarCLI | DeepSeek configured in CodexBar; balance and usage details without a quota percentage |

@@ -44,3 +44,25 @@ stateDiagram-v2
 
 TLC はこの環境に入っていないため、同等の全状態探索を `docs/fetch_cache_check.py`（Python, 標準ライブラリのみ）で行う。
 実行: `python3 -B docs/fetch_cache_check.py`（正常系は OK、故障系は violation を報告して終了コード1）。
+
+## プロバイダー別の自動取得予算
+
+`ProviderRefreshBudget` は `MultiUsageStore` の取得開始前に置く admission policy。
+Antigravity は既定900秒間隔、失敗時は2倍・4倍・最大8倍に延ばし、成功で戻す。
+セクション全体の失敗だけでなく、部分アカウント失敗も待機を延ばす。
+明示的な手動更新と `ResetRefreshPlanner` の対象別更新は予算を迂回する。
+リセット再試行は既存の回数・間隔制限を保つ。取得内の1回の再試行も維持する。
+非表示のプロバイダーは迂回時にも取得しない。他プロバイダーの既定動作と、
+別経路の `GeminiAppUsageMonitor`（既存タブのみの観測）は変更しない。
+
+予算によるスキップは Poll成功でも一時的失敗でもなく、取得状態に対する stuttering
+（同じ状態の保持）である。観測時刻・失敗理由・Stale・ログアウト状態を更新しない。
+経過時間による `Tick` は継続し、保持中の正常値にもリセット時刻と5時間の期限を適用する。
+失敗が発生した場合は従来どおり `retainingStaleValues` を通し、ログアウト値は保持しない。
+`FetchCache.tla` の `[][Next]` はこの stuttering を既に許容するため、取得キャッシュの
+状態・不変条件の変更はない。予算の間隔・手動/リセット迂回・エラーバックオフは
+`ProviderRefreshBudgetTests` の注入時計と実際のストア取得経路で検証する。
+
+取得開始と部分マージは追加で `formal/UsageRefresh.tla` と
+`formal/ProviderBudget.tla` に形式化した。対応表・故障注入・状態図・同期検査は
+[refresh-statechart.md](formal/refresh-statechart.md) を参照する。
