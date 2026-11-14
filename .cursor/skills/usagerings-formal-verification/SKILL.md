@@ -101,7 +101,7 @@ screens too short even for 0.6, fractional sizing, JSON arithmetic and pixels ar
 left to Swift tests / real view exports. The app retains the minimum 0.6 in that
 unsupported geometry. Existing source-policy and refresh models were compared
 against 280d6ee: this change adds a provider without altering those algorithms.
-Sync commit: f949d06e9e2507b8154faf17efb79ff232511fc2 (OpenDesign addition and screen fitting; records in `.formal/guard.json`).
+Sync commit: 4c8b674d4e0fdd8aac402b1481ad8405b019b16c (moved from f949d06 on 2026-11-14 after reading the diff: MultiUsageService only passes a Codex CODEX_HOME override to the same CodexBarCLI call, MultiCollapsedUsageView only names the 0.5 exhaustion threshold, RingDetailCard adds Claude ticket lines and per-window lock greying; none changes source choice, provider filter, retries, OpenDesign fetch or zoom fitting, so the models are unchanged and TLC passes all specs and fault configs; records in `.formal/guard.json`).
 
 After TLC passes, follow `verify-usagerings` for isolated real views. For real
 OpenDesign data on a logged-in Mac, use its explicit opt-in XCTest command.

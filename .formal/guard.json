@@ -20,7 +20,7 @@
       "sources": [
         "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
       ],
-      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c"
     },
     {
       "tla": "docs/formal/opendesign/OpenDesignRead.tla",
@@ -31,7 +31,7 @@
         "Sources/CodexUsageWidget/Services/OpenDesignUsage.swift",
         "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
       ],
-      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c"
     },
     {
       "tla": "docs/formal/opendesign/VerticalTabFit.tla",
@@ -45,7 +45,7 @@
         "Sources/CodexUsageWidget/Views/EdgeTabView.swift",
         "Sources/CodexUsageWidget/Views/RingDetailCard.swift"
       ],
-      "sync_commit": "f949d06e9e2507b8154faf17efb79ff232511fc2"
+      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c"
     }
   ]
 }
