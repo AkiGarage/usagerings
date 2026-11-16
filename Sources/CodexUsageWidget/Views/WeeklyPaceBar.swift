@@ -166,7 +166,13 @@ struct WeeklyPaceBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: UsageLayout.rowSpacing) {
-            LimitHeader(label: pace.label, value: pace.valueText(basis))
+            HStack(spacing: 4) {
+                if !blocked, let symbol = UsageAccessibility.statusSymbol(leftPercent: 100 - pace.usedPercent) {
+                    Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+                LimitHeader(label: pace.label, value: pace.valueText(basis))
+            }
             bar
                 .frame(height: UsageLayout.detailBarHeight)
                 .padding(.vertical, pace.elapsedPercent != nil && Self.markerStyle == .outline ? 2 : 0)
@@ -186,7 +192,16 @@ struct WeeklyPaceBar: View {
             .help(WeeklyPace.helpText)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(pace.label) \(pace.valueText(basis))、\(pace.paceText(basis))、\(pace.footerText)")
+        .accessibilityLabel(pace.label)
+        .accessibilityValue(Self.accessibilityValue(pace: pace, basis: basis, blocked: blocked))
+        .focusable()
+    }
+
+    static func accessibilityValue(pace: WeeklyPace, basis: UsageBasis, blocked: Bool) -> String {
+        let value = blocked ? "使用不可" : pace.valueText(basis)
+        let today = pace.todayText(basis, blocked: blocked)
+        return ([value, blocked ? nil : pace.paceText(basis), pace.resetStatusText, today]
+            .compactMap { $0 }).joined(separator: "、")
     }
 
     private var bar: some View {

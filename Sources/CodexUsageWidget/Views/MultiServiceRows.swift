@@ -59,6 +59,11 @@ struct ServiceRowModel: Identifiable {
     var inner: UsageLimit? { five != nil ? week : nil }
     var remainingExtras: [UsageLimit] { five == nil && week == nil ? Array(extras.dropFirst()) : extras }
 
+    /// Match the visible window label; raw limit titles can contain hidden account identifiers.
+    func windowAccessibility(label: String, limit: UsageLimit?, blocked: Bool = false) -> UsageAccessibility.Reading {
+        UsageAccessibility.window(provider: name, title: label, limit: limit, blocked: blocked)
+    }
+
     /// Pace bars for the weekly window and any weekly extras (e.g. Antigravity groups).
     /// 5h detail bars (first) then weekly ones, for 詳細 mode.
     func detailPaces(now: Date) -> [WeeklyPace] {
@@ -404,6 +409,7 @@ struct ServiceRowView: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             G1Gauge(row: row)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     if row.isBlocked {
@@ -428,11 +434,16 @@ struct ServiceRowView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(row.detailPaces(now: Date()).enumerated()), id: \.offset) { _, pace in
                             WeeklyPaceBar(pace: pace, blocked: row.isLockedOut(pace))
+                                .accessibilityLabel("\(row.name), \(pace.label)")
                         }
                         ForEach(Array(detailOthers.enumerated()), id: \.offset) { _, limit in
                             DetailLimitRow(label: ServiceRowModel.shortLabel(limit.title), leftPercent: limit.clampedLeftPercent,
                                            tint: row.isLockedOut(limit) ? Color.secondary.opacity(0.45) : GaugeStyle.tint(row.color, limit), caption: "リセット \(limit.shortReset)",
                                            blocked: row.isLockedOut(limit))
+                                .accessibilityLabel(row.windowAccessibility(label: ServiceRowModel.shortLabel(limit.title), limit: limit).label)
+                                .accessibilityValue(row.windowAccessibility(label: ServiceRowModel.shortLabel(limit.title), limit: limit,
+                                                                           blocked: row.isLockedOut(limit)).value)
+                                .focusable()
                         }
                     }
                     .padding(.top, 4)
@@ -486,7 +497,8 @@ struct ServiceRowView: View {
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Self.cardFill)
             .shadow(color: .black.opacity(0.22), radius: 2, y: 1))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(row.name)
     }
 
     /// Windows that are neither 5h nor weekly (lead window first), shown as full-width bars in 詳細.
@@ -497,9 +509,14 @@ struct ServiceRowView: View {
 
     /// シンプル: dot | label | bar (same flexible width on every line of every provider) | value | reset.
     private func simpleLine(label: String, limit: UsageLimit?, outer: Bool, dot: Bool) -> some View {
-        HStack(spacing: 8) {
+        let reading = row.windowAccessibility(label: label, limit: limit,
+                                               blocked: limit.map { row.isLockedOut($0) } ?? false)
+        return HStack(spacing: 8) {
             Group {
-                if dot {
+                if let limit, !row.isLockedOut(limit), let symbol = UsageAccessibility.statusSymbol(limit.tone) {
+                    Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.primary)
+                } else if dot {
                     Circle().strokeBorder(row.color.opacity(outer ? 1 : 0.6), lineWidth: outer ? 3 : 1.8)
                         .frame(width: outer ? 10 : 8, height: outer ? 10 : 8)
                 } else { Color.clear.frame(width: 1, height: 1) }
@@ -521,6 +538,10 @@ struct ServiceRowView: View {
                 Spacer(minLength: 0)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(reading.label)
+        .accessibilityValue(reading.value)
+        .focusable()
     }
 
     private func valueLine(label: String, limit: UsageLimit, outer: Bool) -> some View {

@@ -6,7 +6,11 @@ struct UsageLimitRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8 * scale) {
-            Text(limit.title)
+            Label {
+                Text(limit.title)
+            } icon: {
+                if let symbol = UsageAccessibility.statusSymbol(limit.tone) { Image(systemName: symbol) }
+            }
                 .font(.system(size: 16 * scale, weight: .bold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -46,6 +50,10 @@ struct UsageLimitRow: View {
                 .foregroundStyle(.secondary)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(UsageAccessibility.window(provider: "Codex", title: limit.title, limit: limit).label)
+        .accessibilityValue(UsageAccessibility.window(provider: "Codex", title: limit.title, limit: limit).value)
+        .focusable()
     }
 }
 

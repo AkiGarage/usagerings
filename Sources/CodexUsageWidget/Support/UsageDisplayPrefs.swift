@@ -107,7 +107,13 @@ struct DetailLimitRow: View {
     private var basis: UsageBasis { UsageBasis(rawValue: basisRaw) ?? .defaultValue }
     var body: some View {
         VStack(alignment: .leading, spacing: UsageLayout.rowSpacing) {
-            LimitHeader(label: label, value: basis.valueText(leftPercent: leftPercent))
+            HStack(spacing: 4) {
+                if !blocked, let symbol = UsageAccessibility.statusSymbol(leftPercent: leftPercent) {
+                    Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+                LimitHeader(label: label, value: basis.valueText(leftPercent: leftPercent))
+            }
             BasisBar(basis: basis, leftPercent: leftPercent, tint: tint, blocked: blocked).frame(height: UsageLayout.detailBarHeight)
             if let caption {
                 Text(caption).font(UsageLayout.captionFont).foregroundStyle(.secondary).lineLimit(1)
