@@ -453,6 +453,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             sub.addItem(splitAntigravity)
             view.submenu = sub
             menu.addItem(view)
+            let ringsItem = NSMenuItem(title: "表示するリング", action: nil, keyEquivalent: "")
+            let ringsMenu = NSMenu()
+            for provider in MultiUsageSnapshot.displayOrder {
+                let i = NSMenuItem(title: provider.displayName,
+                                   action: #selector(toggleProviderVisibility(_:)),
+                                   keyEquivalent: "")
+                i.target = self
+                i.representedObject = provider.rawValue
+                i.state = preferences.isProviderVisible(provider) ? .on : .off
+                ringsMenu.addItem(i)
+                if provider == .antigravity {
+                    for group in ServiceRowModel.antigravityGroupNames {
+                        let g = NSMenuItem(title: ServiceRowModel.antigravityName(group),
+                                           action: #selector(toggleAntigravityGroupVisibility(_:)),
+                                           keyEquivalent: "")
+                        g.target = self
+                        g.representedObject = group
+                        g.indentationLevel = 1
+                        g.state = preferences.isAntigravityGroupVisible(group) ? .on : .off
+                        ringsMenu.addItem(g)
+                    }
+                }
+            }
+            ringsMenu.addItem(.separator())
+            let showAll = NSMenuItem(title: "すべて表示", action: #selector(showAllRings), keyEquivalent: "")
+            showAll.target = self
+            ringsMenu.addItem(showAll)
+            ringsItem.submenu = ringsMenu
+            menu.addItem(ringsItem)
             if let multi = persona as? MultiProviderPersona, let on = multi.geminiReadingEnabled {
                 // Only this explicit click may show the macOS Automation dialog (once).
                 let gemini = NSMenuItem(title: Self.geminiReadingMenuTitle,
@@ -489,6 +518,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc private func toggleAntigravityAccounts() {
         persona.panelPreferences?.splitAntigravityAccounts.toggle()
+    }
+    @objc private func toggleProviderVisibility(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let provider = ProviderID(rawValue: raw),
+              let preferences = persona.panelPreferences else { return }
+        preferences.setProviderVisible(!preferences.isProviderVisible(provider), for: provider)
+    }
+    @objc private func toggleAntigravityGroupVisibility(_ sender: NSMenuItem) {
+        guard let group = sender.representedObject as? String,
+              let preferences = persona.panelPreferences else { return }
+        preferences.setAntigravityGroupVisible(!preferences.isAntigravityGroupVisible(group), for: group)
+    }
+    @objc private func showAllRings() {
+        persona.panelPreferences?.showAllRings()
     }
     @objc private func selectUsageStyle(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, UsageStyle(rawValue: raw) != nil else { return }
