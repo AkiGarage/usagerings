@@ -15,7 +15,7 @@ Harm if broken: cookie/web/OAuth reads that break provider terms, hidden network
 Plus `script/lint.sh`, which bans proxy, cookie, web and Keychain reads in the sources.
 
 ## Run (one command each)
-- `TLA2TOOLS_JAR=/path/to/tla2tools.jar docs/formal/check.sh` must print PASS for UsageRead (45 distinct states), CodexBarGate and Fault-RetryLogout (caught NoRetryOnLogout).
+- `TLA2TOOLS_JAR=/path/to/tla2tools.jar docs/formal/check.sh` must print PASS for UsageRead (45 distinct states), CodexBarGate, GeminiHalt (17415 distinct states, liveness HaltEventuallyRetried included) and every fault (ReadFault-RetryLogout caught NoRetryOnLogout; Fault-Gemini-* catch HaltEventuallyRetried, TransientNeverHalts, NoReadWhileFreshHalt and NoFabrication).
 - `swift test --filter SourcePolicyTests` and `./script/lint.sh` must pass.
 - Read every TLC result, pass or fail, with the `/statechart` skill and `docs/formal/view.mjs` as the view. On a pass it draws the chart (`docs/formal/chart.mmd`, 6 states, 10 arrows). On a fail it gives the shortest bug path in plain words.
 
@@ -28,6 +28,7 @@ Plus `script/lint.sh`, which bans proxy, cookie, web and Keychain reads in the s
 | CliTimesOutRetry / GiveUp, BoundedRetries | MultiUsageService retry once on timeout or launch failure (RetrySafetyTests) |
 | CliFailsRetry, NoRetryOnLogout (ログアウト時は再試行しない) | attempt retries a nonzero exit once unless isLogout or a partial result; Fault-RetryLogout breaks the guard |
 | CliOk / CliFails, Shown/FailedOnly… | ProviderSection windows vs failureText |
+| GeminiHalt: NoReadWhileFreshHalt (停止から60分未満は読まない), TransientNeverHalts (一時エラーでは停止しない), NoFabrication (値の保存は usage を読めた時だけ), HaltEventuallyRetried (読めるままなら停止はいずれ解ける) | GeminiReadPolicy.haltBlocking/shouldRead, GeminiAppUsageMonitor.tick/setHalted/haltText; sync f87c804, chart docs/formal/gemini-halt-chart.mmd |
 Sync commit: 280d6ee (adds the nonzero-exit retry and the logout no-retry rule; the extra no-token-accounts attempt is bounded and left to tests). Move it forward only after confirming that the table still describes the code at the new commit.
 
 ## Bounds and what is left out

@@ -10,6 +10,7 @@ fail=0
 tlc UsageRefresh
 if grep -q "No error has been found" "$out/UsageRefresh.out"; then echo "PASS UsageRefresh $(grep -o '[0-9]* distinct states found' "$out/UsageRefresh.out" | tail -1)"; else echo "FAIL UsageRefresh"; cat "$out/UsageRefresh.out"; fail=1; fi
 for f in Fault-*.cfg; do
+  case "$f" in Fault-Gemini*) continue;; esac   # GeminiHalt faults run in check.sh
   n=${f%.cfg}
   tlc "$n"
   inv=$(grep '^INVARIANT' "$f" | tail -1 | cut -d' ' -f2)

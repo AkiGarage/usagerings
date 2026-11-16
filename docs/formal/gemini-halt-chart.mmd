@@ -1,0 +1,37 @@
+---
+title: "UsageRings: Gemini halt with hourly retry (GeminiHalt.tla)"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: good
+    lg1: waiting
+    lg2: off
+    lg3: bad (fault only)
+  }
+  class lg0 teal
+  class lg1 orange
+  class lg2 tan
+  class lg3 red
+  reading: Reading（5分ごとに読む）
+  halted_fresh: Halted (fresh)（停止から60分未満・読まない）
+  halted_expired: Halted (expired)（60分経過・再試行する）
+  off: Off（メニューでオフ）
+  [*] --> reading: 起動（停止は残らないか期限切れ）
+  [*] --> halted_fresh: 起動（UserDefaults の停止が残る）
+  [*] --> halted_expired: 起動（古い停止データ = haltedAt なし = すぐ再試行）
+  [*] --> off: 起動（メニューがオフ）
+  reading --> halted_fresh: Read [page = verify（確認ページ・JS無効・許可なし）]: setHalted(true, now)
+  halted_fresh --> halted_expired: Tick×12 [sinceHalt >= 60分]: 期限切れ
+  halted_expired --> reading: Read [page = usage]: setHalted(false) + save + 値を表示
+  halted_expired --> halted_fresh: Read [page = verify]: haltedAt = now で停止をやり直す
+  halted_expired --> halted_expired: Read [page = transientError]: halted/haltedAt は変わらない
+  reading --> reading: Read [page = usage]: save + 値を表示
+  reading --> reading: Read [page = transientError]: 保存も停止もしない（5分後に再読込）
+  halted_fresh --> off: MenuToggle（setHalted(false)）
+  halted_expired --> off: MenuToggle（setHalted(false)）
+  reading --> off: MenuToggle
+  off --> reading: MenuToggle [on]: lastRead は保持・読みは5分間隔のまま
+  class reading teal
+  class halted_fresh orange
+  class halted_expired orange
+  class off tan
