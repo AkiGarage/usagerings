@@ -61,6 +61,9 @@ struct MultiEdgeTabView: View {
         .onChange(of: preferences.accountPreferences) {
             updateCollapsedSize()
         }
+        .onChange(of: preferences.hiddenAntigravityGroups) {
+            updateCollapsedSize()
+        }
         .onChange(of: presentation.menuBarHeight, initial: true) {
             updateCollapsedSize()
         }
@@ -89,6 +92,7 @@ struct MultiEdgeTabView: View {
                                 orientation: preferences.orientation,
                                 splitAntigravityAccounts: preferences.splitAntigravityAccounts,
                                 accountPreferences: preferences.accountPreferences,
+                                hiddenAntigravityGroups: preferences.hiddenAntigravityGroups,
                                 highlightedBarID: ringHighlight.barID,
                                 maxVerticalLength: presentation.maxCollapsedLength)
     }
@@ -167,6 +171,7 @@ struct MultiEdgeTabView: View {
                                                                   orientation: preferences.orientation,
                                                                   splitAntigravityAccounts: preferences.splitAntigravityAccounts,
                                                                   accountPreferences: preferences.accountPreferences,
+                                                                  hiddenAntigravityGroups: preferences.hiddenAntigravityGroups,
                                                                   maxVerticalLength: presentation.maxCollapsedLength)
     }
 }

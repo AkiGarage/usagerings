@@ -104,6 +104,8 @@ final class PanelPreferences: ObservableObject {
     static let providerVisibilityKey = "multiProviderVisibilityV1"
     /// Explicit per-provider choice. Missing = automatic (shown once the provider reports data).
     @Published private(set) var providerVisibility: [String: Bool]
+    static let hiddenAntigravityGroupsKey = "multiHiddenAntigravityGroupsV1"
+    @Published private(set) var hiddenAntigravityGroups: Set<String>
     var onProviderVisibilityChange: ((_ turnedOn: Bool) -> Void)?
     static let claudeAutoSwitchKey = "multiClaudeAutoSwitchV1"
     /// Let UsageRings decide which Claude profile claude-ab tries first. Default on.
@@ -133,6 +135,7 @@ final class PanelPreferences: ObservableObject {
         claudeAutoSwitch = defaults.object(forKey: Self.claudeAutoSwitchKey) as? Bool ?? true
         providerVisibility = (defaults.dictionary(forKey: Self.providerVisibilityKey) as? [String: Bool] ?? [:])
             .filter { ProviderID(rawValue: $0.key) != nil }
+        hiddenAntigravityGroups = Set(defaults.stringArray(forKey: Self.hiddenAntigravityGroupsKey) ?? [])
         if let data = defaults.data(forKey: Self.accountPreferencesKey) {
             do {
                 accountPreferences = try JSONDecoder().decode(AccountPreferences.self, from: data)
@@ -167,6 +170,19 @@ final class PanelPreferences: ObservableObject {
 
     func isProviderVisible(_ provider: ProviderID) -> Bool { providerVisibility[provider.rawValue] == true }
 
+    func isAntigravityGroupVisible(_ name: String) -> Bool {
+        !hiddenAntigravityGroups.contains(name)
+    }
+
+    func setAntigravityGroupVisible(_ visible: Bool, for name: String) {
+        if visible {
+            guard hiddenAntigravityGroups.remove(name) != nil else { return }
+        } else {
+            guard hiddenAntigravityGroups.insert(name).inserted else { return }
+        }
+        defaults.set(Array(hiddenAntigravityGroups).sorted(), forKey: Self.hiddenAntigravityGroupsKey)
+    }
+
     /// Hidden providers are not fetched at all.
     var disabledProviders: Set<ProviderID> {
         Set(ProviderID.allCases.filter { providerVisibility[$0.rawValue] == false })
@@ -191,6 +207,25 @@ final class PanelPreferences: ObservableObject {
         providerVisibility[provider.rawValue] = visible
         defaults.set(providerVisibility, forKey: Self.providerVisibilityKey)
         onProviderVisibilityChange?(visible)
+    }
+
+    /// Undo every explicit hide. Services never turned on stay automatic (not fetched until set up).
+    func showAllRings() {
+        var turnedOn = false
+        for provider in MultiUsageSnapshot.displayOrder where providerVisibility[provider.rawValue] == false {
+            providerVisibility[provider.rawValue] = true
+            turnedOn = true
+        }
+        if turnedOn {
+            defaults.set(providerVisibility, forKey: Self.providerVisibilityKey)
+        }
+        if !hiddenAntigravityGroups.isEmpty {
+            hiddenAntigravityGroups.removeAll()
+            defaults.set([String](), forKey: Self.hiddenAntigravityGroupsKey)
+        }
+        if turnedOn {
+            onProviderVisibilityChange?(true)
+        }
     }
 
     /// Automatic default: a provider with no explicit choice is turned on (and remembered)

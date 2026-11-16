@@ -94,7 +94,8 @@ struct CollapsedUsageBar: Identifiable {
     static func bars(for snapshot: MultiUsageSnapshot,
                      blockedPreview: String? = ProcessInfo.processInfo.environment["MULTIUSAGE_PREVIEW_BLOCKED"],
                      splitAntigravityAccounts: Bool = false,
-                     accountPreferences: AccountPreferences = AccountPreferences()) -> [Self] {
+                     accountPreferences: AccountPreferences = AccountPreferences(),
+                     hiddenAntigravityGroups: Set<String> = []) -> [Self] {
         func windows(_ provider: ProviderID) -> [UsageLimit] {
             snapshot.sections.filter { $0.provider == provider }.flatMap(\.windows)
         }
@@ -177,7 +178,9 @@ struct CollapsedUsageBar: Identifiable {
                             failureText: String? = nil) -> [Self] {
             let groups = Dictionary(grouping: windows) { ServiceRowModel.antigravityGroupName($0.title) }
             // Keep every returned group, including new groups, with Argon ahead of the main pools.
-            let names = Set(groups.keys).union(ServiceRowModel.antigravityGroupNames).sorted { lhs, rhs in
+            let names = Set(groups.keys).union(ServiceRowModel.antigravityGroupNames)
+                .filter { !hiddenAntigravityGroups.contains($0) }
+                .sorted { lhs, rhs in
                 func rank(_ name: String) -> Int {
                     if name.localizedCaseInsensitiveContains("argon") { return 0 }
                     if name == "Gemini Models" { return 1 }
@@ -262,6 +265,7 @@ struct MultiCollapsedUsageView: View {
     var orientation: PanelOrientation = .horizontal
     var splitAntigravityAccounts = false
     var accountPreferences = AccountPreferences()
+    var hiddenAntigravityGroups: Set<String> = []
     /// Ring under the cursor (hover card); nil = none.
     var highlightedBarID: String? = nil
     /// Longest the vertical strip may be (screen visible height minus both
@@ -274,7 +278,8 @@ struct MultiCollapsedUsageView: View {
     var renderedBarZoom: Double {
         Self.renderedBarZoom(barZoom, barCount: Self.barCount(for: snapshot,
                                                              splitAntigravityAccounts: splitAntigravityAccounts,
-                                                             accountPreferences: accountPreferences),
+                                                             accountPreferences: accountPreferences,
+                                                             hiddenAntigravityGroups: hiddenAntigravityGroups),
                              menuBarHeight: menuBarHeight, orientation: orientation,
                              maxVerticalLength: maxVerticalLength)
     }
@@ -289,9 +294,11 @@ struct MultiCollapsedUsageView: View {
     }
 
     static func barCount(for snapshot: MultiUsageSnapshot, splitAntigravityAccounts: Bool = false,
-                         accountPreferences: AccountPreferences = AccountPreferences()) -> Int {
+                         accountPreferences: AccountPreferences = AccountPreferences(),
+                         hiddenAntigravityGroups: Set<String> = []) -> Int {
         CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
-                               accountPreferences: accountPreferences).count
+                               accountPreferences: accountPreferences,
+                               hiddenAntigravityGroups: hiddenAntigravityGroups).count
     }
 
     struct Layout {
@@ -321,9 +328,11 @@ struct MultiCollapsedUsageView: View {
                      orientation: PanelOrientation = .horizontal,
                      splitAntigravityAccounts: Bool = false,
                      accountPreferences: AccountPreferences = AccountPreferences(),
+                     hiddenAntigravityGroups: Set<String> = [],
                      maxVerticalLength: CGFloat? = nil) -> CGSize {
         let count = CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
-                                          accountPreferences: accountPreferences).count
+                                          accountPreferences: accountPreferences,
+                                          hiddenAntigravityGroups: hiddenAntigravityGroups).count
         // Only the vertical strip can outgrow the screen; the horizontal tab
         // keeps its saved zoom (the caller clamps its origin instead).
         let zoom = orientation == .vertical
@@ -407,34 +416,45 @@ struct MultiCollapsedUsageView: View {
         let layout = Self.layout(barZoom: barZoom, menuBarThickness: menuBarHeight)
         let size = Self.size(for: snapshot, barZoom: barZoom, menuBarHeight: menuBarHeight,
                              orientation: orientation, splitAntigravityAccounts: splitAntigravityAccounts,
-                             accountPreferences: accountPreferences)
+                             accountPreferences: accountPreferences,
+                             hiddenAntigravityGroups: hiddenAntigravityGroups)
+        let bars = CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
+                                          accountPreferences: accountPreferences,
+                                          hiddenAntigravityGroups: hiddenAntigravityGroups)
         let stack = orientation == .horizontal
             ? AnyLayout(HStackLayout(spacing: Self.spacing))
             : AnyLayout(VStackLayout(spacing: Self.spacing))
         stack {
-            let rows = ServiceRowModel.rows(for: snapshot,
-                splitAntigravityAccounts: splitAntigravityAccounts || accountPreferences.primaryAccounts["antigravity"] != nil,
-                accountPreferences: accountPreferences)
-            ForEach(CollapsedUsageBar.bars(for: snapshot, splitAntigravityAccounts: splitAntigravityAccounts,
-                                          accountPreferences: accountPreferences)) { bar in
-                let arcs = Self.g1(for: bar, rows: rows)
-                // Small sizes drop only the inner arc; the weekly % stays in the gap (see TabG1Gauge).
-                TabG1Gauge(bar: bar, outer: arcs.outer, weekly: arcs.inner,
-                           diameter: layout.ringDiameter)
-                .frame(width: layout.ringDiameter, height: layout.ringDiameter)
-                .opacity(bar.isStale ? 0.55 : 1)
-                .overlay {
-                    if highlightedBarID == bar.id {
-                        // Hover highlight stays inside the ring frame (no layout shift).
-                        Circle()
-                            .strokeBorder((bar.isBlocked ? Color.secondary : bar.providerColor).opacity(bar.isBlocked ? 0.45 : 0.9),
-                                          lineWidth: max(1, layout.lineWidth * 0.28))
-                            .shadow(color: bar.isBlocked ? .clear : bar.providerColor.opacity(0.5), radius: 1.5)
+            if bars.isEmpty {
+                Image(systemName: "eye.slash")
+                    .font(.system(size: max(7, layout.ringDiameter * 0.55), weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: layout.ringDiameter, height: layout.ringDiameter)
+                    .accessibilityLabel("すべてのリングが非表示")
+            } else {
+                let rows = ServiceRowModel.rows(for: snapshot,
+                    splitAntigravityAccounts: splitAntigravityAccounts || accountPreferences.primaryAccounts["antigravity"] != nil,
+                    accountPreferences: accountPreferences)
+                ForEach(bars) { bar in
+                    let arcs = Self.g1(for: bar, rows: rows)
+                    // Small sizes drop only the inner arc; the weekly % stays in the gap (see TabG1Gauge).
+                    TabG1Gauge(bar: bar, outer: arcs.outer, weekly: arcs.inner,
+                               diameter: layout.ringDiameter)
+                    .frame(width: layout.ringDiameter, height: layout.ringDiameter)
+                    .opacity(bar.isStale ? 0.55 : 1)
+                    .overlay {
+                        if highlightedBarID == bar.id {
+                            // Hover highlight stays inside the ring frame (no layout shift).
+                            Circle()
+                                .strokeBorder((bar.isBlocked ? Color.secondary : bar.providerColor).opacity(bar.isBlocked ? 0.45 : 0.9),
+                                              lineWidth: max(1, layout.lineWidth * 0.28))
+                                .shadow(color: bar.isBlocked ? .clear : bar.providerColor.opacity(0.5), radius: 1.5)
+                        }
                     }
+                    .help(Self.accessibilitySummary(for: bar, rows: rows))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Self.accessibilitySummary(for: bar, rows: rows))
                 }
-                .help(Self.accessibilitySummary(for: bar, rows: rows))
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Self.accessibilitySummary(for: bar, rows: rows))
             }
         }
         .frame(width: size.width, height: size.height)

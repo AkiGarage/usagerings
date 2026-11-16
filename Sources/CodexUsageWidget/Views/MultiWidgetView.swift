@@ -73,13 +73,12 @@ struct MultiPanelContent: View {
                 }
                 HStack(spacing: 8) {
                     UsageModeControls()
+                    RingVisibilityMenu(preferences: preferences)
                     Spacer(minLength: 4)
                     UsageDirectionHint()
                 }
                 .padding(.bottom, 4)
-                ForEach(ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames,
-                                             splitAntigravityAccounts: preferences.splitAntigravityAccounts,
-                                             accountPreferences: preferences.accountPreferences)) { row in
+                ForEach(visibleRows) { row in
                     ServiceRowView(row: row)
                 }
                 if let claudeChoice, let selected = claudeChoice.selected {
@@ -140,12 +139,64 @@ struct MultiPanelContent: View {
         .controlSize(.small)
     }
 
+    private var visibleRows: [ServiceRowModel] {
+        ServiceRowModel.rows(for: snapshot, showAccounts: preferences.showAccountNames,
+                             splitAntigravityAccounts: preferences.splitAntigravityAccounts,
+                             accountPreferences: preferences.accountPreferences)
+            .filter { row in
+                guard row.id.hasPrefix("antigravity-") else { return true }
+                let rest = String(row.id.dropFirst("antigravity-".count))
+                let group: String
+                if let dash = rest.firstIndex(of: "-"), Int(rest[..<dash]) != nil {
+                    group = String(rest[rest.index(after: dash)...])
+                } else {
+                    group = rest
+                }
+                guard group != "main" else { return true }
+                return preferences.isAntigravityGroupVisible(group)
+            }
+    }
+
     private var appearanceAction: String {
         colorScheme == .dark ? "Switch to light appearance" : "Switch to dark appearance"
     }
 
     private var orientationAction: String {
         preferences.orientation == .horizontal ? "Switch tab to vertical layout" : "Switch tab to horizontal layout"
+    }
+}
+
+struct RingVisibilityMenu: View {
+    @ObservedObject var preferences: PanelPreferences
+
+    var body: some View {
+        Menu {
+            ForEach(MultiUsageSnapshot.displayOrder) { provider in
+                Toggle(provider.displayName, isOn: Binding(
+                    get: { preferences.isProviderVisible(provider) },
+                    set: { preferences.setProviderVisible($0, for: provider) }
+                ))
+                if provider == .antigravity {
+                    ForEach(ServiceRowModel.antigravityGroupNames, id: \.self) { group in
+                        Toggle("　" + ServiceRowModel.antigravityName(group), isOn: Binding(
+                            get: { preferences.isAntigravityGroupVisible(group) },
+                            set: { preferences.setAntigravityGroupVisible($0, for: group) }
+                        ))
+                    }
+                }
+            }
+            Divider()
+            Button("すべて表示") {
+                preferences.showAllRings()
+            }
+        } label: {
+            Label("リング", systemImage: "eye")
+                .font(.system(size: 11, weight: .medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("表示するリングを切り替え")
+        .accessibilityLabel("表示するリングを切り替え")
     }
 }
 
@@ -491,7 +542,20 @@ struct ProviderVisibilitySettingsView: View {
                     get: { preferences.isProviderVisible(provider) },
                     set: { preferences.setProviderVisible($0, for: provider) }
                 ))
+                if provider == .antigravity {
+                    ForEach(ServiceRowModel.antigravityGroupNames, id: \.self) { group in
+                        Toggle(ServiceRowModel.antigravityName(group), isOn: Binding(
+                            get: { preferences.isAntigravityGroupVisible(group) },
+                            set: { preferences.setAntigravityGroupVisible($0, for: group) }
+                        ))
+                        .padding(.leading, 18)
+                    }
+                }
             }
+            Button("すべて表示") {
+                preferences.showAllRings()
+            }
+            .padding(.top, 2)
         }
     }
 }
