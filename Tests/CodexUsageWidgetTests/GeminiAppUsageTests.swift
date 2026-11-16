@@ -34,6 +34,17 @@ final class GeminiAppUsageParserTests: XCTestCase {
         XCTAssertEqual(GeminiAppUsageParser.parse("Sign in\nto continue to Gemini"), .blocked)
     }
 
+    /// Google 側の一時エラー表示は本人確認ページとは別: 停止ではなく、その場の不明。
+    func testTransientErrorPagesArePageErrorsNotBlocks() {
+        XCTAssertEqual(GeminiAppUsageParser.parse("Something went wrong"), .pageError)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nTry again later"), .pageError)
+        XCTAssertEqual(GeminiAppUsageParser.parse("問題が発生しました"), .pageError)
+        XCTAssertEqual(GeminiAppUsageParser.parse("しばらくしてからもう一度お試しください"), .pageError)
+        // 判定順: 本人確認の文言が同じページにあれば blocked が勝つ。
+        XCTAssertEqual(GeminiAppUsageParser.parse("Something went wrong\nVerify it's you"), .blocked)
+        XCTAssertEqual(GeminiAppUsageParser.parse("Try again later\nログイン"), .blocked)
+    }
+
     func testNoNumbersOrAmbiguousIsUnknown() {
         XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\nLoading…"), .unknown)
         XCTAssertEqual(GeminiAppUsageParser.parse("Usage limits\nCurrent usage\n20% 40%\nWeekly limit\n"), .unknown)
@@ -193,7 +204,9 @@ final class GeminiReadPolicyTests: XCTestCase {
         XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, idle: 15 * 60)))
         XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, asleep: true)))
         XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, hour: 3)))
-        var halted = st; halted.halted = true
+        // A halt that just started blocks; the halt time is part of the state (an old halted flag
+        // without a time is retried once, so it is not a blocking halt).
+        var halted = st; halted.halted = true; halted.haltedAt = t0
         XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(0, front: true)))
     }
 
@@ -205,6 +218,19 @@ final class GeminiReadPolicyTests: XCTestCase {
     func testNewSessionReadsAtOnceButNeverWithinFiveMinutes() {
         XCTAssertTrue(GeminiReadPolicy.shouldRead(.init(lastRead: t0), sig(1000, front: true)))
         XCTAssertFalse(GeminiReadPolicy.shouldRead(.init(lastRead: t0), sig(299, front: true)))
+    }
+
+    func testHaltExpiresAfterAnHourAndOldDataWithoutTimeNeverBlocks() {
+        let halted = GeminiReadPolicy.State(lastRead: t0, halted: true, haltedAt: t0)
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(59 * 60)))
+        XCTAssertTrue(GeminiReadPolicy.shouldRead(halted, sig(60 * 60)))
+        XCTAssertEqual(GeminiReadPolicy.haltRetryAfter, 60 * 60)
+        let legacy = GeminiReadPolicy.State(lastRead: t0, halted: true, haltedAt: nil)
+        XCTAssertTrue(GeminiReadPolicy.shouldRead(legacy, sig(301)))
+        // The other gates still apply while halted.
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(60 * 60, asleep: true)))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(60 * 60, idle: 15 * 60)))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(60 * 60, hour: 3)))
     }
 }
 final class FakeGeminiBridge: ChromeUsageBridge, @unchecked Sendable {
@@ -390,13 +416,118 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
         await m.setEnabled(true)
         b.text = .success("Current usage\n40% used")
-        now = now.addingTimeInterval(3600)
+        // 30 minutes: still inside the 60-minute halt window.
+        now = now.addingTimeInterval(1800)
         let restarted = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
         var uprestarted = 0.0; restarted.uptime = { uprestarted += 1000; return uprestarted }; restarted.clock = { now }; restarted.idleSeconds = { 1 }; restarted.screenAsleep = { false }
         await restarted.tick()
         XCTAssertEqual(b.textReads, 1)
         await restarted.setEnabled(true)
         XCTAssertEqual(b.textReads, 2)
+    }
+
+    /// 実機で起きた状態: halted=true が永続し、最終読取が4日前、停止時刻は保存されていない。
+    /// 旧データは停止時刻を lastRead とみなすので、期限切れとして1回読み直し、成功したら解除する。
+    func testExpiredLegacyHaltIsRetriedOnNextTick() async {
+        let b = FakeGeminiBridge()
+        b.text = .success("Current usage\n40% used")
+        let now = noon
+        defaults.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
+        defaults.set(true, forKey: GeminiAppUsageMonitor.haltedKey)
+        defaults.set(now.addingTimeInterval(-4 * 24 * 3600).timeIntervalSince1970, forKey: GeminiAppUsageMonitor.lastReadKey)
+        let m = make(b, now: now)
+        XCTAssertTrue(m.state.halted, "the stored halt is loaded")
+        await m.tick()
+        XCTAssertEqual(b.textReads, 1, "a halt older than 60 minutes must be retried")
+        XCTAssertEqual(m.section.windows.map(\.leftPercent), [60])
+        XCTAssertFalse(m.state.halted, "a successful retry clears the halt")
+        XCTAssertFalse(defaults.bool(forKey: GeminiAppUsageMonitor.haltedKey))
+    }
+
+    /// halted=true で停止時刻が無く、最終読取も無い（さらに古い）データ: 次で必ず1回読む。
+    func testLegacyHaltWithoutAnyTimeIsRetriedOnce() async {
+        let b = FakeGeminiBridge()
+        defaults.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
+        defaults.set(true, forKey: GeminiAppUsageMonitor.haltedKey)
+        let m = make(b, now: noon)
+        XCTAssertNil(m.state.haltedAt)
+        await m.tick()
+        XCTAssertEqual(b.textReads, 1)
+        XCTAssertFalse(m.state.halted)
+    }
+
+    func testHaltIsRetriedOnlyAfterSixtyMinutes() async {
+        let b = FakeGeminiBridge(); b.text = .success("unusual traffic")
+        var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1)
+        XCTAssertTrue(m.state.halted)
+        XCTAssertEqual(m.state.haltedAt, now, "the halt time is saved")
+        XCTAssertEqual(defaults.double(forKey: GeminiAppUsageMonitor.haltedAtKey), now.timeIntervalSince1970, accuracy: 0.001)
+        // 停止中は「いつ自動で再確認するか」を出す（60分後、ja_JP の HH:mm）。
+        let f = DateFormatter(); f.locale = Locale(identifier: "ja_JP"); f.dateFormat = "HH:mm"
+        let retry = f.string(from: now.addingTimeInterval(GeminiReadPolicy.haltRetryAfter))
+        XCTAssertTrue(m.section.failureText?.contains("\(retry) に自動で再確認") ?? false, m.section.failureText ?? "")
+        XCTAssertTrue(m.startText.contains("\(retry)に自動で再確認"), m.startText)
+        b.text = .success("Current usage\n40% used")
+        now = now.addingTimeInterval(59 * 60); await m.tick()
+        XCTAssertEqual(b.textReads, 1, "59 minutes: still halted")
+        XCTAssertTrue(m.state.halted)
+        now = now.addingTimeInterval(60); await m.tick()
+        XCTAssertEqual(b.textReads, 2, "60 minutes: one automatic retry")
+        XCTAssertFalse(m.state.halted)
+        XCTAssertNil(defaults.object(forKey: GeminiAppUsageMonitor.haltedAtKey))
+        XCTAssertEqual(m.section.windows.map(\.leftPercent), [60])
+    }
+
+    /// 確認ページが続く限り、期限後の再試行は1回だけで、また1時間止まる。
+    func testBlockedPageRetriesOncePerHourThenHaltsAgain() async {
+        let b = FakeGeminiBridge(); b.text = .success("Verify it's you")
+        var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1)
+        XCTAssertTrue(m.state.halted)
+        now = now.addingTimeInterval(3600); await m.tick()
+        XCTAssertEqual(b.textReads, 2, "the expired halt allows exactly one retry")
+        XCTAssertTrue(m.state.halted, "still blocked: halt again")
+        XCTAssertEqual(m.state.haltedAt, now, "the halt time moves to the retry")
+        now = now.addingTimeInterval(59 * 60); await m.tick()
+        XCTAssertEqual(b.textReads, 2, "no second retry inside the new hour")
+        now = now.addingTimeInterval(60); await m.tick()
+        XCTAssertEqual(b.textReads, 3)
+    }
+
+    /// Google の一時エラー表示は停止しない。5分後にそのまま読み直す。
+    func testTransientPageErrorDoesNotHaltAndReadsAgainInFiveMinutes() async {
+        let b = FakeGeminiBridge(); b.text = .success("Something went wrong.\nTry again later.")
+        var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1)
+        XCTAssertFalse(m.state.halted, "a transient error must not stop reads")
+        XCTAssertFalse(defaults.bool(forKey: GeminiAppUsageMonitor.haltedKey))
+        XCTAssertTrue(m.section.failureText?.contains("5分後に再読込") ?? false, m.section.failureText ?? "")
+        now = now.addingTimeInterval(300); await m.tick()
+        XCTAssertEqual(b.textReads, 2, "the next ordinary read happens after 5 minutes")
+    }
+
+    func testNotAllowedShowsDeniedTextAndHaltsUntilItExpires() async {
+        let b = FakeGeminiBridge(); b.text = .failure(.notAllowed)
+        var now = noon
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: defaults)
+        var upm = 0.0; m.uptime = { upm += 1000; return upm }; m.clock = { now }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertTrue(m.state.halted)
+        XCTAssertTrue(m.section.failureText?.contains("許可されていません") ?? false, m.section.failureText ?? "")
+        XCTAssertTrue(m.section.failureText?.contains("自動で再確認") ?? false, m.section.failureText ?? "")
+        b.text = .success("Current usage\n40% used")
+        now = now.addingTimeInterval(3600); await m.tick()
+        XCTAssertFalse(m.state.halted)
     }
 
     func testToggleOffDropsQueuedChromeWork() async {

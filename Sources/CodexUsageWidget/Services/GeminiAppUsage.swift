@@ -17,8 +17,10 @@ enum GeminiAppUsageParser {
 
     enum Outcome: Equatable {
         case reading(Reading)
-        /// Sign-in, captcha, unusual-traffic or error page: stop reading.
+        /// Sign-in, captcha, unusual-traffic or error page: stop reading (until the halt expires).
         case blocked
+        /// A transient Gemini-side error box ("something went wrong"): show 不明 for now, never stop.
+        case pageError
         /// Page loaded but the numbers could not be found with certainty.
         case unknown
     }
@@ -28,8 +30,12 @@ enum GeminiAppUsageParser {
     /// Any of these anywhere on the page means "not the plain usage page": stop, show 不明, save nothing.
     static let blockMarkers = [
         "unusual traffic", "not a robot", "captcha", "verify it's you", "verify it’s you", "sign in", "couldn't sign you in",
-        "something went wrong", "try again later", "ロボットではありません", "不審なトラフィック", "本人確認",
-        "ログイン", "問題が発生しました", "しばらくしてから",
+        "ロボットではありません", "不審なトラフィック", "本人確認", "ログイン",
+    ]
+    /// Transient errors Google shows instead of the numbers. They say nothing about the account,
+    /// so they are shown once and the next read happens normally (never a halt).
+    static let pageErrorMarkers = [
+        "something went wrong", "try again later", "問題が発生しました", "しばらくしてから",
     ]
     /// A section label is a short line that STARTS with one of these (case-insensitive, after
     /// full-width → half-width folding). A value may follow on the same line ("Current usage 23% used").
@@ -54,7 +60,9 @@ enum GeminiAppUsageParser {
         let text = normalize(raw)
         let lower = text.lowercased()
         // The whole page is checked for verification text first, never a truncated prefix.
+        // Blocks win over transient errors: a page that asks to sign in is not just an error box.
         if blockMarkers.contains(where: { lower.contains($0) }) { return .blocked }
+        if pageErrorMarkers.contains(where: { lower.contains($0) }) { return .pageError }
         guard text.count <= maxTextLength else { return .unknown }
         let lines = text.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -264,6 +272,9 @@ enum GeminiReadPolicy {
     static let pageOldAfter: TimeInterval = 30 * 60
     /// Local hours with no reads at all (01:00–05:59).
     static let quietHours = 1..<6
+    /// A halt is never permanent: after this long the page is read once more, and a page that
+    /// still asks to sign in halts again for another hour.
+    static let haltRetryAfter: TimeInterval = 60 * 60
 
     struct Signals: Equatable {
         var now: Date
@@ -276,16 +287,24 @@ enum GeminiReadPolicy {
         /// Persisted across toggles and restarts.
         var lastRead: Date?
         var halted = false
+        /// When the halt began; nil for old data saved before this was recorded.
+        var haltedAt: Date?
     }
 
     /// Read in the background (no focus needed) while Aki uses the Mac, at most once per 5 minutes.
     /// Whether a usage tab is open is checked by the read itself.
     static func shouldRead(_ state: State, _ s: Signals) -> Bool {
-        guard !state.halted, !s.screenAsleep, s.idleSeconds < idleLimit,
+        guard !haltBlocking(state, now: s.now), !s.screenAsleep, s.idleSeconds < idleLimit,
               !quietHours.contains(s.hour) else { return false }
         guard let last = state.lastRead else { return true }
         let since = s.now.timeIntervalSince(last)
         return since >= interval // clock moved back (since < 0): the monitor rebases lastRead
+    }
+
+    /// A halt whose time is unknown (old data) or whose hour has passed blocks nothing.
+    static func haltBlocking(_ state: State, now: Date) -> Bool {
+        guard state.halted, let at = state.haltedAt else { return false }
+        return now.timeIntervalSince(at) < haltRetryAfter
     }
 }
 
@@ -738,6 +757,7 @@ final class GeminiAppUsageMonitor {
     static let cacheKey = "geminiAppLastReading"
     static let lastReadKey = "geminiAppLastReadAt"
     static let haltedKey = "geminiAppHalted"
+    static let haltedAtKey = "geminiAppHaltedAt"
 
     private let bridge: ChromeUsageBridge
     private let defaults: UserDefaults
@@ -763,6 +783,11 @@ final class GeminiAppUsageMonitor {
         let at = defaults.double(forKey: Self.lastReadKey)
         state.lastRead = at > 0 ? Date(timeIntervalSince1970: at) : nil
         state.halted = defaults.bool(forKey: Self.haltedKey)
+        let haltedAt = defaults.double(forKey: Self.haltedAtKey)
+        if state.halted {
+            // Old data has no halt time: the last read is when the halt began (nil: retry at once).
+            state.haltedAt = haltedAt > 0 ? Date(timeIntervalSince1970: haltedAt) : state.lastRead
+        }
         section = ProviderSection(provider: .gemini, windows: [], stats: [], failureText: "不明")
         observeRecreate()
         section = cachedOrUnknown(startText)
@@ -773,8 +798,18 @@ final class GeminiAppUsageMonitor {
 
     var startText: String {
         if !isEnabled { return "オフ（メニューで「Gemini の使用量を読む」をオン）" }
-        if state.halted { return "不明（確認ページかエラーのため停止中。メニューでオフ→オンで再開）" }
+        if let retry = haltRetryText() { return "不明（確認ページかエラーのため一時停止。\(retry)に自動で再確認／メニューのオフ→オンですぐ再開）" }
         return "不明（gemini.google.com/usage のタブを開いておくと5分ごとに読みます）"
+    }
+
+    /// "HH:mm" of the automatic re-read while a halt is still running; nil when not halted,
+    /// already due, or halted by old data that has no halt time.
+    private func haltRetryText(now: Date? = nil) -> String? {
+        guard state.halted, let at = state.haltedAt else { return nil }
+        let retry = at.addingTimeInterval(GeminiReadPolicy.haltRetryAfter)
+        guard (now ?? clock()) < retry else { return nil }
+        let f = DateFormatter(); f.locale = Locale(identifier: "ja_JP"); f.dateFormat = "HH:mm"
+        return f.string(from: retry)
     }
 
     func start() {
@@ -829,11 +864,14 @@ final class GeminiAppUsageMonitor {
         await tick()
     }
 
+    /// Shown both when the permission is known to be missing and when a read reports .notAllowed.
+    static let deniedText = "不明（Chrome の操作が許可されていません：システム設定 > プライバシー > オートメーション"
+
     static func text(for status: ChromeAutomationStatus) -> String {
         switch status {
         case .granted: "不明"
         case .notDetermined: "不明（Chrome の操作許可が未設定。メニューから一度だけ許可）"
-        case .denied: "不明（Chrome の操作が許可されていません：システム設定 > プライバシー > オートメーション）"
+        case .denied: deniedText + "）"
         case .chromeNotRunning: "不明（Chrome が起動していません）"
         case .unavailable: "不明（Chrome の状態を確認できません）"
         }
@@ -844,10 +882,16 @@ final class GeminiAppUsageMonitor {
         inFlight = true
         defer { inFlight = false }
         let gen = generation
-        func current() -> Bool { gen == generation && active && !state.halted }
+        // A halted monitor is not excluded here: a retry read only starts once the halt has
+        // expired (shouldRead), and it must be allowed to see its own result so a good page can
+        // clear the halt. `tick` is serialised by `inFlight`, so nothing else changes the halt.
+        func current() -> Bool { gen == generation && active }
         let now = clock()
         if let last = state.lastRead, now < last { // clock moved back: rebase, read again 5 min from now
             state.lastRead = now; defaults.set(now.timeIntervalSince1970, forKey: Self.lastReadKey)
+        }
+        if let at = state.haltedAt, now < at { // same for the halt time: never stay halted forever
+            state.haltedAt = now; defaults.set(now.timeIntervalSince1970, forKey: Self.haltedAtKey)
         }
         markStaleIfOld(now)
         guard bridge.chromeRunning else { return }
@@ -869,30 +913,34 @@ final class GeminiAppUsageMonitor {
         lastReadUptime = uptime()
         let doneAt = clock() // stamp again after the read so spacing never shrinks below 5 minutes
         if doneAt > readAt { state.lastRead = doneAt; defaults.set(doneAt.timeIntervalSince1970, forKey: Self.lastReadKey) }
-        guard current() else { return } // toggled, hidden or halted during the read: discard
+        guard current() else { return } // toggled or hidden during the read: discard
         switch result {
         case nil:
             publish(cachedOrUnknown("不明（gemini.google.com/usage のタブが開いていません）"))
         case .failure(.javascriptDisabled):
-            setHalted(true)
-            publish(cachedOrUnknown("不明（Chrome の「Apple Events からの JavaScript を許可」がオフ）"))
+            publish(cachedOrUnknown(haltText("不明（Chrome の「Apple Events からの JavaScript を許可」がオフ", at: now)))
         case .failure(.timedOut):
             publish(cachedOrUnknown("不明（Chrome の応答がありません）"))
         case .failure(.tabAsleep):
             publish(cachedOrUnknown("不明（usage タブがスリープ中か読み込み中。タブを一度開くと読めます）"))
+        case .failure(.notAllowed):
+            // Not a read failure: the automation permission is missing, so say exactly that.
+            publish(cachedOrUnknown(haltText(Self.deniedText, at: now)))
         case .failure:
-            setHalted(true)
-            publish(cachedOrUnknown("不明（Chrome から読めませんでした。読み取りを停止）"))
+            publish(cachedOrUnknown(haltText("不明（Chrome から読めませんでした。読み取りを停止", at: now)))
         case let .success(text):
             switch GeminiAppUsageParser.parse(text) {
             case .blocked:
-                setHalted(true)
-                publish(cachedOrUnknown("不明（確認ページかエラー表示のため停止。メニューで再開）"))
+                publish(cachedOrUnknown(haltText("不明（確認ページかエラー表示のため停止", at: now)))
+            case .pageError:
+                // Google's own "something went wrong" box: a retry usually works, so never halt.
+                publish(cachedOrUnknown("不明（Gemini 側の一時的なエラー表示。5分後に再読込）"))
             case .unknown:
                 Self.saveDiagnostic(GeminiAppUsageParser.redactedSample(text))
                 publish(cachedOrUnknown("不明（使用量の数字を読み取れませんでした）"))
             case let outcome:
                 if var fresh = GeminiAppUsageParser.section(from: outcome, observedAt: now) {
+                    setHalted(false, at: now) // a readable page ends any earlier halt
                     let loaded = GeminiAppUsageParser.pageLoadedAt(text)
                     fresh = Self.resolvingResets(fresh, pageLoaded: loaded ?? now, now: now)
                     save(fresh, at: now)
@@ -985,7 +1033,27 @@ final class GeminiAppUsageMonitor {
         try? sample.write(to: dir.appendingPathComponent("gemini-unreadable-sample.txt"), atomically: true, encoding: .utf8)
     }
 
-    private func setHalted(_ on: Bool) { state.halted = on; defaults.set(on, forKey: Self.haltedKey) }
+    private func setHalted(_ on: Bool, at date: Date? = nil) {
+        state.halted = on
+        defaults.set(on, forKey: Self.haltedKey)
+        guard on else {
+            state.haltedAt = nil
+            defaults.removeObject(forKey: Self.haltedAtKey)
+            return
+        }
+        let at = date ?? clock()
+        state.haltedAt = at
+        defaults.set(at.timeIntervalSince1970, forKey: Self.haltedAtKey)
+    }
+
+    /// Starts (or restarts) a halt and says when the automatic re-read happens, so a user never
+    /// has to guess that the next read is coming by itself. `reason` is the text without its
+    /// closing parenthesis, e.g. "不明（Chrome の応答がありません".
+    private func haltText(_ reason: String, at now: Date) -> String {
+        setHalted(true, at: now)
+        guard let retry = haltRetryText(now: now) else { return reason + "）" }
+        return "\(reason)。\(retry) に自動で再確認／メニューのオフ→オンですぐ再開）"
+    }
 
     private func publish(_ s: ProviderSection) {
         var s = s

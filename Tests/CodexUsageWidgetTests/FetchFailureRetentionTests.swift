@@ -233,6 +233,42 @@ final class FetchFailureRetentionTests: XCTestCase {
         XCTAssertEqual(loggedOut.count, 1)
     }
 
+    func testLogSkipsTheSameFailureWithinAnHourButKeepsOneLineAnHour() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("fetch-failures.log")
+        let log = FetchFailureLog(fileURL: url)
+        func lines() throws -> [String] {
+            (try? String(contentsOf: url, encoding: .utf8))?.components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
+        }
+
+        log.record(provider: "codex:0", reason: .providerError, exitCode: 1, message: "upstream 503", at: now)
+        log.record(provider: "codex:0", reason: .providerError, exitCode: 1, message: "upstream 503", at: now.addingTimeInterval(65))
+        log.record(provider: "codex:0", reason: .providerError, exitCode: 1, message: "upstream 503", at: now.addingTimeInterval(3599))
+        XCTAssertEqual(try lines().count, 1, "the same line every minute must not be written again")
+
+        log.record(provider: "codex:0", reason: .providerError, exitCode: 1, message: "upstream 503", at: now.addingTimeInterval(3600))
+        XCTAssertEqual(try lines().count, 2, "one line an hour still shows the failure lasts")
+
+        // A different provider, reason or message is a different failure: written at once.
+        log.record(provider: "zai:0", reason: .providerError, exitCode: 1, message: "upstream 503", at: now.addingTimeInterval(3601))
+        log.record(provider: "zai:0", reason: .timeout, exitCode: nil, message: "upstream 503", at: now.addingTimeInterval(3602))
+        log.record(provider: "zai:0", reason: .timeout, exitCode: nil, message: "another", at: now.addingTimeInterval(3603))
+        XCTAssertEqual(try lines().count, 5)
+
+        // A clock that moved back still counts as "within the hour": no duplicate line.
+        log.record(provider: "zai:0", reason: .timeout, exitCode: nil, message: "another", at: now.addingTimeInterval(-86400))
+        XCTAssertEqual(try lines().count, 5)
+
+        // Real log shape: several providers fail on every poll, so their lines interleave.
+        for minute in 1...30 {
+            let t = now.addingTimeInterval(3700 + Double(minute) * 65)
+            log.record(provider: "codex:0", reason: .providerError, exitCode: 1, message: "upstream 503", at: t)
+            log.record(provider: "zai:0", reason: .timeout, exitCode: nil, message: "another", at: t)
+        }
+        XCTAssertEqual(try lines().count, 5, "interleaved repeats of other providers must not defeat the hourly limit")
+    }
+
     func testLogRotatesPast256KB() throws {
         let fileManager = FileManager.default
         let dir = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
