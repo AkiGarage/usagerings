@@ -104,5 +104,7 @@ unsupported geometry. Existing source-policy and refresh models were compared
 against 280d6ee: this change adds a provider without altering those algorithms.
 Sync commit: 4c8b674d4e0fdd8aac402b1481ad8405b019b16c (moved from f949d06 on 2026-11-14 after reading the diff: MultiUsageService only passes a Codex CODEX_HOME override to the same CodexBarCLI call, MultiCollapsedUsageView only names the 0.5 exhaustion threshold, RingDetailCard adds Claude ticket lines and per-window lock greying; none changes source choice, provider filter, retries, OpenDesign fetch or zoom fitting, so the models are unchanged and TLC passes all specs and fault configs; records in `.formal/guard.json`).
 
+VerticalTabFit sync commit: fbeb9f480cafd49b53118651e99534d67bd30d50 (moved from 4c8b674 on 2026-11-17 after reading the diff of #17: AppDelegate adds the ring visibility menu, MultiCollapsedUsageView/MultiEdgeTabView/RingDetailCard pass hiddenAntigravityGroups and show an eye.slash placeholder when every ring is hidden; none changes saved zoom, fitting or orientation handling, so the model is unchanged and TLC passes VerticalTabFit and its Overwrite/NoFit/Stuck fault configs).
+
 After TLC passes, follow `verify-usagerings` for isolated real views. For real
 OpenDesign data on a logged-in Mac, use its explicit opt-in XCTest command.

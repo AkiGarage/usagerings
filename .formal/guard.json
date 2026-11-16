@@ -45,7 +45,7 @@
         "Sources/CodexUsageWidget/Views/EdgeTabView.swift",
         "Sources/CodexUsageWidget/Views/RingDetailCard.swift"
       ],
-      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c"
+      "sync_commit": "fbeb9f480cafd49b53118651e99534d67bd30d50"
     },
     {
       "tla": "docs/formal/GeminiHalt.tla",
