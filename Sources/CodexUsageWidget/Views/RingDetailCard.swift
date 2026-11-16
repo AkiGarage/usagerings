@@ -652,6 +652,13 @@ final class RingDetailCardController {
                 MainActor.assumeIsolated { self?.hide(immediately: true) }
             }
             .store(in: &cancellables)
+        preferences.$hiddenAntigravityGroups
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.hide(immediately: true) }
+            }
+            .store(in: &cancellables)
         preferences.$splitAntigravityAccounts
             .dropFirst()
             .sink { [weak self] _ in
@@ -782,7 +789,8 @@ final class RingDetailCardController {
               hostingView.bounds.width > 0 else { return nil }
         let bars = CollapsedUsageBar.bars(for: snapshot ?? store.snapshot,
                                          splitAntigravityAccounts: preferences.splitAntigravityAccounts,
-                                         accountPreferences: preferences.accountPreferences)
+                                         accountPreferences: preferences.accountPreferences,
+                                         hiddenAntigravityGroups: preferences.hiddenAntigravityGroups)
         guard !bars.isEmpty else { return nil }
         // Hit testing must use the zoom the tab actually drew at: a vertical
         // tab shrinks to fit a short screen while the preference stays large.
