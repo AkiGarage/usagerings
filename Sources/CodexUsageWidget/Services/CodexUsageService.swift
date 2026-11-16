@@ -112,6 +112,11 @@ struct CodexUsageService: Sendable {
 private enum CodexBarErrorTransport {
     private static let knownKinds: Set<String> = ["args", "config", "provider", "runtime"]
 
+    private static let knownMessages: [(provider: ProviderID, pattern: String, summary: String)] = [
+        (.kimi, "auth token is invalid or expired", "Kimi: 認証期限切れ。CodexBarで再ログインが必要"),
+        (.minimax, "no active token plan subscription", "MiniMax: 有効なプランがありません")
+    ]
+
     static func sanitizedSummary(from data: Data, provider: ProviderID) -> String? {
         guard let decoded = try? JSONSerialization.jsonObject(with: data),
               let objects = decoded as? [Any]
@@ -125,6 +130,13 @@ private enum CodexBarErrorTransport {
                   let entry = try? JSONDecoder().decode(CodexBarErrorEntry.self, from: entryData),
                   let error = entry.error
             else { continue }
+
+            if let message = (object["error"] as? [String: Any])?["message"] as? String,
+               let known = knownMessages.first(where: {
+                   $0.provider == provider && message.range(of: $0.pattern, options: .caseInsensitive) != nil
+               }) {
+                return known.summary
+            }
 
             var summary = "\(provider.displayName) provider error"
             var details: [String] = []

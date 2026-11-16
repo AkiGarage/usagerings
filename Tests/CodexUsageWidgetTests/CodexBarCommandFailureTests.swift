@@ -2,6 +2,29 @@ import XCTest
 @testable import CodexUsageWidget
 
 final class CodexBarCommandFailureTests: XCTestCase {
+    func testKnownProviderMessagesUseFixedJapaneseSummaries() {
+        let cases: [(ProviderID, String, String)] = [
+            (.kimi, "Kimi auth token is invalid or expired. Please refresh your token.",
+             "Kimi: 認証期限切れ。CodexBarで再ログインが必要"),
+            (.kimi, "Kimi AUTH TOKEN IS INVALID OR EXPIRED. secret-abc123",
+             "Kimi: 認証期限切れ。CodexBarで再ログインが必要"),
+            (.minimax, "MiniMax API error: no active token plan subscription",
+             "MiniMax: 有効なプランがありません"),
+            (.kimi, "Kimi foo bar secret-abc123", "Kimi provider error (provider, code 1)"),
+            (.kimi, "no active token plan subscription", "Kimi provider error (provider, code 1)"),
+            (.minimax, "auth token is invalid or expired", "MiniMax provider error (provider, code 1)")
+        ]
+        for (provider, message, expected) in cases {
+            let stdout = Data("""
+            [{"provider":"\(provider.rawValue)","error":{"kind":"provider","code":1,"message":"\(message)"}}]
+            """.utf8)
+            let error = CodexUsageError.commandFailure(exitCode: 1, stdout: stdout, stderr: Data(), provider: provider)
+            XCTAssertEqual(error, .commandFailed(1, expected))
+            XCTAssertFalse(error.localizedDescription.contains(message))
+            XCTAssertFalse(error.localizedDescription.contains("secret-abc123"))
+        }
+    }
+
     func testCodexBar0500UsageExitCodeRemainsAPlainSanitizedFailure() {
         let error = CodexUsageError.commandFailure(
             exitCode: 64,

@@ -263,7 +263,7 @@ struct MultiUsageService: Sendable {
 
     static func isLogoutMessage(_ text: String) -> Bool {
         let phrases = ["not logged in", "unauthorized", "unauthorised", "no credentials",
-                       "login required", "please log in", "not authenticated"]
+                       "login required", "please log in", "not authenticated", "auth token is invalid or expired"]
         if phrases.contains(where: { text.range(of: $0, options: .caseInsensitive) != nil }) { return true }
         guard let code401 else { return false }
         return code401.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil

@@ -124,6 +124,11 @@ final class FailureClassificationLintTests: XCTestCase {
         XCTAssertTrue(MultiUsageService.failureReason(for: CodexUsageError.commandFailed(-1, "failed to launch")).isTransient)
     }
 
+    func testKimiExpiredTokenRemainsLogout() {
+        let stdout = Data(#"[{"provider":"kimi","error":{"kind":"provider","code":1,"message":"Kimi auth token is invalid or expired. Please refresh your token."}}]"#.utf8)
+        XCTAssertTrue(MultiUsageService.isLogout(stdout: stdout, stderr: Data()))
+    }
+
     func testLogoutMarkerDetection() {
         XCTAssertTrue(MultiUsageService.isLogoutMessage("Error: Not Logged In"))
         XCTAssertTrue(MultiUsageService.isLogout(stdout: Data(#"{"error":{"message":"401 unauthorized"}}"#.utf8), stderr: Data()))
