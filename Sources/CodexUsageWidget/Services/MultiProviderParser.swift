@@ -34,6 +34,7 @@ enum MultiProviderParser {
     private struct ExtraRateWindow: Decodable {
         var title: String?
         var window: RawWindow?
+        var usageKnown: Bool?
     }
 
     private struct Usage: Decodable {
@@ -173,7 +174,7 @@ enum MultiProviderParser {
             append(usage?.secondary)
             append(usage?.tertiary)
         }
-        for extra in usage?.extraRateWindows ?? [] {
+        for extra in usage?.extraRateWindows ?? [] where extra.usageKnown != false {
             append(extra.window, titleOverride: extra.title)
         }
 

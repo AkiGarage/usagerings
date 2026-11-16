@@ -2,6 +2,20 @@ import XCTest
 @testable import CodexUsageWidget
 
 final class MultiProviderParserTests: XCTestCase {
+    func testAntigravityOfflineUnknownQuotaDoesNotBecomeFullRing() {
+        let payload = #"[{"provider":"antigravity","source":"offline","usage":{"extraRateWindows":[{"title":"Offline","usageKnown":false,"window":{"usedPercent":0}}]}}]"#
+        XCTAssertThrowsError(try parse(payload, provider: .antigravity)) { error in
+            XCTAssertEqual(error as? MultiProviderParser.ParseError, .noWindows)
+        }
+    }
+
+    func testAntigravityKeepsKnownQuotaAlongsideUnknownOfflineData() throws {
+        let payload = #"[{"provider":"antigravity","usage":{"extraRateWindows":[{"title":"Offline","usageKnown":false,"window":{"usedPercent":0}},{"title":"Known","usageKnown":true,"window":{"usedPercent":25}},{"title":"Legacy","window":{"usedPercent":50}}]}}]"#
+        let section = try parse(payload, provider: .antigravity)
+        XCTAssertEqual(section.windows.map(\.title), ["Known", "Legacy"])
+        XCTAssertEqual(section.windows.map(\.leftPercent), [75, 50])
+    }
+
     func testZaiShapeParsesWindowsWithExtras() throws {
         let section = try parse(
             """
