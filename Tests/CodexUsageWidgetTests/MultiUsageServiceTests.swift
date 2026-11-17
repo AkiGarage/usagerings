@@ -10,7 +10,7 @@ final class MultiUsageServiceTests: XCTestCase {
     }
 
     func testFetchAllAssemblesAllProvidersInOrder() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .allSuccess))
+        let service = MultiUsageService(commandRunner: commandRunner(for: .allSuccess), retryDelay: 0)
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
         XCTAssertEqual(snapshot.sections.map(\.provider),
@@ -50,7 +50,7 @@ final class MultiUsageServiceTests: XCTestCase {
     }
 
     func testOneProviderFailingLeavesOthersIntact() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .zaiFails))
+        let service = MultiUsageService(commandRunner: commandRunner(for: .zaiFails), retryDelay: 0)
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
         XCTAssertEqual(snapshot.sections.map(\.provider),
@@ -63,7 +63,7 @@ final class MultiUsageServiceTests: XCTestCase {
     }
 
     func testCodexAccountFieldsNeverReachSections() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .codexCarriesAccount))
+        let service = MultiUsageService(commandRunner: commandRunner(for: .codexCarriesAccount), retryDelay: 0)
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
         let encoded = String(
@@ -78,7 +78,7 @@ final class MultiUsageServiceTests: XCTestCase {
     }
 
     func testBalanceReadFailureReportsNotReadable() async throws {
-        let service = MultiUsageService(commandRunner: commandRunner(for: .balanceReadFails))
+        let service = MultiUsageService(commandRunner: commandRunner(for: .balanceReadFails), retryDelay: 0)
         let snapshot = await service.fetchAll(now: fixedNow, timeZone: utc, calendar: utcCalendar)
 
         XCTAssertEqual(

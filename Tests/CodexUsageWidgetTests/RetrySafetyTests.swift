@@ -11,7 +11,7 @@ final class RetrySafetyTests: XCTestCase {
                 throw CodexUsageError.commandFailed(-1, "failed to launch")
             }
             return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data())
-        })
+        }, retryDelay: 0)
         let result = await service.fetchAll()
         XCTAssertEqual(calls.count, 2)
         XCTAssertEqual(result.sections.first { $0.provider == .zai }?.failureReason, .launchFailure)
@@ -25,7 +25,7 @@ final class RetrySafetyTests: XCTestCase {
                 throw CodexUsageError.commandFailed(-1, "failed to launch")
             }
             return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data())
-        })
+        }, retryDelay: 0)
         let result = await service.fetchAll()
         let recorded = calls.withLock { $0 }
         XCTAssertEqual(recorded.filter { $0[2] == "grok" }.count, 2)
