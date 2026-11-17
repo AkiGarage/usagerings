@@ -18,6 +18,7 @@ final class PanelSnapshotTests: XCTestCase {
         for (zoom, appearance) in [(1.0, PanelAppearance.light), (1.5, .dark), (2.0, .dark)] {
             preferences.setZoom(zoom)
             preferences.appearance = appearance
+            let diagT0 = Date()
             // Native toolbar buttons need an AppKit host; ImageRenderer
             // substitutes unsupported-view symbols. Keep the window offscreen/unordered.
             let host = NSHostingView(rootView: MultiPanelContent(snapshot: fixture, preferences: preferences)
@@ -26,6 +27,7 @@ final class PanelSnapshotTests: XCTestCase {
                 .background(appearance == .dark ? Color(white: 0.10) : .white)
                 .environment(\.colorScheme, appearance.colorScheme ?? .light))
             let size = host.fittingSize
+            let diagT1 = Date()
             let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
                                   styleMask: .borderless, backing: .buffered, defer: false)
             window.appearance = appearance.nsAppearance
@@ -41,6 +43,7 @@ final class PanelSnapshotTests: XCTestCase {
             bitmap.size = size
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let image = try XCTUnwrap(bitmap.cgImage)
+            let diagT2 = Date()
             XCTAssertEqual(image.width, Int(MultiPanelContent.baseWidth * zoom * 2))
             if zoom == 1 { baseHeight = image.height }
             XCTAssertEqual(Double(image.height), Double(baseHeight) * zoom, accuracy: 2)
@@ -65,6 +68,32 @@ final class PanelSnapshotTests: XCTestCase {
                     }
                 }
             }
+            let diagT3 = Date()
+            var countsC = Array(repeating: 0, count: resolvedColors.count)
+            for y in stride(from: 0, to: image.height, by: 2) {
+                for x in stride(from: 0, to: image.width, by: 2) {
+                    guard let pixel = bitmap.colorAt(x: x, y: y) else { continue }
+                    _ = pixel
+                }
+            }
+            let diagT4 = Date()
+            let data = try XCTUnwrap(bitmap.bitmapData)
+            let bpr = bitmap.bytesPerRow
+            let spp = bitmap.samplesPerPixel
+            var countsD = Array(repeating: 0, count: resolvedColors.count)
+            for y in stride(from: 0, to: image.height, by: 2) {
+                for x in stride(from: 0, to: image.width, by: 2) {
+                    let o = y * bpr + x * spp
+                    let r = CGFloat(data[o]) / 255, g = CGFloat(data[o + 1]) / 255, b = CGFloat(data[o + 2]) / 255
+                    for (index, resolved) in resolvedColors.enumerated() {
+                        if abs(r - CGFloat(resolved.red)) < 0.04, abs(g - CGFloat(resolved.green)) < 0.04,
+                           abs(b - CGFloat(resolved.blue)) < 0.04 { countsD[index] += 1 }
+                    }
+                }
+            }
+            let diagT5 = Date()
+            countsC = countsD
+            print("PANEL_DIAG zoom=\(zoom) px=\(image.width)x\(image.height) format=\(bitmap.bitmapFormat.rawValue) spp=\(spp) render=\(diagT1.timeIntervalSince(diagT0)) draw=\(diagT2.timeIntervalSince(diagT1)) scanColorAtCompare=\(diagT3.timeIntervalSince(diagT2)) colorAtOnly=\(diagT4.timeIntervalSince(diagT3)) rawCompare=\(diagT5.timeIntervalSince(diagT4)) counts=\(counts) raw=\(countsC)")
             for count in counts {
                 XCTAssertGreaterThan(count, Int(50 * zoom * zoom)) // G1 gauges are thinner than the old 104pt rings
             }
