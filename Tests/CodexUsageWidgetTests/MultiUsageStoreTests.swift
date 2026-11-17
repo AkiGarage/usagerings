@@ -101,7 +101,7 @@ final class MultiUsageStoreTests: XCTestCase {
                     )
                 }
                 return try Self.successRunner(arguments)
-            }),
+            }, retryDelay: 0),
             snapshotURLs: []
         )
 

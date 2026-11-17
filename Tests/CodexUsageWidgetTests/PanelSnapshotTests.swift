@@ -50,19 +50,22 @@ final class PanelSnapshotTests: XCTestCase {
             XCTAssertEqual(background.greenComponent, expected, accuracy: 0.06)
             XCTAssertEqual(background.blueComponent, expected, accuracy: 0.06)
             // Both low-quota colors must survive real rendering on either background.
-            for color in [CollapsedUsageBar.warningColor, CollapsedUsageBar.criticalColor] {
-                var environment = EnvironmentValues()
-                environment.colorScheme = appearance == .dark ? .dark : .light
-                let resolved = color.resolve(in: environment)
-                var count = 0
-                for y in stride(from: 0, to: image.height, by: 2) {
-                    for x in stride(from: 0, to: image.width, by: 2) {
-                        guard let pixel = bitmap.colorAt(x: x, y: y) else { continue }
+            var environment = EnvironmentValues()
+            environment.colorScheme = appearance == .dark ? .dark : .light
+            let resolvedColors = [CollapsedUsageBar.warningColor, CollapsedUsageBar.criticalColor]
+                .map { $0.resolve(in: environment) }
+            var counts = Array(repeating: 0, count: resolvedColors.count)
+            for y in stride(from: 0, to: image.height, by: 2) {
+                for x in stride(from: 0, to: image.width, by: 2) {
+                    guard let pixel = bitmap.colorAt(x: x, y: y) else { continue }
+                    for (index, resolved) in resolvedColors.enumerated() {
                         if abs(pixel.redComponent - CGFloat(resolved.red)) < 0.04,
                            abs(pixel.greenComponent - CGFloat(resolved.green)) < 0.04,
-                           abs(pixel.blueComponent - CGFloat(resolved.blue)) < 0.04 { count += 1 }
+                           abs(pixel.blueComponent - CGFloat(resolved.blue)) < 0.04 { counts[index] += 1 }
                     }
                 }
+            }
+            for count in counts {
                 XCTAssertGreaterThan(count, Int(50 * zoom * zoom)) // G1 gauges are thinner than the old 104pt rings
             }
             if ProcessInfo.processInfo.environment["CODEX_USAGE_WIDGET_WRITE_LEGACY_SNAPSHOTS"] == "1" {
