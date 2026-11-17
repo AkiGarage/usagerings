@@ -41,3 +41,10 @@ suite and the real panel view. It writes `opendesign-live-panel.png` and prints 
 quota percentages / whether reset times are known; it never prints credentials or
 raw API data. Normal tests skip this case. No installed app is launched or stopped.
 Inspect the PNG; a passing mocked test does not replace this live proof.
+
+Reset-refresh timing proof: `swift test --filter ResetRefresh` runs the production
+store with a manual clock/scheduler and synthetic CLI output (no credentials,
+no publisher paths). It checks display restoration, targeted provider calls,
+changed and duplicate deadlines, a blocked in-flight fetch, and cancellation
+races after stop. Save the XCTest transcript in `.build/` as evidence. This is
+the timer proof; demo screenshots alone do not exercise scheduling.

@@ -4,7 +4,22 @@ Open a GitHub issue for bugs or focused feature proposals. For vulnerabilities, 
 
 ## Development
 
-Use macOS 14 or later and Xcode Command Line Tools with Swift 5.9 or later.
+Use macOS 14 or later and Swift 5.9 or later. Running the XCTest suite requires
+the full Xcode installation; standalone Command Line Tools can build the app but
+may fail tests with `no such module 'XCTest'`.
+
+If `xcode-select -p` points to `/Library/Developer/CommandLineTools`, select your
+installed Xcode for this shell before running the checks (adjust the path if
+Xcode is installed elsewhere). This does not change the system-wide selection:
+
+```sh
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+xcrun --find xctest
+```
+
+Setting `SDKROOT` here also replaces any inherited Command Line Tools SDK path,
+so the compiler and SDK come from the same Xcode installation.
 
 ```sh
 swift build
