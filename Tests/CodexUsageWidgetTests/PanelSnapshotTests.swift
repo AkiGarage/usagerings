@@ -50,19 +50,46 @@ final class PanelSnapshotTests: XCTestCase {
             XCTAssertEqual(background.greenComponent, expected, accuracy: 0.06)
             XCTAssertEqual(background.blueComponent, expected, accuracy: 0.06)
             // Both low-quota colors must survive real rendering on either background.
-            for color in [CollapsedUsageBar.warningColor, CollapsedUsageBar.criticalColor] {
-                var environment = EnvironmentValues()
-                environment.colorScheme = appearance == .dark ? .dark : .light
-                let resolved = color.resolve(in: environment)
-                var count = 0
-                for y in stride(from: 0, to: image.height, by: 2) {
-                    for x in stride(from: 0, to: image.width, by: 2) {
+            var environment = EnvironmentValues()
+            environment.colorScheme = appearance == .dark ? .dark : .light
+            let resolvedColors = [CollapsedUsageBar.warningColor, CollapsedUsageBar.criticalColor]
+                .map { $0.resolve(in: environment) }
+            let targets = resolvedColors.map { (red: CGFloat($0.red), green: CGFloat($0.green), blue: CGFloat($0.blue)) }
+            // Opaque 8-bit RGBA pixels are read straight from the buffer (colorAt gives
+            // the same byte / 255 components, only far slower); anything else uses colorAt.
+            XCTAssertEqual(bitmap.bitsPerPixel, 32)
+            XCTAssertFalse(bitmap.bitmapFormat.contains(.alphaFirst))
+            XCTAssertFalse(bitmap.bitmapFormat.contains(.floatingPointSamples))
+            let data = try XCTUnwrap(bitmap.bitmapData)
+            let bytesPerRow = bitmap.bytesPerRow
+            let probe = (image.height - 4) * bytesPerRow + (image.width / 2) * 4
+            XCTAssertEqual(data[probe + 3], 255)
+            XCTAssertEqual(CGFloat(data[probe]) / 255, background.redComponent, accuracy: 0.0001)
+            XCTAssertEqual(CGFloat(data[probe + 1]) / 255, background.greenComponent, accuracy: 0.0001)
+            XCTAssertEqual(CGFloat(data[probe + 2]) / 255, background.blueComponent, accuracy: 0.0001)
+            var counts = Array(repeating: 0, count: targets.count)
+            for y in stride(from: 0, to: image.height, by: 2) {
+                for x in stride(from: 0, to: image.width, by: 2) {
+                    let offset = y * bytesPerRow + x * 4
+                    let red: CGFloat, green: CGFloat, blue: CGFloat
+                    if data[offset + 3] == 255 {
+                        red = CGFloat(data[offset]) / 255
+                        green = CGFloat(data[offset + 1]) / 255
+                        blue = CGFloat(data[offset + 2]) / 255
+                    } else {
                         guard let pixel = bitmap.colorAt(x: x, y: y) else { continue }
-                        if abs(pixel.redComponent - CGFloat(resolved.red)) < 0.04,
-                           abs(pixel.greenComponent - CGFloat(resolved.green)) < 0.04,
-                           abs(pixel.blueComponent - CGFloat(resolved.blue)) < 0.04 { count += 1 }
+                        red = pixel.redComponent
+                        green = pixel.greenComponent
+                        blue = pixel.blueComponent
+                    }
+                    for index in targets.indices {
+                        if abs(red - targets[index].red) < 0.04,
+                           abs(green - targets[index].green) < 0.04,
+                           abs(blue - targets[index].blue) < 0.04 { counts[index] += 1 }
                     }
                 }
+            }
+            for count in counts {
                 XCTAssertGreaterThan(count, Int(50 * zoom * zoom)) // G1 gauges are thinner than the old 104pt rings
             }
             if ProcessInfo.processInfo.environment["CODEX_USAGE_WIDGET_WRITE_LEGACY_SNAPSHOTS"] == "1" {

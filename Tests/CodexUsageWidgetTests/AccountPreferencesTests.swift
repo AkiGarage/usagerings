@@ -354,7 +354,8 @@ final class AccountPreferencesTests: XCTestCase {
                 ? .init(terminationStatus: 0, stdout: Data(claudeAccount.utf8), stderr: Data())
                 : .init(terminationStatus: 1, stdout: Data(), stderr: Data())
         },
-           claudeRateLimitMonitor: ClaudeRateLimitMonitor(accounts: [:], remote: Unreachable()))
+           claudeRateLimitMonitor: ClaudeRateLimitMonitor(accounts: [:], remote: Unreachable()),
+           retryDelay: 0)
         let snapshot = await service.fetchAll()
         let section = try XCTUnwrap(snapshot.sections.first { $0.provider == .claude })
         let first = try XCTUnwrap(section.accounts.first?.id)

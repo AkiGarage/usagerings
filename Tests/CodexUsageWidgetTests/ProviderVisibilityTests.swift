@@ -53,7 +53,7 @@ final class ProviderVisibilityTests: XCTestCase {
         let service = MultiUsageService(commandRunner: { args in
             recorder.add(args.joined(separator: " "))
             return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(), stderr: Data())
-        })
+        }, retryDelay: 0)
         let snapshot = await service.fetchAll(disabled: [.minimax, .kimi, .deepseek, .zai, .claude, .antigravity, .grok])
         let calls = recorder.calls
         XCTAssertFalse(calls.contains { $0.contains("minimax") || $0.contains("kimi") || $0.contains("deepseek") || $0.contains("zai") })
