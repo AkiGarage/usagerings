@@ -451,4 +451,3 @@ final class ClaudeCLIUsage: Sendable {
 
 
 }
-let lintSelfCheckSource = ["--source", "web"]

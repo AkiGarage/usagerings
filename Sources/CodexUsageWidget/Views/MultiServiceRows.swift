@@ -307,7 +307,7 @@ enum GaugeStyle {
     static func tint(_ base: Color, _ limit: UsageLimit?) -> Color {
         switch limit?.tone {
         case .warning: return CollapsedUsageBar.warningColor
-        case .critical: return CollapsedUsageBar.warningColor
+        case .critical: return CollapsedUsageBar.criticalColor
         default: return base
         }
     }

@@ -325,7 +325,7 @@ struct MultiUsageService: Sendable {
                     }
                     return result
                 } catch let error as CodexUsageError {
-                    if case .commandFailed(-1, _) = error, false { retried = true; continue }
+                    if case .commandFailed(-1, _) = error, !retried { retried = true; continue }
                     throw error
                 }
             }
