@@ -11,9 +11,20 @@ permissions:
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Lint
+        run: ./script/lint.sh && ./script/lint-selftest.sh
+
   swift:
     runs-on: macos-26
     timeout-minutes: 30
@@ -26,8 +37,6 @@ jobs:
         run: sudo systemsetup -settimezone Asia/Tokyo || sudo ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime
       - name: Swift version
         run: swift --version
-      - name: Lint
-        run: ./script/lint.sh && ./script/lint-selftest.sh
       - name: Build
         run: swift build
       - name: Test
