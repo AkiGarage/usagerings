@@ -302,7 +302,7 @@ struct MultiUsageService: Sendable {
     ) async throws -> CodexUsageService.CommandResult {
         let arguments = Self.usageArguments(provider)
         func attempt(_ arguments: [String]) async throws -> CodexUsageService.CommandResult {
-            var retried = false
+            var retried = provider == .antigravity
             while true {
                 try Task.checkCancellation()
                 do {

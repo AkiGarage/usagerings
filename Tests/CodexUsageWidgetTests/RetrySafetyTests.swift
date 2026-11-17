@@ -17,7 +17,7 @@ final class RetrySafetyTests: XCTestCase {
         XCTAssertEqual(result.sections.first { $0.provider == .zai }?.failureReason, .launchFailure)
     }
 
-    func testCliOnlyProvidersRetryLaunchFailureOnceWithCliSource() async {
+    func testCliSourceRetriesGrokButLeavesAntigravityToScheduledBackoff() async {
         let calls = OSAllocatedUnfairLock<[[String]]>(initialState: [])
         let service = MultiUsageService(commandRunner: { args in
             if args[2] == "grok" || args[2] == "antigravity" {
@@ -29,7 +29,7 @@ final class RetrySafetyTests: XCTestCase {
         let result = await service.fetchAll()
         let recorded = calls.withLock { $0 }
         XCTAssertEqual(recorded.filter { $0[2] == "grok" }.count, 2)
-        XCTAssertEqual(recorded.filter { $0[2] == "antigravity" }.count, 2)
+        XCTAssertEqual(recorded.filter { $0[2] == "antigravity" }.count, 1)
         XCTAssertTrue(recorded.allSatisfy { $0.contains("--source") && $0[$0.firstIndex(of: "--source")! + 1] == "cli" })
         XCTAssertEqual(result.sections.first { $0.provider == .grok }?.failureReason, .launchFailure)
     }
