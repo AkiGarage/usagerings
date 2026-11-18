@@ -360,6 +360,7 @@ final class MultiUsageStore: ObservableObject {
                 }
                 return result
             }
+            guard section.allowsAccountWindowFallback else { return result }
             for i in result.accounts.indices {
                 let account = result.accounts[i]
                 guard account.failureReason?.isTransient == true, let id = account.id,

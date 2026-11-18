@@ -72,6 +72,7 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertEqual(calls.envs, [a.configDir, b.configDir])
         XCTAssertTrue(section.forAccount(0).windows.isEmpty)
         XCTAssertEqual(section.forAccount(0).accounts.first?.failureReason, .logout)
+        XCTAssertTrue(section.forAccount(0).accounts.first?.failureText?.contains("setup-token") == true)
         XCTAssertEqual(section.forAccount(1).windows.map(\.leftPercent), [96, 87])
         let snapshot = MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: t1)
         let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
@@ -94,6 +95,25 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertEqual(recovered.forAccount(1).windows.map(\.leftPercent), [96, 87])
         XCTAssertEqual(calls.rawEnvs.filter { $0?["CLAUDE_CONFIG_DIR"] == a.configDir }.compactMap { $0?["CLAUDE_CLI_PATH"] },
                        ["/fixtures/claude-v1", "/fixtures/claude-v2"])
+    }
+
+    func testUsageFailuresAreVisibleEvenWhenNeitherAccountHasAReading() async throws {
+        let usage = ClaudeCLIUsage(runner: { _, environment in
+            if environment?["CLAUDE_CONFIG_DIR"] == "/h/.claude-a" {
+                return .init(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
+            }
+            return .init(terminationStatus: 1, stdout: Data(), stderr: Data("private provider output".utf8))
+        })
+        let now = Date()
+        await usage.refreshNow([a, b], timeZone: .current, now: { now })
+        let section = try XCTUnwrap(usage.section(accounts: [a, b], now: now, timeZone: .current)).section
+        XCTAssertTrue(section.windows.isEmpty)
+        XCTAssertEqual(section.accountInventoryComplete, false)
+        XCTAssertNotNil(section.failureText, "Cloud sync must mark the previous windows unavailable")
+        XCTAssertEqual(section.accounts.map(\.failureReason), [.timeout, .providerError])
+        XCTAssertTrue(section.accounts[0].failureText?.contains("タイムアウト") == true)
+        XCTAssertTrue(section.accounts[1].failureText?.contains("CodexBar CLI") == true)
+        XCTAssertFalse(section.accounts[1].failureText?.contains("private provider output") == true)
     }
 
     func testLoginStatusDistinguishesLogoutFromWrongProfileAndProbeFailure() {

@@ -245,7 +245,7 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(ClaudeDesktopResetCacheTests.card(section?.section.stats ?? [], 0), "未確認|取得中|")
     }
 
-    func testRateLimitHonorsRetryAfterWithoutCreatingEmptyCard() async {
+    func testRateLimitHonorsRetryAfterWithoutCreatingAUsageOrTicketReading() async {
         let calls = GrantCallLog()
         let client = tokenClient { request in
             calls.record(request)
@@ -258,9 +258,11 @@ final class ClaudeResetGrantsTests: XCTestCase {
         let t0 = now
         await usage.refreshNow([account], timeZone: .current, now: { t0 })
         let result = usage.section(accounts: [account], now: t0, timeZone: .current)
-        // A rate-limit note alone is not a real usage/ticket reading.
-        // The provider must remain pending, rather than creating an empty ring.
-        XCTAssertNil(result)
+        XCTAssertEqual(result?.section.windows.isEmpty, true)
+        XCTAssertEqual(result?.section.accounts.first?.failureReason, .providerError)
+        XCTAssertTrue(result?.section.stats.contains { $0.title == "Reset tickets" && $0.valueText == "未確認" } == true)
+        XCTAssertTrue(result?.section.stats.contains { $0.title == "Reset tickets note" && $0.valueText.contains("取得制限中") } == true)
+        XCTAssertFalse(result?.section.stats.contains { $0.title == "Reset ticket" } ?? true)
         await usage.refreshNow([], timeZone: .current, now: { t0.addingTimeInterval(1) })
         await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(901) })
         XCTAssertEqual(calls.count, 1)
@@ -302,10 +304,16 @@ final class ClaudeResetGrantsTests: XCTestCase {
         await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(901) })
         XCTAssertEqual(calls.count, 2)
         await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(902) })
-        XCTAssertNil(usage.section(accounts: [account], now: t0.addingTimeInterval(902), timeZone: .current))
+        let loggedOut = usage.section(accounts: [account], now: t0.addingTimeInterval(902), timeZone: .current)
+        XCTAssertEqual(loggedOut?.section.windows.isEmpty, true)
+        XCTAssertEqual(loggedOut?.section.accounts.first?.failureReason, .logout)
+        XCTAssertFalse(loggedOut?.section.stats.contains { $0.title == "Reset ticket" } ?? true)
         XCTAssertEqual(calls.count, 2)
         await usage.refreshNow([account], timeZone: .current, now: { t0.addingTimeInterval(1802) })
-        XCTAssertNil(usage.section(accounts: [account], now: t0.addingTimeInterval(1802), timeZone: .current))
+        let stillLoggedOut = usage.section(accounts: [account], now: t0.addingTimeInterval(1802), timeZone: .current)
+        XCTAssertEqual(stillLoggedOut?.section.windows.isEmpty, true)
+        XCTAssertEqual(stillLoggedOut?.section.accounts.first?.failureReason, .logout)
+        XCTAssertFalse(stillLoggedOut?.section.stats.contains { $0.title == "Reset ticket" } ?? true)
         XCTAssertEqual(calls.count, 2)
     }
 

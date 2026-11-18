@@ -98,7 +98,6 @@ final class ClaudeCLIUsage: Sendable {
         /// Identity CodexBar reported for this folder (salted digest only).
         var sourceID: AccountID?
         var maskedEmail: String?
-        var loginStatus: LoginStatus?
         var failureReason: UsageFailureReason?
         var failureMessage: String?
         var grants: ClaudeResetGrantsOutcome?
@@ -209,6 +208,8 @@ final class ClaudeCLIUsage: Sendable {
         return LoginCheck(status: status, executable: path)
     }
 
+    private static let loginRequired = "Claude Code の通常ログインが必要です。setup-token では使用量を読み取れません"
+
     static func loginStatus(_ result: CodexUsageService.CommandResult, expectedDir: String) -> LoginStatus {
         struct Status: Decodable {
             let loggedIn: Bool
@@ -245,7 +246,7 @@ final class ClaudeCLIUsage: Sendable {
 
     private static func key(_ account: ClaudeCLIAccount) -> String { account.configDir ?? "" }
 
-    /// Never waits. Returns nil until at least one account has a usable value.
+    /// Never waits. Returns nil while there is no usage, ticket result, or account failure to show.
     func section(accounts: [ClaudeCLIAccount], now: Date, timeZone: TimeZone, salt: Data? = nil) -> Result? {
         guard !accounts.isEmpty else { return nil }
         // One lock: settings check, due list, claim and task hand-off are atomic, so an old queue
@@ -350,29 +351,28 @@ final class ClaudeCLIUsage: Sendable {
             guard !Task.isCancelled, isCurrent(generation) else { return }
             do {
                 if login == .loggedOut {
-                    failure = (.logout, nil, "Claude Code profile is logged out")
+                    failure = (.logout, nil, Self.loginRequired)
                 } else if login == .unverified {
-                    failure = (.other, nil, "Claude Code profile could not be verified")
+                    failure = (.other, nil, "Claude Code のログイン状態を確認できません")
                 } else {
                     let result = try await runner(Self.arguments, env)
                     if result.timedOut {
-                        failure = (.timeout, nil, "CodexBarCLI timed out")
+                        failure = (.timeout, nil, "CodexBar CLI の使用量取得がタイムアウトしました")
                     } else if result.terminationStatus != 0 {
-                        let error = CodexUsageError.commandFailure(
-                            exitCode: result.terminationStatus, stdout: result.stdout, stderr: result.stderr, provider: .claude)
-                        failure = (MultiUsageService.isLogout(stdout: result.stdout, stderr: result.stderr) ? .logout : .providerError,
-                                   result.terminationStatus, error.localizedDescription)
+                        let loggedOut = MultiUsageService.isLogout(stdout: result.stdout, stderr: result.stderr)
+                        failure = (loggedOut ? .logout : .providerError, result.terminationStatus,
+                                   loggedOut ? Self.loginRequired : "CodexBar CLI から使用量を取得できません")
                     } else if let section = try? MultiProviderParser.parse(result.stdout, provider: .claude, now: started, timeZone: timeZone),
                               section.failureText == nil, !section.windows.isEmpty {
                         parsed = section
                         masked = Self.maskedEmail(result.stdout)
                         reported = Self.reportedID(result.stdout)
                     } else {
-                        failure = (.providerError, nil, "Claude usage unreadable")
+                        failure = (.providerError, nil, "CodexBar CLI の使用量データを読み取れません")
                     }
                 }
             } catch {
-                failure = (MultiUsageService.failureReason(for: error), nil, error.localizedDescription)
+                failure = (MultiUsageService.failureReason(for: error), nil, "CodexBar CLI を実行できません")
             }
             if let failure {
                 failureLog?.record(provider: "claude-cli(\(account.label))", reason: failure.reason,
@@ -412,7 +412,6 @@ final class ClaudeCLIUsage: Sendable {
                         }
                     }
                 }
-                entry.loginStatus = login
                 s.entries[Self.key(account)] = entry
                 return true
             }
@@ -478,7 +477,7 @@ final class ClaudeCLIUsage: Sendable {
         var combined = ProviderSection(provider: .claude, windows: [], stats: [], failureText: nil)
         var anyValue = false
         var anyTicketData = false
-        var anyLoginFailure = false
+        var anyFailure = false
         var anyCached = false
         var maskedEmails: [Int: String] = [:]
         for (index, account) in accounts.enumerated() {
@@ -497,22 +496,14 @@ final class ClaudeCLIUsage: Sendable {
             }
             let age = entry?.fetchedAt.map { now.timeIntervalSince($0) } ?? .infinity
             guard let cached = entry?.section, age < maxCacheAge else {
-                let neverAttempted = entry?.attemptedAt == nil
-                let text: String
-                switch entry?.loginStatus {
-                case .loggedOut:
-                    anyLoginFailure = true
-                    text = "Claude Code のログインが必要（\(account.displayDir)）"
-                case .unverified:
-                    anyLoginFailure = true
-                    text = "Claude Code のログイン状態を確認できません（\(account.displayDir)）"
-                default: text = neverAttempted ? "取得中…（\(account.displayDir)）" : "取得失敗（\(account.displayDir)）"
-                }
+                let message = entry?.failureMessage
+                anyFailure = anyFailure || message != nil
+                let text = message ?? (entry?.attemptedAt == nil ? "取得中…" : "使用量の再取得を待っています")
                 combined.accounts.append(ProviderAccount(
                     index: index,
-                    failureText: text,
+                    failureText: "\(text)（\(account.displayDir)）",
                     id: id,
-                    failureReason: neverAttempted ? nil : (entry?.failureReason ?? .providerError)
+                    failureReason: entry?.failureReason
                 ))
                 continue
             }
@@ -533,8 +524,16 @@ final class ClaudeCLIUsage: Sendable {
             combined.accounts.append(item)
             if let masked = entry?.maskedEmail { maskedEmails[index] = masked }
         }
-        guard anyValue || anyTicketData || anyLoginFailure else { return nil }
-        combined.accountInventoryComplete = true
+        guard anyValue || anyTicketData || anyFailure else { return nil }
+        combined.accountInventoryComplete = anyValue || anyTicketData
+        if !anyValue && !anyTicketData {
+            // Expired CLI readings must stay expired even with account errors to display.
+            combined.allowsAccountWindowFallback = false
+            // Cloud sync needs a provider failure to mark previously published windows unavailable.
+            combined.failureText = accounts.count == 1
+                ? combined.accounts.first?.failureText
+                : "Claude の使用量を取得できません"
+        }
         return Result(section: combined, fromCache: anyCached, maskedEmails: maskedEmails)
     }
 

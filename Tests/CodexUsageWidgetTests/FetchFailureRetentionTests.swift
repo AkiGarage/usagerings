@@ -164,6 +164,27 @@ final class FetchFailureRetentionTests: XCTestCase {
         XCTAssertEqual(displayed.sections.first?.windows.isEmpty, false, "the store must still show the cached Claude value")
     }
 
+    func testClaudeFailuresDoNotRestoreExpiredCLIWindows() async throws {
+        let runner = FlippableCLIRunner()
+        let usage = ClaudeCLIUsage(runner: { arguments, environment in runner.run(arguments, environment) })
+        let accounts = [runner.accountA, runner.accountB]
+        await usage.refreshNow(accounts, timeZone: utc, now: { [now] in now })
+        let fresh = try XCTUnwrap(usage.section(accounts: accounts, now: now, timeZone: utc)).section
+        let previous = MultiUsageSnapshot(sections: [fresh], codexSnapshot: nil, updatedAt: now)
+        XCTAssertEqual(fresh.windows.count, 2)
+        XCTAssertTrue(fresh.windows.allSatisfy { $0.isRetainable(at: now.addingTimeInterval(600)) })
+
+        runner.setMode(.timeout, for: runner.accountA)
+        runner.setMode(.timeout, for: runner.accountB)
+        let expired = now.addingTimeInterval(600)
+        await usage.refreshNow(accounts, timeZone: utc, now: { expired })
+        let failed = try XCTUnwrap(usage.section(accounts: accounts, now: expired, timeZone: utc)).section
+        let snapshot = MultiUsageSnapshot(sections: [failed], codexSnapshot: nil, updatedAt: expired)
+        let displayed = try XCTUnwrap(retained(snapshot, previous: previous, at: expired).sections.first)
+        XCTAssertTrue(displayed.windows.isEmpty)
+        XCTAssertEqual(displayed.accounts.map(\.failureReason), [.timeout, .timeout])
+    }
+
     func testClaudeAccountLogoutSuppressesCachedValueImmediately() async {
         let runner = FlippableCLIRunner()
         let usage = ClaudeCLIUsage(runner: { arguments, environment in runner.run(arguments, environment) })
@@ -178,7 +199,7 @@ final class FetchFailureRetentionTests: XCTestCase {
         let loggedOut = usage.section(accounts: [runner.accountA, runner.accountB], now: t1.addingTimeInterval(1), timeZone: utc)
         XCTAssertEqual(loggedOut?.section.forAccount(0).windows.isEmpty, true, "logged-out cache must be suppressed at once")
         XCTAssertEqual(loggedOut?.section.accounts.first?.failureReason, .logout)
-        XCTAssertEqual(loggedOut?.section.accounts.first?.failureText?.hasPrefix("取得失敗"), true)
+        XCTAssertEqual(loggedOut?.section.accounts.first?.failureText?.contains("通常ログインが必要"), true)
         XCTAssertEqual(loggedOut?.section.forAccount(1).windows.isEmpty, false)
     }
 
@@ -295,7 +316,7 @@ private final class ProviderCallCount: @unchecked Sendable {
 }
 
 private final class FlippableCLIRunner: @unchecked Sendable {
-    enum Mode { case good, http500, logout }
+    enum Mode { case good, http500, timeout, logout }
 
     let accountA = ClaudeCLIAccount(label: "A", configDir: "/tmp/claude-a")
     let accountB = ClaudeCLIAccount(label: "B", configDir: "/tmp/claude-b")
@@ -316,6 +337,8 @@ private final class FlippableCLIRunner: @unchecked Sendable {
             return Fixtures.commandResult(#"[{"provider":"claude","usage":{"primary":{"usedPercent":\#(percent),"windowMinutes":300,"resetsAt":"2026-11-05T06:00:00Z"}}}]"#)
         case .http500:
             return .init(terminationStatus: 1, stdout: Data("[]".utf8), stderr: Data("HTTP 500 upstream".utf8))
+        case .timeout:
+            return .init(terminationStatus: 1, stdout: Data(), stderr: Data(), timedOut: true)
         case .logout:
             return .init(terminationStatus: 1, stdout: Data("[]".utf8), stderr: Data("Error: not logged in, please log in".utf8))
         }

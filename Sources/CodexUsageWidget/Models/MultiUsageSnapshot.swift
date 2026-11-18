@@ -98,6 +98,7 @@ struct ProviderSection: Equatable, Sendable, Identifiable {
     var accountInventoryComplete: Bool? = nil
     var isStale = false
     var failureReason: UsageFailureReason? = nil
+    var allowsAccountWindowFallback = true
 
     var claudeProfileNotices: [ClaudeProfileNotice] {
         let profiles = Set(claudeProfileBlocks.keys).union(claudeRemoteFailureText == nil ? [] : [1])
