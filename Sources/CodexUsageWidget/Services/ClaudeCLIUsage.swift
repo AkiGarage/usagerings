@@ -527,6 +527,8 @@ final class ClaudeCLIUsage: Sendable {
         guard anyValue || anyTicketData || anyFailure else { return nil }
         combined.accountInventoryComplete = anyValue || anyTicketData
         if !anyValue && !anyTicketData {
+            // Expired CLI readings must stay expired even with account errors to display.
+            combined.allowsAccountWindowFallback = false
             // Cloud sync needs a provider failure to mark previously published windows unavailable.
             combined.failureText = accounts.count == 1
                 ? combined.accounts.first?.failureText
