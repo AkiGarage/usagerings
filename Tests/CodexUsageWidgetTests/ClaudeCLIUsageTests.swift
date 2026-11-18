@@ -57,9 +57,10 @@ final class ClaudeCLIUsageTests: XCTestCase {
             calls.append(args, env)
             let data = env?["CLAUDE_CONFIG_DIR"] == "/h/.claude-a" ? Self.json(30, 72) : Self.json(4, 13)
             return CodexUsageService.CommandResult(terminationStatus: 0, stdout: data, stderr: Data())
-        }, loginProbe: { dir in await login.status(dir) })
+        }, loginProbe: { dir in await login.check(dir) })
         let t0 = Date()
 
+        await login.set(.loggedIn, executable: "/fixtures/claude-v1")
         await usage.refreshNow([a], timeZone: .current, now: { t0 })
         let before = try XCTUnwrap(usage.section(accounts: [a], now: t0, timeZone: .current)).section
         XCTAssertEqual(before.windows.map(\.leftPercent), [70, 28])
@@ -84,13 +85,15 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertEqual(onlyA.accounts.first?.failureReason, .logout, "No other accounts or quota samples are required")
         XCTAssertTrue(ServiceRowModel.rows(for: onlyA).first?.failureText?.contains("ログインが必要") == true)
 
-        await login.set(.loggedIn)
+        await login.set(.loggedIn, executable: "/fixtures/claude-v2")
         let t2 = t1.addingTimeInterval(1)
         await usage.refreshNow([a, b], timeZone: .current, now: { t2 })
         let recovered = try XCTUnwrap(usage.section(accounts: [a, b], now: t2, timeZone: .current)).section
         XCTAssertEqual(recovered.forAccount(0).windows.map(\.leftPercent), [70, 28])
         XCTAssertNil(recovered.forAccount(0).failureText)
         XCTAssertEqual(recovered.forAccount(1).windows.map(\.leftPercent), [96, 87])
+        XCTAssertEqual(calls.rawEnvs.filter { $0?["CLAUDE_CONFIG_DIR"] == a.configDir }.compactMap { $0?["CLAUDE_CLI_PATH"] },
+                       ["/fixtures/claude-v1", "/fixtures/claude-v2"])
     }
 
     func testLoginStatusDistinguishesLogoutFromWrongProfileAndProbeFailure() {
@@ -183,11 +186,15 @@ final class ClaudeCLIUsageTests: XCTestCase {
 
 actor StubClaudeLogin {
     private let configDir: String?
-    private var selectedStatus: ClaudeCLIUsage.LoginStatus = .loggedIn
+    private var selected = ClaudeCLIUsage.LoginCheck(status: .loggedIn)
 
     init(configDir: String?) { self.configDir = configDir }
-    func set(_ status: ClaudeCLIUsage.LoginStatus) { selectedStatus = status }
-    func status(_ configDir: String?) -> ClaudeCLIUsage.LoginStatus { configDir == self.configDir ? selectedStatus : .loggedIn }
+    func set(_ status: ClaudeCLIUsage.LoginStatus, executable: String? = nil) {
+        selected = ClaudeCLIUsage.LoginCheck(status: status, executable: executable)
+    }
+    func check(_ configDir: String?) -> ClaudeCLIUsage.LoginCheck {
+        configDir == self.configDir ? selected : ClaudeCLIUsage.LoginCheck(status: .loggedIn)
+    }
 }
 
 final class CallLog: @unchecked Sendable {

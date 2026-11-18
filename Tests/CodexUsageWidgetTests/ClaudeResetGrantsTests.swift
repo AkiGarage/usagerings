@@ -318,7 +318,7 @@ final class ClaudeResetGrantsTests: XCTestCase {
             return (Self.grantsBody(), 200, nil)
         }
         let usage = ClaudeCLIUsage(runner: { await runner.run($0, $1) }, grantsClient: client,
-                                   loginProbe: { await login.status($0) })
+                                   loginProbe: { await login.check($0) })
         let t0 = now
         await usage.refreshNow([account], timeZone: .current, now: { t0 })
         let initial = try XCTUnwrap(usage.section(accounts: [account], now: t0, timeZone: .current)).section

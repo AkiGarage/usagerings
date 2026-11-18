@@ -311,12 +311,22 @@ final class ClaudeDesktopResetCacheTests: XCTestCase {
         let empty = ClaudeResetGrantsClient(loadToken: { _ in "test-token" }, transport: { _ in
             (Data(#"{"cedar_ember":{"eligible":true,"grants":[]}}"#.utf8), 200, nil)
         })
-        let usage = ClaudeCLIUsage(runner: { _, _ in Self.cliResult }, grantsClient: empty,
-                                   desktopResets: { _, now in cache.reading(organization: orgB, now: now) })
         let account = [ClaudeCLIAccount(label: "B", configDir: "/tmp/test-claude-b")]
+        let login = StubClaudeLogin(configDir: account[0].configDir)
+        let usage = ClaudeCLIUsage(runner: { _, _ in Self.cliResult }, grantsClient: empty,
+                                   desktopResets: { _, now in cache.reading(organization: orgB, now: now) },
+                                   loginProbe: { await login.check($0) })
         let t0 = now
         await usage.refreshNow(account, timeZone: .current, now: { t0 })
         XCTAssertEqual(card(usage, account, at: t0), "利用可能 0件||")
+
+        await login.set(.unverified)
+        let t1 = t0.addingTimeInterval(1)
+        await usage.refreshNow(account, timeZone: .current, now: { t1 })
+        await login.set(.loggedIn)
+        let t2 = t0.addingTimeInterval(2)
+        await usage.refreshNow(account, timeZone: .current, now: { t2 })
+        XCTAssertEqual(card(usage, account, at: t2), "未確認|取得中|")
     }
 
     /// A unknown (429) and B with two Desktop tickets, through the real hover-card path:

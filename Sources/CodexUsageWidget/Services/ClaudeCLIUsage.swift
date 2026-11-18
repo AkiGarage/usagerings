@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import os
 
 /// One Claude login, identified only by its config directory (never its contents).
@@ -79,10 +80,14 @@ final class ClaudeCLIUsage: Sendable {
 
     typealias Runner = @Sendable (_ arguments: [String], _ environment: [String: String]?) async throws
         -> CodexUsageService.CommandResult
-    enum LoginStatus {
+    enum LoginStatus: Sendable {
         case loggedIn, loggedOut, unverified
     }
-    typealias LoginProbe = @Sendable (_ configDir: String?) async -> LoginStatus
+    struct LoginCheck: Sendable {
+        let status: LoginStatus
+        var executable: String? = nil
+    }
+    typealias LoginProbe = @Sendable (_ configDir: String?) async -> LoginCheck
     /// Reset grants cached by Claude Desktop for the organization of this config dir, or nil.
     typealias DesktopResets = @Sendable (_ configDir: String?, _ now: Date) -> ClaudeDesktopResetCache.Reading?
 
@@ -143,9 +148,9 @@ final class ClaudeCLIUsage: Sendable {
     }
 
     static func live(cliPath: String, timeout: TimeInterval = 60) -> ClaudeCLIUsage {
-        let claudePath = installedClaudePath()
-        return ClaudeCLIUsage(runner: { arguments, environment in
-            guard let claudePath, FileManager.default.isExecutableFile(atPath: claudePath) else {
+        ClaudeCLIUsage(runner: { arguments, environment in
+            guard let claudePath = environment?["CLAUDE_CLI_PATH"],
+                  FileManager.default.isExecutableFile(atPath: claudePath) else {
                 throw CodexUsageError.commandFailed(-1, "Verified Claude CLI unavailable")
             }
             // CodexBar's saved accounts and provider settings must not select a different login.
@@ -156,12 +161,11 @@ final class ClaudeCLIUsage: Sendable {
             try data.write(to: config, options: .atomic)
             var env = profileEnvironment.merging(environment ?? [:]) { _, profile in profile }
             env["CODEXBAR_CONFIG"] = config.path
-            env["CLAUDE_CLI_PATH"] = claudePath
             return try await SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
                                               environment: env)
                 .run(arguments)
         }, failureLog: .live(), grantsClient: .live(), desktopResets: liveDesktopResets,
-           loginProbe: { configDir in await liveLoginStatus(path: claudePath, configDir: configDir) })
+           loginProbe: liveLoginCheck)
     }
 
     // Ignore inherited provider overrides in both probes. The configured profile owns the login.
@@ -173,24 +177,36 @@ final class ClaudeCLIUsage: Sendable {
     }
 
     private static func installedClaudePath() -> String? {
-        // Use the installed CLI directly, avoiding PATH wrappers that choose a different account.
+        // A wrapper at an installation path can choose a different account when started in a PTY.
+        let signature = #"identifier "com.anthropic.claude-code" and anchor apple generic and certificate leaf[subject.OU] = "Q6L2SF6YDW""#
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(signature as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return nil }
         let nativeDirectory = NSHomeDirectory() + "/.local/share/claude/versions"
         let native = ClaudeResetGrantsClient.installedCLIVersion(directory: nativeDirectory).map { nativeDirectory + "/" + $0 }
         let candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] + [native].compactMap { $0 }
-        return candidates.first(where: FileManager.default.isExecutableFile(atPath:)).map {
-            URL(fileURLWithPath: $0).resolvingSymlinksInPath().path
+        for candidate in candidates {
+            let url = URL(fileURLWithPath: candidate).resolvingSymlinksInPath()
+            guard FileManager.default.isExecutableFile(atPath: url.path) else { continue }
+            var code: SecStaticCode?
+            if SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
+               SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess {
+                return url.path
+            }
         }
+        return nil
     }
 
-    private static func liveLoginStatus(path: String?, configDir: String?) async -> LoginStatus {
-        guard let path else { return .unverified }
+    private static let liveLoginCheck: LoginProbe = { configDir in
+        guard let path = installedClaudePath() else { return LoginCheck(status: .unverified) }
         var environment = profileEnvironment
         environment["CLAUDE_CONFIG_DIR"] = configDir ?? ""
         guard let result = try? await SubprocessRunner(executableURL: URL(fileURLWithPath: path),
-                                                      timeout: 5, environment: environment).run(["auth", "status"]) else {
-            return .unverified
+                                                      timeout: 5, environment: environment).run(["auth", "status", "--json"]) else {
+            return LoginCheck(status: .unverified)
         }
-        return loginStatus(result, expectedDir: configDir ?? NSHomeDirectory() + "/.claude")
+        let status = loginStatus(result, expectedDir: configDir ?? NSHomeDirectory() + "/.claude")
+        return LoginCheck(status: status, executable: path)
     }
 
     static func loginStatus(_ result: CodexUsageService.CommandResult, expectedDir: String) -> LoginStatus {
@@ -327,8 +343,10 @@ final class ClaudeCLIUsage: Sendable {
             var reported: AccountID?
             var failure: (reason: UsageFailureReason, exitCode: Int32?, message: String)?
             // Default login: blank value strips any inherited CLAUDE_CONFIG_DIR (see SubprocessRunner).
-            let env = ["CLAUDE_CONFIG_DIR": account.configDir ?? ""]
-            let login = await loginProbe?(account.configDir) ?? .loggedIn
+            var env = ["CLAUDE_CONFIG_DIR": account.configDir ?? ""]
+            let check = await loginProbe?(account.configDir) ?? LoginCheck(status: .loggedIn)
+            let login = check.status
+            env["CLAUDE_CLI_PATH"] = check.executable
             guard !Task.isCancelled, isCurrent(generation) else { return }
             do {
                 if login == .loggedOut {
@@ -367,9 +385,12 @@ final class ClaudeCLIUsage: Sendable {
                 guard s.generation == generation else { return false }
                 var entry = s.entries[Self.key(account)] ?? Entry()
                 entry.attemptedAt = started
-                entry.loginStatus = login
                 if let parsedValue {
-                    if entry.sourceID != reportedValue { entry.grants = nil; entry.oauthLoadedAt = nil }
+                    if entry.sourceID != reportedValue {
+                        entry.grants = nil
+                        // Missing identity is not evidence of a new owner for older Desktop data.
+                        if entry.sourceID != nil, reportedValue != nil { entry.oauthLoadedAt = nil }
+                    }
                     entry.section = parsedValue; entry.fetchedAt = started
                     entry.sourceID = reportedValue
                     entry.maskedEmail = maskedValue
@@ -384,11 +405,14 @@ final class ClaudeCLIUsage: Sendable {
                         entry.sourceID = nil
                         entry.maskedEmail = nil
                         entry.grants = nil
-                        entry.oauthLoadedAt = nil
                         entry.desktopResets = nil
-                        if failureValue.reason == .logout { entry.desktopHighWater = nil }
+                        if failureValue.reason == .logout {
+                            entry.oauthLoadedAt = nil
+                            entry.desktopHighWater = nil
+                        }
                     }
                 }
+                entry.loginStatus = login
                 s.entries[Self.key(account)] = entry
                 return true
             }
