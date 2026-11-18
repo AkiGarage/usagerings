@@ -50,6 +50,60 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertNil(usage.section(accounts: [a], now: later, timeZone: .current, salt: salt))
     }
 
+    func testLoggedOutProfileSkipsUsageAndShowsLoginUntilRecovered() async throws {
+        let calls = CallLog()
+        let login = StubClaudeLogin()
+        let usage = ClaudeCLIUsage(runner: { args, env in
+            calls.append(args, env)
+            let data = env?["CLAUDE_CONFIG_DIR"] == "/h/.claude-a" ? Self.json(30, 72) : Self.json(4, 13)
+            return CodexUsageService.CommandResult(terminationStatus: 0, stdout: data, stderr: Data())
+        }, loginProbe: { dir in await login.status(dir) })
+        let t0 = Date()
+
+        await usage.refreshNow([a], timeZone: .current, now: { t0 })
+        let before = try XCTUnwrap(usage.section(accounts: [a], now: t0, timeZone: .current)).section
+        XCTAssertEqual(before.windows.map(\.leftPercent), [70, 28])
+
+        await login.set(.loggedOut)
+        let t1 = t0.addingTimeInterval(1)
+        await usage.refreshNow([a, b], timeZone: .current, now: { t1 })
+        let section = try XCTUnwrap(usage.section(accounts: [a, b], now: t1, timeZone: .current)).section
+        XCTAssertEqual(calls.envs, [a.configDir, b.configDir])
+        XCTAssertTrue(section.forAccount(0).windows.isEmpty)
+        XCTAssertEqual(section.forAccount(0).accounts.first?.failureReason, .logout)
+        XCTAssertEqual(section.forAccount(1).windows.map(\.leftPercent), [96, 87])
+        let snapshot = MultiUsageSnapshot(sections: [section], codexSnapshot: nil, updatedAt: t1)
+        let bars = CollapsedUsageBar.bars(for: snapshot, blockedPreview: nil)
+        let aBar = try XCTUnwrap(bars.first { $0.id == "claude-0" })
+        XCTAssertTrue(aBar.needsLogin)
+        XCTAssertTrue(CollapsedUsageBar.detailText(for: aBar).contains("ログインが必要"))
+        XCTAssertEqual(bars.first { $0.id == "claude-1" }?.needsLogin, false)
+
+        await usage.refreshNow([a], timeZone: .current, now: { t1 })
+        let onlyA = try XCTUnwrap(usage.section(accounts: [a], now: t1, timeZone: .current)).section
+        XCTAssertEqual(onlyA.accounts.first?.failureReason, .logout, "No other accounts or quota samples are required")
+
+        await login.set(.loggedIn)
+        let t2 = t1.addingTimeInterval(1)
+        await usage.refreshNow([a, b], timeZone: .current, now: { t2 })
+        let recovered = try XCTUnwrap(usage.section(accounts: [a, b], now: t2, timeZone: .current)).section
+        XCTAssertEqual(recovered.forAccount(0).windows.map(\.leftPercent), [70, 28])
+        XCTAssertNil(recovered.forAccount(0).failureText)
+        XCTAssertEqual(recovered.forAccount(1).windows.map(\.leftPercent), [96, 87])
+    }
+
+    func testLoginStatusDistinguishesLogoutFromWrongProfileAndProbeFailure() {
+        func parse(_ json: String, code: Int32) -> ClaudeCLIUsage.LoginStatus {
+            ClaudeCLIUsage.loginStatus(.init(terminationStatus: code, stdout: Data(json.utf8), stderr: Data()),
+                                       expectedDir: a.configDir!)
+        }
+        XCTAssertEqual(parse(#"{"loggedIn":false,"configDirectory":"/h/.claude-a"}"#, code: 1), .loggedOut)
+        XCTAssertEqual(parse(#"{"loggedIn":true,"authMethod":"claude.ai","configDirectory":"/h/.claude-a"}"#, code: 0), .loggedIn)
+        XCTAssertEqual(parse(#"{"loggedIn":true,"authMethod":"claude.ai","configDirectory":"/h/.claude-b"}"#, code: 0), .unverified)
+        XCTAssertEqual(parse(#"{"loggedIn":true,"authMethod":"api_key"}"#, code: 0), .unverified)
+        XCTAssertEqual(parse("command failed", code: 1), .unverified)
+    }
+
     func testDefaultAccountHasNoEnvOverride() async {
         let calls = CallLog()
         let usage = cli(calls)
@@ -124,6 +178,12 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertTrue(Acknowledgements.codexBarLicense.contains("Copyright (c) 2026 Peter Steinberger"))
         XCTAssertTrue(Acknowledgements.codexBarLicense.contains("The above copyright notice and this permission notice shall be included"))
     }
+}
+
+private actor StubClaudeLogin {
+    private var a: ClaudeCLIUsage.LoginStatus = .loggedIn
+    func set(_ status: ClaudeCLIUsage.LoginStatus) { a = status }
+    func status(_ configDir: String?) -> ClaudeCLIUsage.LoginStatus { configDir == "/h/.claude-a" ? a : .loggedIn }
 }
 
 final class CallLog: @unchecked Sendable {

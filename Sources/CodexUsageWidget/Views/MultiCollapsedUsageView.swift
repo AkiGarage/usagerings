@@ -17,6 +17,7 @@ struct CollapsedUsageBar: Identifiable {
     var blockedSymbolName: String = Self.blockedSymbol
     var stats: [ProviderStat] = []
     var failureText: String? = nil
+    var needsLogin = false
     var provider: ProviderID? = nil
     var accountIndex: Int? = nil
     var accountID: AccountID? = nil
@@ -249,6 +250,7 @@ struct CollapsedUsageBar: Identifiable {
                     return section.accounts.count == 1
                 }
                 bar.isStale = section.isStale || (account?.isStale ?? false)
+                bar.needsLogin = provider == .claude && account?.failureReason == .logout
                 if bar.isStale { bar.failureText = staleFailureText(account?.failureText ?? section.failureText) }
             }
             if let label = accountPreferences.label(for: bar.accountID) { bar.title += " · \(label)" }
@@ -613,6 +615,11 @@ struct TabG1Gauge: View {
                     .font(.system(size: diameter * 0.26, weight: .semibold))
                     .foregroundStyle(.secondary).opacity(0.65)
                     .offset(y: -diameter * 0.2)
+            } else if bar.needsLogin {
+                Image(systemName: "person.crop.circle.badge.exclamationmark")
+                    .font(.system(size: diameter * 0.45, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             } else {
                 Text(primaryText)
                     .font(.system(size: fontSize, weight: .bold))

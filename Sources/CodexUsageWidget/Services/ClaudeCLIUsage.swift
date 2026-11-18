@@ -79,6 +79,10 @@ final class ClaudeCLIUsage: Sendable {
 
     typealias Runner = @Sendable (_ arguments: [String], _ environment: [String: String]?) async throws
         -> CodexUsageService.CommandResult
+    enum LoginStatus {
+        case loggedIn, loggedOut, unverified
+    }
+    typealias LoginProbe = @Sendable (_ configDir: String?) async -> LoginStatus
     /// Reset grants cached by Claude Desktop for the organization of this config dir, or nil.
     typealias DesktopResets = @Sendable (_ configDir: String?, _ now: Date) -> ClaudeDesktopResetCache.Reading?
 
@@ -89,6 +93,7 @@ final class ClaudeCLIUsage: Sendable {
         /// Identity CodexBar reported for this folder (salted digest only).
         var sourceID: AccountID?
         var maskedEmail: String?
+        var loginStatus: LoginStatus?
         var failureReason: UsageFailureReason?
         var failureMessage: String?
         var grants: ClaudeResetGrantsOutcome?
@@ -115,6 +120,7 @@ final class ClaudeCLIUsage: Sendable {
     }
 
     private let runner: Runner
+    private let loginProbe: LoginProbe?
     private let refreshInterval: TimeInterval
     private let maxCacheAge: TimeInterval
     private let failureLog: FetchFailureLog?
@@ -126,8 +132,9 @@ final class ClaudeCLIUsage: Sendable {
 
     init(runner: @escaping Runner, refreshInterval: TimeInterval = 120, maxCacheAge: TimeInterval = 600,
          failureLog: FetchFailureLog? = nil, grantsClient: ClaudeResetGrantsClient? = nil,
-         desktopResets: DesktopResets? = nil) {
+         desktopResets: DesktopResets? = nil, loginProbe: LoginProbe? = nil) {
         self.runner = runner
+        self.loginProbe = loginProbe
         self.desktopResets = desktopResets
         self.refreshInterval = refreshInterval
         self.maxCacheAge = maxCacheAge
@@ -137,9 +144,61 @@ final class ClaudeCLIUsage: Sendable {
 
     static func live(cliPath: String, timeout: TimeInterval = 60) -> ClaudeCLIUsage {
         ClaudeCLIUsage(runner: { arguments, environment in
-            try await SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
-                                       environment: environment).run(arguments)
-        }, failureLog: .live(), grantsClient: .live(), desktopResets: liveDesktopResets)
+            // CodexBar's saved accounts and provider settings must not select a different login.
+            guard let config = PrivateTempPaths.file("claude-codexbar-cli.json") else {
+                throw CodexUsageError.commandFailed(-1, "Claude CLI config unavailable")
+            }
+            let data = Data(#"{"version":1,"providers":[{"id":"claude","enabled":true,"source":"cli"}]}"#.utf8)
+            try data.write(to: config, options: .atomic)
+            var env = profileEnvironment.merging(environment ?? [:]) { _, profile in profile }
+            env["CODEXBAR_CONFIG"] = config.path
+            return try await SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
+                                              environment: env)
+                .run(arguments)
+        }, failureLog: .live(), grantsClient: .live(), desktopResets: liveDesktopResets,
+           loginProbe: liveLoginStatus)
+    }
+
+    // Ignore inherited provider overrides in both probes. The configured profile owns the login.
+    private static var profileEnvironment: [String: String] {
+        let overrides = ProcessInfo.processInfo.environment.keys.filter {
+            $0.hasPrefix("ANTHROPIC_") || $0.hasPrefix("CLAUDE_CODE_")
+        }
+        return Dictionary(uniqueKeysWithValues: overrides.map { ($0, "") })
+    }
+
+    private static let liveLoginStatus: LoginProbe = { configDir in
+        // Use the installed CLI directly, avoiding PATH wrappers that choose a different account.
+        let nativeDirectory = NSHomeDirectory() + "/.local/share/claude/versions"
+        let native = ClaudeResetGrantsClient.installedCLIVersion(directory: nativeDirectory).map { nativeDirectory + "/" + $0 }
+        let candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] + [native].compactMap { $0 }
+        guard let path = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else { return .unverified }
+        var environment = profileEnvironment
+        environment["CLAUDE_CONFIG_DIR"] = configDir ?? ""
+        guard let result = try? await SubprocessRunner(executableURL: URL(fileURLWithPath: path),
+                                                      timeout: 5, environment: environment).run(["auth", "status"]) else {
+            return .unverified
+        }
+        return loginStatus(result, expectedDir: configDir ?? NSHomeDirectory() + "/.claude")
+    }
+
+    static func loginStatus(_ result: CodexUsageService.CommandResult, expectedDir: String) -> LoginStatus {
+        struct Status: Decodable {
+            let loggedIn: Bool
+            let configDirectory: String?
+            let authMethod: String?
+        }
+        guard !result.timedOut, let status = try? JSONDecoder().decode(Status.self, from: result.stdout) else {
+            return .unverified
+        }
+        // Older official CLIs omit configDirectory. They still receive the explicit profile environment.
+        if let reported = status.configDirectory,
+           URL(fileURLWithPath: reported).standardizedFileURL != URL(fileURLWithPath: expectedDir).standardizedFileURL {
+            return .unverified
+        }
+        if !status.loggedIn, result.terminationStatus == 1 { return .loggedOut }
+        if status.loggedIn, result.terminationStatus == 0, status.authMethod == "claude.ai" { return .loggedIn }
+        return .unverified
     }
 
     static let liveDesktopResets: DesktopResets = { configDir, now in
@@ -258,22 +317,30 @@ final class ClaudeCLIUsage: Sendable {
             var failure: (reason: UsageFailureReason, exitCode: Int32?, message: String)?
             // Default login: blank value strips any inherited CLAUDE_CONFIG_DIR (see SubprocessRunner).
             let env = ["CLAUDE_CONFIG_DIR": account.configDir ?? ""]
+            let login = await loginProbe?(account.configDir) ?? .loggedIn
+            guard !Task.isCancelled, isCurrent(generation) else { return }
             do {
-                let result = try await runner(Self.arguments, env)
-                if result.timedOut {
-                    failure = (.timeout, nil, "CodexBarCLI timed out")
-                } else if result.terminationStatus != 0 {
-                    let error = CodexUsageError.commandFailure(
-                        exitCode: result.terminationStatus, stdout: result.stdout, stderr: result.stderr, provider: .claude)
-                    failure = (MultiUsageService.isLogout(stdout: result.stdout, stderr: result.stderr) ? .logout : .providerError,
-                               result.terminationStatus, error.localizedDescription)
-                } else if let section = try? MultiProviderParser.parse(result.stdout, provider: .claude, now: started, timeZone: timeZone),
-                          section.failureText == nil, !section.windows.isEmpty {
-                    parsed = section
-                    masked = Self.maskedEmail(result.stdout)
-                    reported = Self.reportedID(result.stdout)
+                if login == .loggedOut {
+                    failure = (.logout, nil, "Claude Code profile is logged out")
+                } else if login == .unverified {
+                    failure = (.other, nil, "Claude Code profile could not be verified")
                 } else {
-                    failure = (.providerError, nil, "Claude usage unreadable")
+                    let result = try await runner(Self.arguments, env)
+                    if result.timedOut {
+                        failure = (.timeout, nil, "CodexBarCLI timed out")
+                    } else if result.terminationStatus != 0 {
+                        let error = CodexUsageError.commandFailure(
+                            exitCode: result.terminationStatus, stdout: result.stdout, stderr: result.stderr, provider: .claude)
+                        failure = (MultiUsageService.isLogout(stdout: result.stdout, stderr: result.stderr) ? .logout : .providerError,
+                                   result.terminationStatus, error.localizedDescription)
+                    } else if let section = try? MultiProviderParser.parse(result.stdout, provider: .claude, now: started, timeZone: timeZone),
+                              section.failureText == nil, !section.windows.isEmpty {
+                        parsed = section
+                        masked = Self.maskedEmail(result.stdout)
+                        reported = Self.reportedID(result.stdout)
+                    } else {
+                        failure = (.providerError, nil, "Claude usage unreadable")
+                    }
                 }
             } catch {
                 failure = (MultiUsageService.failureReason(for: error), nil, error.localizedDescription)
@@ -288,6 +355,7 @@ final class ClaudeCLIUsage: Sendable {
                 guard s.generation == generation else { return false }
                 var entry = s.entries[Self.key(account)] ?? Entry()
                 entry.attemptedAt = started
+                entry.loginStatus = login
                 if let parsedValue {
                     if entry.sourceID != reportedValue { entry.grants = nil; entry.oauthLoadedAt = nil }
                     entry.section = parsedValue; entry.fetchedAt = started
@@ -298,11 +366,15 @@ final class ClaudeCLIUsage: Sendable {
                 } else if let failureValue {
                     entry.failureReason = failureValue.reason
                     entry.failureMessage = failureValue.message
+                    if login != .loggedIn || failureValue.reason == .logout {
+                        entry.section = nil
+                        entry.fetchedAt = nil
+                        entry.sourceID = nil
+                        entry.maskedEmail = nil
+                    }
                     if failureValue.reason == .logout {
                         entry.grants = nil
                         entry.oauthLoadedAt = nil
-                        entry.section = nil
-                        entry.fetchedAt = nil
                     }
                 }
                 s.entries[Self.key(account)] = entry
@@ -370,6 +442,7 @@ final class ClaudeCLIUsage: Sendable {
         var combined = ProviderSection(provider: .claude, windows: [], stats: [], failureText: nil)
         var anyValue = false
         var anyTicketData = false
+        var anyLoginFailure = false
         var anyCached = false
         var maskedEmails: [Int: String] = [:]
         for (index, account) in accounts.enumerated() {
@@ -389,7 +462,16 @@ final class ClaudeCLIUsage: Sendable {
             let age = entry?.fetchedAt.map { now.timeIntervalSince($0) } ?? .infinity
             guard let cached = entry?.section, age < maxCacheAge else {
                 let neverAttempted = entry?.attemptedAt == nil
-                let text = neverAttempted ? "取得中…（\(account.displayDir)）" : "取得失敗（\(account.displayDir)）"
+                let text: String
+                switch entry?.loginStatus {
+                case .loggedOut:
+                    anyLoginFailure = true
+                    text = "Claude Code のログインが必要（\(account.displayDir)）"
+                case .unverified:
+                    anyLoginFailure = true
+                    text = "Claude Code のログイン状態を確認できません（\(account.displayDir)）"
+                default: text = neverAttempted ? "取得中…（\(account.displayDir)）" : "取得失敗（\(account.displayDir)）"
+                }
                 combined.accounts.append(ProviderAccount(
                     index: index,
                     failureText: text,
@@ -415,7 +497,7 @@ final class ClaudeCLIUsage: Sendable {
             combined.accounts.append(item)
             if let masked = entry?.maskedEmail { maskedEmails[index] = masked }
         }
-        guard anyValue || anyTicketData else { return nil }
+        guard anyValue || anyTicketData || anyLoginFailure else { return nil }
         combined.accountInventoryComplete = true
         return Result(section: combined, fromCache: anyCached, maskedEmails: maskedEmails)
     }
