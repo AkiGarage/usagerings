@@ -143,7 +143,11 @@ final class ClaudeCLIUsage: Sendable {
     }
 
     static func live(cliPath: String, timeout: TimeInterval = 60) -> ClaudeCLIUsage {
-        ClaudeCLIUsage(runner: { arguments, environment in
+        let claudePath = installedClaudePath()
+        return ClaudeCLIUsage(runner: { arguments, environment in
+            guard let claudePath, FileManager.default.isExecutableFile(atPath: claudePath) else {
+                throw CodexUsageError.commandFailed(-1, "Verified Claude CLI unavailable")
+            }
             // CodexBar's saved accounts and provider settings must not select a different login.
             guard let config = PrivateTempPaths.file("claude-codexbar-cli.json") else {
                 throw CodexUsageError.commandFailed(-1, "Claude CLI config unavailable")
@@ -152,11 +156,12 @@ final class ClaudeCLIUsage: Sendable {
             try data.write(to: config, options: .atomic)
             var env = profileEnvironment.merging(environment ?? [:]) { _, profile in profile }
             env["CODEXBAR_CONFIG"] = config.path
+            env["CLAUDE_CLI_PATH"] = claudePath
             return try await SubprocessRunner(executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
                                               environment: env)
                 .run(arguments)
         }, failureLog: .live(), grantsClient: .live(), desktopResets: liveDesktopResets,
-           loginProbe: liveLoginStatus)
+           loginProbe: { configDir in await liveLoginStatus(path: claudePath, configDir: configDir) })
     }
 
     // Ignore inherited provider overrides in both probes. The configured profile owns the login.
@@ -167,12 +172,18 @@ final class ClaudeCLIUsage: Sendable {
         return Dictionary(uniqueKeysWithValues: overrides.map { ($0, "") })
     }
 
-    private static let liveLoginStatus: LoginProbe = { configDir in
+    private static func installedClaudePath() -> String? {
         // Use the installed CLI directly, avoiding PATH wrappers that choose a different account.
         let nativeDirectory = NSHomeDirectory() + "/.local/share/claude/versions"
         let native = ClaudeResetGrantsClient.installedCLIVersion(directory: nativeDirectory).map { nativeDirectory + "/" + $0 }
         let candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] + [native].compactMap { $0 }
-        guard let path = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else { return .unverified }
+        return candidates.first(where: FileManager.default.isExecutableFile(atPath:)).map {
+            URL(fileURLWithPath: $0).resolvingSymlinksInPath().path
+        }
+    }
+
+    private static func liveLoginStatus(path: String?, configDir: String?) async -> LoginStatus {
+        guard let path else { return .unverified }
         var environment = profileEnvironment
         environment["CLAUDE_CONFIG_DIR"] = configDir ?? ""
         guard let result = try? await SubprocessRunner(executableURL: URL(fileURLWithPath: path),
@@ -351,6 +362,7 @@ final class ClaudeCLIUsage: Sendable {
             }
             let parsedValue = parsed, maskedValue = masked, reportedValue = reported
             let failureValue = failure
+            let profileUnavailable = login != .loggedIn || failureValue?.reason == .logout
             let current = state.withLock { s -> Bool in
                 guard s.generation == generation else { return false }
                 var entry = s.entries[Self.key(account)] ?? Entry()
@@ -366,25 +378,26 @@ final class ClaudeCLIUsage: Sendable {
                 } else if let failureValue {
                     entry.failureReason = failureValue.reason
                     entry.failureMessage = failureValue.message
-                    if login != .loggedIn || failureValue.reason == .logout {
+                    if profileUnavailable {
                         entry.section = nil
                         entry.fetchedAt = nil
                         entry.sourceID = nil
                         entry.maskedEmail = nil
-                    }
-                    if failureValue.reason == .logout {
                         entry.grants = nil
                         entry.oauthLoadedAt = nil
+                        entry.desktopResets = nil
+                        if failureValue.reason == .logout { entry.desktopHighWater = nil }
                     }
                 }
                 s.entries[Self.key(account)] = entry
                 return true
             }
             guard current else { return }
+            guard !profileUnavailable else { continue }
             if let desktopResets {
                 // Local and bounded (at most two cache files), so read every cycle. The result
                 // replaces the last one, nil included: a vanished entry must not leave old tickets up.
-                let reading = failureValue?.reason == .logout ? nil : desktopResets(account.configDir, now())
+                let reading = desktopResets(account.configDir, now())
                 let stored = state.withLock { s -> Bool in
                     guard s.generation == generation else { return false }
                     var entry = s.entries[Self.key(account)] ?? Entry()
@@ -396,14 +409,13 @@ final class ClaudeCLIUsage: Sendable {
                         entry.desktopHighWater = (reading.organization, reading.observedAt)
                     } else {
                         entry.desktopResets = nil
-                        if failureValue?.reason == .logout { entry.desktopHighWater = nil }
                     }
                     s.entries[Self.key(account)] = entry
                     return true
                 }
                 guard stored else { return }
             }
-            guard failureValue?.reason != .logout, let grantsClient else { continue }
+            guard let grantsClient else { continue }
             let grantsStarted = now()
             let grantsDue = state.withLock { s -> Bool in
                 guard s.generation == generation else { return false }

@@ -52,7 +52,7 @@ final class ClaudeCLIUsageTests: XCTestCase {
 
     func testLoggedOutProfileSkipsUsageAndShowsLoginUntilRecovered() async throws {
         let calls = CallLog()
-        let login = StubClaudeLogin()
+        let login = StubClaudeLogin(configDir: a.configDir)
         let usage = ClaudeCLIUsage(runner: { args, env in
             calls.append(args, env)
             let data = env?["CLAUDE_CONFIG_DIR"] == "/h/.claude-a" ? Self.json(30, 72) : Self.json(4, 13)
@@ -82,6 +82,7 @@ final class ClaudeCLIUsageTests: XCTestCase {
         await usage.refreshNow([a], timeZone: .current, now: { t1 })
         let onlyA = try XCTUnwrap(usage.section(accounts: [a], now: t1, timeZone: .current)).section
         XCTAssertEqual(onlyA.accounts.first?.failureReason, .logout, "No other accounts or quota samples are required")
+        XCTAssertTrue(ServiceRowModel.rows(for: onlyA).first?.failureText?.contains("ログインが必要") == true)
 
         await login.set(.loggedIn)
         let t2 = t1.addingTimeInterval(1)
@@ -180,10 +181,13 @@ final class ClaudeCLIUsageTests: XCTestCase {
     }
 }
 
-private actor StubClaudeLogin {
-    private var a: ClaudeCLIUsage.LoginStatus = .loggedIn
-    func set(_ status: ClaudeCLIUsage.LoginStatus) { a = status }
-    func status(_ configDir: String?) -> ClaudeCLIUsage.LoginStatus { configDir == "/h/.claude-a" ? a : .loggedIn }
+actor StubClaudeLogin {
+    private let configDir: String?
+    private var selectedStatus: ClaudeCLIUsage.LoginStatus = .loggedIn
+
+    init(configDir: String?) { self.configDir = configDir }
+    func set(_ status: ClaudeCLIUsage.LoginStatus) { selectedStatus = status }
+    func status(_ configDir: String?) -> ClaudeCLIUsage.LoginStatus { configDir == self.configDir ? selectedStatus : .loggedIn }
 }
 
 final class CallLog: @unchecked Sendable {

@@ -253,6 +253,7 @@ struct ServiceRowModel: Identifiable {
         }
         if rows[0].ticketTitles.isEmpty { rows[0].ticketExpiries.sort() }
         rows[0].failureText = section.failureText
+            ?? (provider == .claude && section.accounts.count == 1 ? section.accounts[0].failureText : nil)
         if section.isStale || (section.accounts.count == 1 && section.accounts[0].isStale) {
             for i in rows.indices {
                 rows[i].failureText = staleFailureText(section.failureText ?? section.accounts.first?.failureText)

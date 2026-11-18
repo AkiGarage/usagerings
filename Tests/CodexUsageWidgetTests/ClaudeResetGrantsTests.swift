@@ -309,6 +309,43 @@ final class ClaudeResetGrantsTests: XCTestCase {
         XCTAssertEqual(calls.count, 2)
     }
 
+    func testUnverifiedProfileDiscardsOldTicketsAndPreservesCooldown() async throws {
+        let calls = GrantCallLog(), runner = CLIStub()
+        let account = ClaudeCLIAccount(label: "A", configDir: nil)
+        let login = StubClaudeLogin(configDir: account.configDir)
+        let client = tokenClient { request in
+            calls.record(request)
+            return (Self.grantsBody(), 200, nil)
+        }
+        let usage = ClaudeCLIUsage(runner: { await runner.run($0, $1) }, grantsClient: client,
+                                   loginProbe: { await login.status($0) })
+        let t0 = now
+        await usage.refreshNow([account], timeZone: .current, now: { t0 })
+        let initial = try XCTUnwrap(usage.section(accounts: [account], now: t0, timeZone: .current)).section
+        XCTAssertTrue(initial.stats.contains { $0.title == "Reset ticket" })
+
+        await login.set(.unverified)
+        let t1 = t0.addingTimeInterval(1)
+        await usage.refreshNow([account], timeZone: .current, now: { t1 })
+        let unverified = try XCTUnwrap(usage.section(accounts: [account], now: t1, timeZone: .current)).section
+        XCTAssertTrue(unverified.windows.isEmpty)
+        XCTAssertFalse(unverified.stats.contains { $0.title == "Reset ticket" })
+
+        await login.set(.loggedIn)
+        let t2 = t0.addingTimeInterval(2)
+        await usage.refreshNow([account], timeZone: .current, now: { t2 })
+        let recovered = try XCTUnwrap(usage.section(accounts: [account], now: t2, timeZone: .current)).section
+        XCTAssertFalse(recovered.windows.isEmpty)
+        XCTAssertFalse(recovered.stats.contains { $0.title == "Reset ticket" })
+        XCTAssertEqual(calls.count, 1)
+
+        let due = t0.addingTimeInterval(ClaudeCLIUsage.grantsRefreshInterval + 1)
+        await usage.refreshNow([account], timeZone: .current, now: { due })
+        let refreshed = try XCTUnwrap(usage.section(accounts: [account], now: due, timeZone: .current)).section
+        XCTAssertTrue(refreshed.stats.contains { $0.title == "Reset ticket" })
+        XCTAssertEqual(calls.count, 2)
+    }
+
     func testStatsExpandUsableGrantsAndSkipPausedExpiredAndEmptyOnes() {
         let calendar = tokyoCalendar()
         let grants = [
