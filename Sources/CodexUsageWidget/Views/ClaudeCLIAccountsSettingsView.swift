@@ -32,7 +32,7 @@ struct ClaudeCLIAccountsSettingsView: View {
                 if invalid { Text("「名前 = フォルダ」の形でない行があります（未保存）").font(.caption).foregroundStyle(.red) }
                 if saved { Text("次の更新で反映").font(.caption).foregroundStyle(.secondary) }
             }
-            Text("1行に「名前 = フォルダ」。各フォルダを CLAUDE_CONFIG_DIR にして CodexBar CLI で使用量を読みます（中身は読みません）。~/.claude は通常のログインです。上から A, B…の順に表示します。")
+            Text("1行に「名前 = フォルダ」。各フォルダを CLAUDE_CONFIG_DIR にして Claude Code のログイン状態を確認し、CodexBar CLI で使用量を読みます。~/.claude は通常のログインです。上から A, B…の順に表示します。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
