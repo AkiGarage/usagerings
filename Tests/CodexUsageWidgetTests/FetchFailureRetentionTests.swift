@@ -178,7 +178,7 @@ final class FetchFailureRetentionTests: XCTestCase {
         let loggedOut = usage.section(accounts: [runner.accountA, runner.accountB], now: t1.addingTimeInterval(1), timeZone: utc)
         XCTAssertEqual(loggedOut?.section.forAccount(0).windows.isEmpty, true, "logged-out cache must be suppressed at once")
         XCTAssertEqual(loggedOut?.section.accounts.first?.failureReason, .logout)
-        XCTAssertEqual(loggedOut?.section.accounts.first?.failureText?.hasPrefix("取得失敗"), true)
+        XCTAssertEqual(loggedOut?.section.accounts.first?.failureText?.contains("通常ログインが必要"), true)
         XCTAssertEqual(loggedOut?.section.forAccount(1).windows.isEmpty, false)
     }
 
