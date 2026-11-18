@@ -360,6 +360,8 @@ final class MultiUsageStore: ObservableObject {
                 }
                 return result
             }
+            // ClaudeCLIUsage already retains per-profile readings for the lifetime of its cache.
+            guard section.provider != .claude else { return result }
             for i in result.accounts.indices {
                 let account = result.accounts[i]
                 guard account.failureReason?.isTransient == true, let id = account.id,

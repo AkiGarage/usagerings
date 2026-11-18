@@ -525,7 +525,13 @@ final class ClaudeCLIUsage: Sendable {
             if let masked = entry?.maskedEmail { maskedEmails[index] = masked }
         }
         guard anyValue || anyTicketData || anyFailure else { return nil }
-        combined.accountInventoryComplete = true
+        combined.accountInventoryComplete = anyValue || anyTicketData
+        if !anyValue && !anyTicketData {
+            // Cloud sync needs a provider failure to mark previously published windows unavailable.
+            combined.failureText = accounts.count == 1
+                ? combined.accounts.first?.failureText
+                : "Claude の使用量を取得できません"
+        }
         return Result(section: combined, fromCache: anyCached, maskedEmails: maskedEmails)
     }
 

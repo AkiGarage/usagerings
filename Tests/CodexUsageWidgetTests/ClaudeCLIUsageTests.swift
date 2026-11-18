@@ -108,6 +108,8 @@ final class ClaudeCLIUsageTests: XCTestCase {
         await usage.refreshNow([a, b], timeZone: .current, now: { now })
         let section = try XCTUnwrap(usage.section(accounts: [a, b], now: now, timeZone: .current)).section
         XCTAssertTrue(section.windows.isEmpty)
+        XCTAssertEqual(section.accountInventoryComplete, false)
+        XCTAssertNotNil(section.failureText, "Cloud sync must mark the previous windows unavailable")
         XCTAssertEqual(section.accounts.map(\.failureReason), [.timeout, .providerError])
         XCTAssertTrue(section.accounts[0].failureText?.contains("タイムアウト") == true)
         XCTAssertTrue(section.accounts[1].failureText?.contains("CodexBar CLI") == true)
