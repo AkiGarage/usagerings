@@ -20,7 +20,7 @@ python3 -B script/verify_card.py \
 2. After the change, run the script directly once. It builds and writes `ax.json`.
 3. Run `aki-mode check --check <ID>`. It re-proves the card live against that
    evidence; the closeout's file-size limit usually stops `swift build` there, and
-   the script then drives the binary only if the sources still match `ax.json`.
+   the script then drives the binary only if the sources and the binary's sha256 still match `ax.json`.
 4. After any further source edit, remove `build/qa/<ID>` and repeat 2–3.
 
 ## What it does
@@ -32,7 +32,7 @@ python3 -B script/verify_card.py \
    `Sources/CodexUsageWidget/App/DemoMode.swift`) and the stable fictional
    fixture (`UsageRingsDemoFixture.swift`); the installed app under
    `/Users/ay/Applications/UsageRings.app` is never launched, read, or killed.
-3. Waits up to 30 s for the card: the card lives in an `NSPanel` at
+3. Waits up to 60 s for the card (the first launch after a rebuild can exceed 30 s): the card lives in an `NSPanel` at
    `NSWindow.Level.statusBar` (CG layer 25), which `cua-driver list_windows`
    (layer-0 only) never reports, so the script enumerates the process's
    windows via CoreGraphics `CGWindowListCopyWindowInfo` (ctypes, stdlib) and

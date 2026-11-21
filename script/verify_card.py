@@ -31,7 +31,7 @@ import time
 # (RingDetailCardModel.make in Sources/CodexUsageWidget/Views/RingDetailCard.swift).
 # No other window of the app exposes this marker.
 CARD_MARKER = "の詳細"
-CARD_WAIT_SECONDS = 30
+CARD_WAIT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 1.0
 AX_WALK_TIMEOUT_MS = 5000
 
@@ -299,10 +299,13 @@ def main():
     ax_path = os.path.join(artifact_dir, "ax.json")
     current_digest = source_inputs_digest(root)
     retained_digest = None
+    retained_binary = None
     if os.path.exists(ax_path):
         try:
             with open(ax_path, encoding="utf-8") as handle:
-                retained_digest = json.load(handle).get("inputs_digest")
+                retained = json.load(handle)
+            retained_digest = retained.get("inputs_digest")
+            retained_binary = retained.get("binary_sha256")
         except (OSError, json.JSONDecodeError) as error:
             log(f"cannot read retained evidence {ax_path}: {error}")
         if retained_digest != current_digest:
@@ -332,14 +335,15 @@ def main():
     launched = False
     if build.returncode != 0:
         log(f"swift build failed (rc={build.returncode}):\n{build.stderr[-800:]}")
-        if retained_digest == current_digest and os.path.isfile(binary):
+        if (retained_digest == current_digest and os.path.isfile(binary)
+                and retained_binary and sha256_of(binary) == retained_binary):
             # The closeout runner caps RLIMIT_FSIZE at 2MiB; whenever SwiftPM
             # must refresh its multi-MB SDK caches the build cannot run there.
             # The retained evidence digests the exact source tree this binary
             # was built from, so driving the existing binary stays valid.
             log("build could not run under this environment's file-size "
-                "limit; source inputs match the evidence digest, continuing "
-                "with the existing binary")
+                "limit; sources and the binary match the evidence (inputs "
+                "digest and binary sha256), continuing with that binary")
             launched = True
         else:
             return fail_build()
@@ -436,6 +440,9 @@ def main():
                     "expect_results": {text: (text in "\n".join(card_texts))
                                        for text in args.expect},
                     "inputs_digest": current_digest,
+                    # The binary this capture drove, so a later run that cannot
+                    # build only reuses that exact build (not one from other sources).
+                    "binary_sha256": sha256_of(binary),
                     "tree_markdown": card_markdown,
                     "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 }
