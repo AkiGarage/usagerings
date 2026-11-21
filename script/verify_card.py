@@ -312,7 +312,9 @@ def main():
             result["unresolved"].append(
                 "retained evidence has no inputs digest"
                 if retained_digest is None else
-                "source inputs changed since the evidence run was captured")
+                "source inputs changed since the evidence run was captured: "
+                "remove %s and run this script directly once (it builds and "
+                "captures), then rerun the check" % repo_relative(artifact_dir, root))
             result["cleanup"] = "PASS"  # nothing was launched
             print(json.dumps(result, ensure_ascii=False))
             return 1

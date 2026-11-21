@@ -12,6 +12,17 @@ python3 -B script/verify_card.py \
   --artifact-dir build/qa/ID
 ```
 
+## Use in a coding plan
+
+1. Freeze the plan (`aki-mode plan`) before editing. Its `interaction` check runs this
+   script; `artifacts` is `build/qa/<ID>/ax.json`; `dependencies` list the changed
+   sources and `script/verify_card.py`.
+2. After the change, run the script directly once. It builds and writes `ax.json`.
+3. Run `aki-mode check --check <ID>`. It re-proves the card live against that
+   evidence; the closeout's file-size limit usually stops `swift build` there, and
+   the script then drives the binary only if the sources still match `ax.json`.
+4. After any further source edit, remove `build/qa/<ID>` and repeat 2–3.
+
 ## What it does
 
 1. `swift build --product CodexUsageWidget`.
