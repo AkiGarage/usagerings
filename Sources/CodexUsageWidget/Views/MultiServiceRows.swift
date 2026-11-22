@@ -470,10 +470,10 @@ struct ServiceRowView: View {
                     HStack(spacing: 6) {
                         Text(note).font(.system(size: 11)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        if note == "Gemini読み取り: ウィンドウなし" {
-                            Button("作り直す") { NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil) }
+                        if note == "Gemini読み取り: 自動復旧待ち" || note == "Gemini読み取り: ウィンドウなし" {
+                            Button("再試行") { NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil) }
                                 .controlSize(.mini)
-                                .help("UsageRings専用のGemini読み取りウィンドウを非表示で作り直します（Chromeは前面に出ず、他のタブには触れません）")
+                                .help("UsageRings専用のGeminiバックグラウンド読み取りを今すぐ再試行します（Chromeは前面に出ず、他のタブには触れません）")
                         }
                     }
                 }

@@ -408,10 +408,10 @@ private struct MultiSectionView: View {
                         .monospacedDigit()
                         .foregroundStyle(isInformational ? .secondary : .primary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if stat.title == "Gemini読み取り" && stat.valueText == "ウィンドウなし" {
-                        Button("作り直す") { NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil) }
+                    if stat.title == "Gemini読み取り" && (stat.valueText == "自動復旧待ち" || stat.valueText == "ウィンドウなし") {
+                        Button("再試行") { NotificationCenter.default.post(name: GeminiDedicatedWindow.recreateRequest, object: nil) }
                             .controlSize(.small)
-                            .help("UsageRings専用のGemini読み取りウィンドウを非表示で作り直します（Chromeは前面に出ず、他のタブには触れません）")
+                            .help("UsageRings専用のGeminiバックグラウンド読み取りを今すぐ再試行します（Chromeは前面に出ず、他のタブには触れません）")
                     }
                 }
                 .font(.system(size: 12))

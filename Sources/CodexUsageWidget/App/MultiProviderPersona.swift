@@ -55,6 +55,9 @@ final class MultiProviderPersona: AppPersona {
         Task { @MainActor in await monitor.setEnabled(on) }
     }
     func stop() { store.stop() }
-    func refresh() { store.refresh() }
+    func refresh() {
+        store.refresh()
+        store.geminiMonitor?.refreshNow()
+    }
     func showOpacityHUD(percent: Int) { store.showOpacityHUD(percent: percent) }
 }

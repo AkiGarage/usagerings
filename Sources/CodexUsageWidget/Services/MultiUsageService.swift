@@ -11,6 +11,8 @@ struct MultiUsageService: Sendable {
     private let retryDelay: TimeInterval
     private let fetchFailureLog: FetchFailureLog?
 
+    var claudeUsage: ClaudeCLIUsage? { claudeCLI }
+
     init(
         cliPath: String = CodexBarRequirement.cliPath,
         commandRunner: CodexUsageService.CommandRunner? = nil,
@@ -227,7 +229,18 @@ struct MultiUsageService: Sendable {
             switch provider {
             case .codex:
                 return try codexResult(from: result.stdout, now: now, timeZone: timeZone, calendar: calendar)
-            case .zai, .grok, .claude, .antigravity, .minimax, .kimi, .deepseek, .gemini:
+            case .antigravity:
+                if let signedOut = Self.antigravityOfflineLogout(result.stdout) {
+                    throw ProviderFailure.logout(signedOut)
+                }
+                let section = try MultiProviderParser.parse(
+                    result.stdout,
+                    provider: provider,
+                    now: now,
+                    timeZone: timeZone
+                )
+                return ProviderResult(provider: provider, section: section, codexSnapshot: nil)
+            case .zai, .grok, .claude, .minimax, .kimi, .deepseek, .gemini:
                 let section = try MultiProviderParser.parse(
                     result.stdout,
                     provider: provider,
@@ -262,11 +275,24 @@ struct MultiUsageService: Sendable {
     }
 
     static func isLogoutMessage(_ text: String) -> Bool {
-        let phrases = ["not logged in", "unauthorized", "unauthorised", "no credentials",
+        let phrases = ["not logged in", "signed out", "unauthorized", "unauthorised", "no credentials",
                        "login required", "please log in", "not authenticated", "auth token is invalid or expired"]
         if phrases.contains(where: { text.range(of: $0, options: .caseInsensitive) != nil }) { return true }
         guard let code401 else { return false }
         return code401.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    static func antigravityEnvironmentOverride() -> [String: String] {
+        ["SSH_CONNECTION": "", "SSH_CLIENT": "", "SSH_TTY": ""]
+    }
+
+    static func antigravityOfflineLogout(_ stdout: Data) -> CodexUsageError? {
+        guard let rows = try? JSONSerialization.jsonObject(with: stdout) as? [[String: Any]],
+              let entry = rows.first(where: { ($0["provider"] as? String) == ProviderID.antigravity.rawValue }),
+              (entry["source"] as? String)?.lowercased() == "offline",
+              let diagnostic = entry["diagnostic"] as? String,
+              isLogoutMessage(diagnostic) else { return nil }
+        return .commandFailed(0, "Antigravity: ログインが必要です（ターミナルで agy を実行）")
     }
 
     private static let code401 = try? NSRegularExpression(
@@ -310,9 +336,15 @@ struct MultiUsageService: Sendable {
                     if let commandRunner {
                         result = try commandRunner(arguments)
                     } else {
+                        let timeout: TimeInterval = provider == .antigravity ? 15 : 30
+                        let environment: [String: String]? = switch provider {
+                        case .codex: CodexUsageService.codexEnvironmentOverride()
+                        case .antigravity: Self.antigravityEnvironmentOverride()
+                        default: nil
+                        }
                         let runner = SubprocessRunner(
-                            executableURL: URL(fileURLWithPath: cliPath), timeout: 30,
-                            environment: provider == .codex ? CodexUsageService.codexEnvironmentOverride() : nil)
+                            executableURL: URL(fileURLWithPath: cliPath), timeout: timeout,
+                            environment: environment)
                         result = try await runner.run(arguments)
                     }
                     if result.timedOut && !retried { retried = true; continue }

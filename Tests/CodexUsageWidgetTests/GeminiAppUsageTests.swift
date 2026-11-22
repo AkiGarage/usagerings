@@ -186,8 +186,10 @@ final class GeminiAppUsageParserTests: XCTestCase {
 
 final class GeminiReadPolicyTests: XCTestCase {
     let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-    func sig(_ dt: TimeInterval, front: Bool = true, idle: TimeInterval = 5, asleep: Bool = false, hour: Int = 14) -> GeminiReadPolicy.Signals {
-        .init(now: t0.addingTimeInterval(dt), idleSeconds: idle, screenAsleep: asleep, hour: hour)
+    func sig(_ dt: TimeInterval, front: Bool = true, idle: TimeInterval = 5, asleep: Bool = false,
+             hour: Int = 14, active: Bool = false, manual: Bool = false) -> GeminiReadPolicy.Signals {
+        .init(now: t0.addingTimeInterval(dt), idleSeconds: idle, screenAsleep: asleep, hour: hour,
+              geminiRecentlyActive: active, manualRefresh: manual)
     }
 
     func testReadsOnceAtStartThenEveryFiveMinutes() {
@@ -198,16 +200,42 @@ final class GeminiReadPolicyTests: XCTestCase {
         XCTAssertEqual(reads, [0, 300, 600, 900])
     }
 
-    func testNoReadWhenIdle15MinAsleepNightOrHalted() {
+    func testActiveGeminiTightensIntervalToOneMinute() {
+        var st = GeminiReadPolicy.State(); var reads: [TimeInterval] = []
+        for dt in stride(from: 0.0, through: 240, by: 30) where GeminiReadPolicy.shouldRead(st, sig(dt, active: true)) {
+            reads.append(dt); st.lastRead = t0.addingTimeInterval(dt)
+        }
+        XCTAssertEqual(reads, [0, 60, 120, 180, 240])
+    }
+
+    func testNoReadWhenIdle15MinAsleepOrHaltedButActiveLateNightReads() {
         let st = GeminiReadPolicy.State()
         XCTAssertTrue(GeminiReadPolicy.shouldRead(st, sig(0, idle: 600)), "10 min idle still reads")
         XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, idle: 15 * 60)))
         XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, asleep: true)))
-        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(0, front: true, hour: 3)))
+        XCTAssertTrue(GeminiReadPolicy.shouldRead(st, sig(0, front: true, hour: 3)),
+                      "awake and actively using Mac at 3am should still update")
         // A halt that just started blocks; the halt time is part of the state (an old halted flag
         // without a time is retried once, so it is not a blocking halt).
         var halted = st; halted.halted = true; halted.haltedAt = t0
         XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(0, front: true)))
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(60, active: true, manual: true)),
+                       "halt backoff must never be bypassed by active mode or manual refresh")
+    }
+
+    func testResetDueTriggersTargetedRefreshWithRetryCap() {
+        let reset = t0.addingTimeInterval(100)
+        var st = GeminiReadPolicy.State(lastRead: t0, nextResetAt: reset, resetRetryCount: 0)
+        XCTAssertFalse(GeminiReadPolicy.shouldRead(st, sig(105)), "before lead delay (+8s)")
+        XCTAssertEqual(GeminiReadPolicy.requiredSpacing(st, sig(108)), 25, "first post-reset retry fires at +8s")
+        st.lastRead = t0.addingTimeInterval(108)
+        st.resetRetryCount = 1
+        XCTAssertNil(GeminiReadPolicy.requiredSpacing(st, sig(140)), "second retry waits 35s gap")
+        XCTAssertEqual(GeminiReadPolicy.requiredSpacing(st, sig(143)), 35, "second post-reset retry fires after 35s")
+        st.lastRead = t0.addingTimeInterval(143)
+        st.resetRetryCount = 2
+        XCTAssertNil(GeminiReadPolicy.requiredSpacing(st, sig(250)), "after 2 retries, falls back to normal 5m cadence")
+        XCTAssertEqual(GeminiReadPolicy.requiredSpacing(st, sig(143 + 300)), 300)
     }
 
     func testBackgroundReadNeedsNoFrontmostChrome() {
@@ -230,7 +258,6 @@ final class GeminiReadPolicyTests: XCTestCase {
         // The other gates still apply while halted.
         XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(60 * 60, asleep: true)))
         XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(60 * 60, idle: 15 * 60)))
-        XCTAssertFalse(GeminiReadPolicy.shouldRead(halted, sig(60 * 60, hour: 3)))
     }
 }
 final class FakeGeminiBridge: ChromeUsageBridge, @unchecked Sendable {
@@ -291,7 +318,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         let m = make(b, now: noon)
         await m.setEnabled(true)
         XCTAssertTrue(m.section.windows.isEmpty)
-        XCTAssertTrue(m.section.failureText?.contains("スリープ") == true)
+        XCTAssertTrue(m.section.failureText?.contains("読み込み中") == true)
         XCTAssertFalse(m.state.halted, "a sleeping tab must not stop future reads")
     }
 
@@ -397,7 +424,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
     }
 
     func testLastReadPersistsAcrossToggleAndRestart() async {
-        let b = FakeGeminiBridge(); let now = noon
+        let b = FakeGeminiBridge(); b.url = "https://example.com/"; let now = noon
         let m = make(b, now: now)
         await m.setEnabled(true)
         XCTAssertEqual(b.textReads, 1)
@@ -405,7 +432,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(b.textReads, 1, "toggling does not allow an early read")
         let restarted = make(b, now: now.addingTimeInterval(60))
         await restarted.tick()
-        XCTAssertEqual(b.textReads, 1, "restart keeps the 5-minute spacing")
+        XCTAssertEqual(b.textReads, 1, "restart keeps the 5-minute spacing when inactive")
         XCTAssertEqual(restarted.state.lastRead, now)
     }
 
@@ -501,7 +528,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(b.textReads, 3)
     }
 
-    /// Google の一時エラー表示は停止しない。5分後にそのまま読み直す。
+    /// Google の一時エラー表示は停止しない。次の通常周期でそのまま読み直す。
     func testTransientPageErrorDoesNotHaltAndReadsAgainInFiveMinutes() async {
         let b = FakeGeminiBridge(); b.text = .success("Something went wrong.\nTry again later.")
         var now = noon
@@ -511,7 +538,7 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(b.textReads, 1)
         XCTAssertFalse(m.state.halted, "a transient error must not stop reads")
         XCTAssertFalse(defaults.bool(forKey: GeminiAppUsageMonitor.haltedKey))
-        XCTAssertTrue(m.section.failureText?.contains("5分後に再読込") ?? false, m.section.failureText ?? "")
+        XCTAssertTrue(m.section.failureText?.contains("自動で再読込") ?? false, m.section.failureText ?? "")
         now = now.addingTimeInterval(300); await m.tick()
         XCTAssertEqual(b.textReads, 2, "the next ordinary read happens after 5 minutes")
     }
@@ -680,6 +707,9 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertNil(GeminiAppUsageMonitor.resetDate("", after: loaded))
         XCTAssertEqual(GeminiAppUsageMonitor.resetDate("11月4日の7:39にリセットされます", after: loaded), d(2026, 11, 4, 7, 39))
         XCTAssertEqual(GeminiAppUsageMonitor.resetDate("0:39にリセット", after: loaded), d(2026, 10, 30, 0, 39))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("午後4:10にリセット", after: loaded), d(2026, 10, 29, 16, 10))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("午前0:39にリセット", after: loaded), d(2026, 10, 30, 0, 39))
+        XCTAssertEqual(GeminiAppUsageMonitor.resetDate("午前12:15にリセット", after: loaded), d(2026, 10, 30, 0, 15))
     }
 
     func testPassedResetDropsOldPercentAndAsksForReload() {
@@ -697,14 +727,153 @@ final class GeminiAppUsageMonitorTests: XCTestCase {
         XCTAssertEqual(before.windows.first?.resetAt, d(2026, 10, 29, 16, 10))
         XCTAssertFalse(before.isStale)
     }
+
+    func testMonitorRefreshesAutomaticallyAfterResetAndRetriesOnceIfStillStale() async {
+        let suite = UserDefaults(suiteName: "gemini-reset-auto-\(UUID().uuidString)")!
+        let b = FakeGeminiBridge(); b.chromeFrontmost = false
+        var now = d(2026, 10, 29, 15, 58)
+        var up = 1000.0
+        b.text = .success("Usage limits\nCurrent usage\n80% used\n16:00にリセット\nWeekly limit\n10% used\n11月4日の7:39にリセットされます\n@@loaded \(Int(now.timeIntervalSince1970))")
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: suite)
+        m.clock = { now }; m.uptime = { up }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1)
+        XCTAssertEqual(m.section.windows.map(\.leftPercent), [20, 90])
+
+        // Exactly at 16:00:05 (before +8s lead): elapsed 5h % is dropped immediately so no stale % stays.
+        now = d(2026, 10, 29, 16, 0).addingTimeInterval(5); up += 125
+        await m.tick()
+        XCTAssertEqual(b.textReads, 1, "still inside the 8s post-reset lead delay")
+        XCTAssertEqual(m.section.windows.map(\.title), ["Gemini · Weekly"], "elapsed 5h window must be dropped")
+
+        // At 16:00:08: first post-reset refresh runs; page still echoes old 16:00 reset.
+        now = d(2026, 10, 29, 16, 0).addingTimeInterval(8); up += 3
+        await m.tick()
+        XCTAssertEqual(b.textReads, 2, "automatic post-reset refresh fires at +8s")
+        XCTAssertEqual(m.state.resetRetryCount, 1, "still tracking the elapsed reset for second retry")
+
+        // At 16:00:43 (+35s): second retry sees the freshly reset 5h window!
+        now = d(2026, 10, 29, 16, 0).addingTimeInterval(43); up += 35
+        b.text = .success("Usage limits\nCurrent usage\n0% used\n21:00にリセット\nWeekly limit\n10% used\n11月4日の7:39にリセットされます\n@@loaded \(Int(now.timeIntervalSince1970))")
+        await m.tick()
+        XCTAssertEqual(b.textReads, 3, "second post-reset retry fires at +35s")
+        XCTAssertEqual(m.section.windows.map(\.leftPercent), [100, 90])
+        XCTAssertFalse(m.section.isStale)
+        XCTAssertEqual(m.state.resetRetryCount, 0, "new future reset clears retry count")
+    }
+
+    func testMonitorAdaptsIntervalOnUsageChangeAndSupportsManualRefresh() async {
+        let suite = UserDefaults(suiteName: "gemini-active-\(UUID().uuidString)")!
+        let b = FakeGeminiBridge(); b.url = "https://example.com/"
+        var now = d(2026, 10, 29, 12, 0)
+        var up = 1000.0
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: suite)
+        m.clock = { now }; m.uptime = { up }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.setEnabled(true)
+        XCTAssertEqual(b.textReads, 1)
+
+        // Manual refresh within 20s is throttled; at 25s it runs immediately.
+        now = now.addingTimeInterval(15); up += 15
+        await m.tick(manual: true)
+        XCTAssertEqual(b.textReads, 1)
+
+        b.text = .success("Usage limits\nCurrent usage\n45% used\nWeekly limit\n10% used")
+        now = now.addingTimeInterval(10); up += 10
+        await m.tick(manual: true)
+        XCTAssertEqual(b.textReads, 2, "manual refresh allowed after 20s")
+        XCTAssertNotNil(m.lastGeminiActivityAt, "usage change marks Gemini as recently active")
+
+        // Because usage changed, next regular tick fires at 1 minute (60s) instead of 5 minutes.
+        now = now.addingTimeInterval(60); up += 60
+        await m.tick()
+        XCTAssertEqual(b.textReads, 3, "active cadence reads every 1 minute")
+
+        // After 10+ minutes with no changes, cadence relaxes back to 5 minutes.
+        now = now.addingTimeInterval(11 * 60); up += 11 * 60
+        await m.tick()
+        XCTAssertEqual(b.textReads, 4)
+        now = now.addingTimeInterval(60); up += 60
+        await m.tick()
+        XCTAssertEqual(b.textReads, 4, "inactive cadence is back to 5 minutes")
+    }
+
+    func testLaunchSeedsBaselineFromCacheSoFirstDropTriggersActiveMode() async {
+        let suite = UserDefaults(suiteName: "gemini-seed-\(UUID().uuidString)")!
+        let baseNow = d(2026, 10, 29, 12, 0)
+        let future = baseNow.addingTimeInterval(3600).timeIntervalSince1970
+        suite.set(true, forKey: GeminiAppUsageMonitor.enabledKey)
+        suite.set(baseNow.addingTimeInterval(-360).timeIntervalSince1970, forKey: GeminiAppUsageMonitor.lastReadKey)
+        suite.set(["at": baseNow.addingTimeInterval(-360).timeIntervalSince1970,
+                   "windows": [["title": "Gemini · 5h", "left": 91.0, "reset": "13:00にリセット", "resetAt": future]]],
+                  forKey: GeminiAppUsageMonitor.cacheKey)
+        let b = FakeGeminiBridge(); b.chromeFrontmost = false
+        b.text = .success("Usage limits\nCurrent usage\n11% used\n13:00にリセット\n@@loaded \(Int(baseNow.timeIntervalSince1970))")
+        var now = baseNow; var up = 1000.0
+        let m = GeminiAppUsageMonitor(bridge: b, defaults: suite)
+        m.clock = { now }; m.uptime = { up }; m.idleSeconds = { 1 }; m.screenAsleep = { false }
+        await m.tick()
+        XCTAssertEqual(b.textReads, 1)
+        XCTAssertEqual(m.lastGeminiActivityAt, baseNow, "91% -> 89% drop on very first read after launch activates 1m cadence")
+        now = baseNow.addingTimeInterval(60); up += 60
+        await m.tick()
+        XCTAssertEqual(b.textReads, 2)
+    }
 }
 
 
 final class GeminiDedicatedWindowTests: XCTestCase {
-    func testReopensAtMostEveryTwoMinutes() {
+    func testReopensAtMostEveryMinute() {
         let t = Date(timeIntervalSince1970: 1_800_000_000)
         XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: nil, now: t))
-        XCTAssertFalse(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(119)))
-        XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(120)))
+        XCTAssertFalse(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(59)))
+        XCTAssertTrue(GeminiDedicatedWindow.mayOpen(lastOpen: t, now: t.addingTimeInterval(60)))
+    }
+
+    func testPollUntilDecisiveStopsAsSoonAsUsageRenders() {
+        let responses: [Result<String, ChromeReadError>?] = [
+            .success("Usage limits\nLoading…"),
+            .success("Usage limits\nLoading…"),
+            .success("Usage limits\nCurrent usage\n23% used\nWeekly limit\n10% used"),
+            .success("Usage limits\nCurrent usage\n99% used"),
+        ]
+        var index = 0, hides = 0, sleeps = 0
+        let result = LiveChromeBridge.pollUntilDecisive(
+            maxAttempts: 10,
+            isAlive: { true },
+            beforeAttempt: { hides += 1 },
+            sleep: { sleeps += 1 },
+            readOnce: { defer { index += 1 }; return responses[index] }
+        )
+        XCTAssertEqual(index, 3, "stops as soon as usage numbers appear")
+        XCTAssertEqual(hides, 3, "re-hides window before every attempt")
+        XCTAssertEqual(sleeps, 2)
+        if case let .success(text)? = result {
+            XCTAssertTrue(text.contains("23% used"))
+        } else {
+            XCTFail("expected rendered reading")
+        }
+    }
+
+    func testPollUntilDecisiveStopsImmediatelyOnBlockedOrHardErrorOrCancel() {
+        var calls = 0
+        let blocked = LiveChromeBridge.pollUntilDecisive(maxAttempts: 5, sleep: {}, readOnce: {
+            calls += 1; return .success("Verify it's you")
+        })
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(blocked, .success("Verify it's you"))
+
+        calls = 0
+        let denied = LiveChromeBridge.pollUntilDecisive(maxAttempts: 5, sleep: {}, readOnce: {
+            calls += 1; return .failure(.notAllowed)
+        })
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(denied, .failure(.notAllowed))
+
+        calls = 0
+        let cancelled = LiveChromeBridge.pollUntilDecisive(maxAttempts: 5, isAlive: { false }, sleep: {}, readOnce: {
+            calls += 1; return .success("Current usage\n10% used")
+        })
+        XCTAssertEqual(calls, 0)
+        XCTAssertNil(cancelled)
     }
 }
