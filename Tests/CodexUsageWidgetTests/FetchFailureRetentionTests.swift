@@ -254,6 +254,28 @@ final class FetchFailureRetentionTests: XCTestCase {
         XCTAssertEqual(loggedOut.count, 1)
     }
 
+    func testAntigravityOfflineSignedOutDiagnosticMapsToLogout() async {
+        let offlineSignedOut = """
+        [{"provider":"antigravity","source":"offline","diagnostic":"Live Antigravity usage is unavailable; showing offline data. Antigravity CLI is signed out. Run agy in a terminal to sign in, then retry.","usage":{"primary":null,"extraRateWindows":[{"title":"Offline","window":{"usedPercent":0},"usageKnown":false}]}}]
+        """
+        let snapshot = await service({ arguments in
+            arguments[2] == "antigravity"
+                ? Fixtures.commandResult(offlineSignedOut, status: 0)
+                : Fixtures.commandResult("[]")
+        }).fetchAll(now: now, timeZone: utc, calendar: utcCalendar)
+        let ag = snapshot.sections.first { $0.provider == .antigravity }!
+        XCTAssertEqual(ag.failureReason, .logout)
+        XCTAssertTrue(ag.windows.isEmpty)
+        XCTAssertTrue(ag.failureText?.contains("ログインが必要") == true)
+    }
+
+    func testAntigravityEnvironmentOverrideUnsetsSSHSessionVariables() {
+        let override = MultiUsageService.antigravityEnvironmentOverride()
+        XCTAssertEqual(override["SSH_CONNECTION"], "")
+        XCTAssertEqual(override["SSH_CLIENT"], "")
+        XCTAssertEqual(override["SSH_TTY"], "")
+    }
+
     func testLogSkipsTheSameFailureWithinAnHourButKeepsOneLineAnHour() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

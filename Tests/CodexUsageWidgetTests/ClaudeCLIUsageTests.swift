@@ -202,6 +202,77 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertTrue(Acknowledgements.codexBarLicense.contains("Copyright (c) 2026 Peter Steinberger"))
         XCTAssertTrue(Acknowledgements.codexBarLicense.contains("The above copyright notice and this permission notice shall be included"))
     }
+
+    func testAdaptiveActivityCadenceAndImmediateOnChangeNotification() async {
+        let calls = CallLog()
+        let updates = CallLog()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let usage = ClaudeCLIUsage(
+            runner: { args, env in
+                calls.append(args, env)
+                return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Self.json(25, 40), stderr: Data())
+            },
+            activityProbe: { dir, _ in
+                // Account A was active 30s ago; Account B has been idle for an hour.
+                dir == "/h/.claude-a" ? t0.addingTimeInterval(-30) : t0.addingTimeInterval(-3600)
+            },
+            activeRefreshInterval: 75,
+            idleRefreshInterval: 180
+        )
+        usage.setOnChange { updates.append(["updated"], nil) }
+        await usage.refreshNow([a, b], timeZone: .current, now: { t0 })
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(updates.count, 2, "each completed account notifies UI immediately")
+
+        // At +80s: active account A is due (75s), idle account B is skipped (180s).
+        _ = usage.section(accounts: [a, b], now: t0.addingTimeInterval(80), timeZone: .current, salt: salt)
+        for _ in 0..<200 where calls.count < 3 { try? await Task.sleep(for: .milliseconds(5)) }
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(calls.count, 3)
+        XCTAssertEqual(calls.envs.last ?? nil, "/h/.claude-a", "only active account A refreshes at 80s")
+    }
+
+    func testRateLimit429TriggersPerAccountBackoffWithoutBlockingOtherAccount() async {
+        let calls = CallLog()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let usage = ClaudeCLIUsage(runner: { args, env in
+            calls.append(args, env)
+            if env?["CLAUDE_CONFIG_DIR"] == "/h/.claude-a" {
+                return CodexUsageService.CommandResult(terminationStatus: 1, stdout: Data(),
+                                                       stderr: Data("HTTP 429 Too Many Requests".utf8))
+            }
+            return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Self.json(10, 20), stderr: Data())
+        }, refreshInterval: 60)
+
+        await usage.refreshNow([a, b], timeZone: .current, now: { t0 })
+        XCTAssertEqual(calls.count, 2)
+        let after429 = usage.section(accounts: [a, b], now: t0.addingTimeInterval(1), timeZone: .current, salt: salt)?.section
+        XCTAssertTrue(after429?.accounts.first?.failureText?.contains("一時制限中") == true)
+
+        // At +120s (past normal 60s interval, still inside 300s 429 backoff): only B is polled, A stays backed off.
+        _ = usage.section(accounts: [a, b], now: t0.addingTimeInterval(120), timeZone: .current, salt: salt)
+        for _ in 0..<200 where calls.count < 3 { try? await Task.sleep(for: .milliseconds(5)) }
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(calls.count, 3)
+        XCTAssertEqual(calls.envs.last ?? nil, "/h/.claude-b", "rate-limited A must not be probed during 5-minute backoff")
+    }
+
+    func testDuplicateProfileDirectoriesDoNotTrap() async {
+        let calls = CallLog()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let usage = ClaudeCLIUsage(
+            runner: { args, env in
+                calls.append(args, env)
+                return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Self.json(20, 30), stderr: Data())
+            },
+            activityProbe: { _, _ in t0.addingTimeInterval(-10) }
+        )
+        let dupA = ClaudeCLIAccount(label: "A", configDir: nil)
+        let dupB = ClaudeCLIAccount(label: "B", configDir: nil)
+        _ = usage.section(accounts: [dupA, dupB], now: t0, timeZone: .current, salt: salt)
+        for _ in 0..<200 where calls.count < 1 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertGreaterThanOrEqual(calls.count, 1)
+    }
 }
 
 actor StubClaudeLogin {

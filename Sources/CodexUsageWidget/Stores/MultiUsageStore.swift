@@ -98,6 +98,7 @@ final class MultiUsageStore: ObservableObject {
     private let preferences: PanelPreferences?
     private var cloudSender: CloudSnapshotSender?
     private var refreshTask: Task<Void, Never>?
+    private var claudeActivityTask: Task<Void, Never>?
     private var opacityHUDTask: Task<Void, Never>?
     /// Per-instance so tests can shorten the HUD lifetime without affecting other stores.
     var opacityHUDDuration: TimeInterval = 1.2
@@ -156,6 +157,7 @@ final class MultiUsageStore: ObservableObject {
             attachGeminiMonitor(monitor)
         }
         geminiMonitor?.start()
+        startClaudeLiveUpdates()
         refresh()
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
@@ -168,11 +170,60 @@ final class MultiUsageStore: ObservableObject {
         observeWakeAndClock()
     }
 
+    /// Connect instant UI updates when background Claude CLI probes complete, and poll local
+    /// `.jsonl` activity every 15 s (zero API calls) so active Claude accounts refresh without
+    /// waiting for the 60 s global refresh loop.
+    private func startClaudeLiveUpdates() {
+        guard case let .live(service, _) = dataSource, let claudeCLI = service.claudeUsage else { return }
+        claudeCLI.setOnChange { [weak self] in
+            Task { @MainActor in self?.applyClaudeUpdate() }
+        }
+        claudeActivityTask?.cancel()
+        guard NSClassFromString("XCTestCase") == nil else { return }
+        claudeActivityTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15), tolerance: .seconds(2))
+                guard !Task.isCancelled, let self else { return }
+                let visible = self.preferences?.isProviderVisible(.claude) ?? true
+                let syncNeedsClaude = self.preferences?.cloudSyncEnabled == true && self.preferences?.cloudSyncStopping == false
+                guard visible || syncNeedsClaude else { continue }
+                _ = claudeCLI.section(accounts: ClaudeCLIAccountSettings.load(), now: Date(), timeZone: .current)
+            }
+        }
+    }
+
+    /// Swap in the latest cached Claude section immediately when a background CLI probe finishes.
+    func applyClaudeUpdate() {
+        guard case let .live(service, _) = dataSource,
+              let claudeCLI = service.claudeUsage,
+              let raw = rawSnapshot else { return }
+        let now = Date()
+        guard let result = claudeCLI.cachedSection(accounts: ClaudeCLIAccountSettings.load(), now: now, timeZone: .current) else { return }
+        var updated = result.section
+        if let existing = raw.sections.first(where: { $0.provider == .claude }) {
+            updated.claudeProfileBlocks = existing.claudeProfileBlocks
+            updated.claudeRemoteFailureText = existing.claudeRemoteFailureText
+        }
+        let sections = MultiUsageSnapshot.ordered(raw.sections.filter { $0.provider != .claude } + [updated])
+        let merged = MultiUsageSnapshot(sections: sections, codexSnapshot: raw.codexSnapshot,
+                                        updatedAt: now, hiddenProviders: raw.hiddenProviders)
+        preferences?.reconcileAccounts(in: merged)
+        preferences?.reconcileProviders(in: merged)
+        var displaySnapshot = Self.retainingStaleValues(in: merged, previous: raw, now: now)
+        displaySnapshot = Self.withGemini(raw.sections.first { $0.provider == .gemini }, in: displaySnapshot)
+        rawSnapshot = displaySnapshot
+        updateClaudeChoice(from: merged, now: now)
+        self.snapshot = visible(displaySnapshot)
+    }
+
     /// Sleep/wake and clock changes invalidate sleeping timers: re-plan from wall time.
     private func observeWakeAndClock() {
         guard wakeObservers.isEmpty else { return }
         let replan: @Sendable (Notification) -> Void = { [weak self] _ in
-            Task { @MainActor in self?.scheduleResetRefresh() }
+            Task { @MainActor in
+                self?.scheduleResetRefresh()
+                self?.geminiMonitor?.handleWakeOrResume()
+            }
         }
         wakeObservers = [
             NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: replan),
@@ -205,6 +256,9 @@ final class MultiUsageStore: ObservableObject {
         queuedFullRefresh = false
         // Keep the in-flight slot occupied until its CLI fetch actually finishes.
         geminiMonitor?.stop()
+        if case let .live(service, _) = dataSource { service.claudeUsage?.setOnChange(nil) }
+        claudeActivityTask?.cancel()
+        claudeActivityTask = nil
         refreshTask?.cancel()
         refreshTask = nil
         opacityHUDTask?.cancel()
@@ -432,7 +486,10 @@ final class MultiUsageStore: ObservableObject {
                 if let url = claudeChoiceURL { ClaudeAccountChoice.retract(now: Date(), url: url) }
             }
         }
-        if turnedOn { refresh() }
+        if turnedOn {
+            refresh()
+            geminiMonitor?.handleVisibilityChanged()
+        }
     }
 
     func visible(_ snapshot: MultiUsageSnapshot) -> MultiUsageSnapshot {

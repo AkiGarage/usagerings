@@ -90,6 +90,8 @@ final class ClaudeCLIUsage: Sendable {
     typealias LoginProbe = @Sendable (_ configDir: String?) async -> LoginCheck
     /// Reset grants cached by Claude Desktop for the organization of this config dir, or nil.
     typealias DesktopResets = @Sendable (_ configDir: String?, _ now: Date) -> ClaudeDesktopResetCache.Reading?
+    /// Latest local session transcript modification date for this config dir, or nil (local-only, zero API calls).
+    typealias ActivityProbe = @Sendable (_ configDir: String?, _ now: Date) -> Date?
 
     private struct Entry {
         var section: ProviderSection?
@@ -111,6 +113,10 @@ final class ClaudeCLIUsage: Sendable {
         /// is refused, so tickets a newer response already spent cannot come back. A different
         /// organization (the folder was logged into another account) starts its own mark.
         var desktopHighWater: (organization: String, at: Date)?
+        /// Consecutive HTTP 429 / rate-limit responses on usage probes for this account.
+        var rateLimitStreak = 0
+        /// Do not probe this account again before this timestamp after a 429 response.
+        var rateLimitedUntil: Date?
     }
 
     private struct State {
@@ -121,29 +127,53 @@ final class ClaudeCLIUsage: Sendable {
         var generation = 0
         var accountsSignature: [String]?
         var task: Task<Void, Never>?
+        var onChange: (@Sendable () -> Void)?
     }
 
     private let runner: Runner
     private let loginProbe: LoginProbe?
     private let refreshInterval: TimeInterval
+    private let activeRefreshInterval: TimeInterval
+    private let idleRefreshInterval: TimeInterval
     private let maxCacheAge: TimeInterval
     private let failureLog: FetchFailureLog?
     private let grantsClient: ClaudeResetGrantsClient?
     private let desktopResets: DesktopResets?
+    private let activityProbe: ActivityProbe?
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     static let grantsRefreshInterval: TimeInterval = 900
+    static let activityWindow: TimeInterval = 300
+    static let defaultActiveInterval: TimeInterval = 75
+    static let defaultIdleInterval: TimeInterval = 180
+    static let rateLimitBaseBackoff: TimeInterval = 300
+    static let rateLimitMaxBackoff: TimeInterval = 1800
 
     init(runner: @escaping Runner, refreshInterval: TimeInterval = 120, maxCacheAge: TimeInterval = 600,
          failureLog: FetchFailureLog? = nil, grantsClient: ClaudeResetGrantsClient? = nil,
-         desktopResets: DesktopResets? = nil, loginProbe: LoginProbe? = nil) {
+         desktopResets: DesktopResets? = nil, loginProbe: LoginProbe? = nil,
+         activityProbe: ActivityProbe? = nil,
+         activeRefreshInterval: TimeInterval = ClaudeCLIUsage.defaultActiveInterval,
+         idleRefreshInterval: TimeInterval = ClaudeCLIUsage.defaultIdleInterval) {
         self.runner = runner
         self.loginProbe = loginProbe
         self.desktopResets = desktopResets
+        self.activityProbe = activityProbe
         self.refreshInterval = refreshInterval
+        self.activeRefreshInterval = activeRefreshInterval
+        self.idleRefreshInterval = idleRefreshInterval
         self.maxCacheAge = maxCacheAge
         self.failureLog = failureLog
         self.grantsClient = grantsClient
+    }
+
+    func setOnChange(_ handler: (@Sendable () -> Void)?) {
+        state.withLock { $0.onChange = handler }
+    }
+
+    private func notifyChange() {
+        let handler = state.withLock { $0.onChange }
+        handler?()
     }
 
     static func live(cliPath: String, timeout: TimeInterval = 60) -> ClaudeCLIUsage {
@@ -164,8 +194,56 @@ final class ClaudeCLIUsage: Sendable {
                                               environment: env)
                 .run(arguments)
         }, failureLog: .live(), grantsClient: .live(), desktopResets: liveDesktopResets,
-           loginProbe: liveLoginCheck)
+           loginProbe: liveLoginCheck, activityProbe: liveRecentActivity)
     }
+
+    /// Bounded local-only check: newest `.jsonl` modification timestamp in this profile's
+    /// `projects/` directory (checking the 8 most recently modified project subfolders).
+    /// Performs zero API calls and reads no file contents.
+    static let liveRecentActivity: ActivityProbe = { configDir, now in
+        let base = URL(fileURLWithPath: configDir ?? (NSHomeDirectory() + "/.claude"), isDirectory: true)
+            .appendingPathComponent("projects", isDirectory: true)
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .isDirectoryKey]
+        guard let projectDirs = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: keys,
+                                                            options: [.skipsHiddenFiles]) else { return nil }
+        let recentDirs = projectDirs.compactMap { url -> (URL, Date)? in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.isDirectory == true,
+                  let modified = values.contentModificationDate else { return nil }
+            return (url, modified)
+        }.sorted { $0.1 > $1.1 }.prefix(8)
+        var newest: Date?
+        for (dir, _) in recentDirs {
+            guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey],
+                                                          options: [.skipsHiddenFiles]) else { continue }
+            for file in files where file.pathExtension == "jsonl" {
+                guard let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+                      mtime <= now.addingTimeInterval(60) else { continue }
+                if newest == nil || mtime > newest! { newest = mtime }
+            }
+        }
+        return newest
+    }
+
+    static func isRateLimited(stdout: Data, stderr: Data) -> Bool {
+        [stdout, stderr].contains { data in
+            guard let text = String(data: data, encoding: .utf8) else { return false }
+            return isRateLimitedMessage(text)
+        }
+    }
+
+    static func isRateLimitedMessage(_ text: String) -> Bool {
+        let phrases = ["rate limit", "rate_limit", "too many requests"]
+        if phrases.contains(where: { text.range(of: $0, options: .caseInsensitive) != nil }) { return true }
+        guard let code429 else { return false }
+        return code429.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    private static let code429 = try? NSRegularExpression(
+        pattern: #"(?:http|status|code|error|response|request)[ \t=:"'()/]{0,8}429(?:[^0-9]|$)"#,
+        options: [.caseInsensitive]
+    )
 
     // Ignore inherited provider overrides in both probes. The configured profile owns the login.
     private static var profileEnvironment: [String: String] {
@@ -242,20 +320,51 @@ final class ClaudeCLIUsage: Sendable {
     }
 
     /// Prior value is shown as 前回値 once it is older than this (one interval plus a sequential probe slack).
-    var staleAge: TimeInterval { refreshInterval * 1.75 }
+    var staleAge: TimeInterval {
+        let base = activityProbe != nil ? idleRefreshInterval : refreshInterval
+        return base * 1.75
+    }
 
     private static func key(_ account: ClaudeCLIAccount) -> String { account.configDir ?? "" }
+
+    private func interval(for account: ClaudeCLIAccount, now: Date) -> TimeInterval {
+        guard let probe = activityProbe else { return refreshInterval }
+        if let lastActivity = probe(account.configDir, now),
+           now.timeIntervalSince(lastActivity) <= Self.activityWindow {
+            return activeRefreshInterval
+        }
+        return idleRefreshInterval
+    }
+
+    /// Read-only view of the currently cached accounts without triggering any background refresh.
+    func cachedSection(accounts: [ClaudeCLIAccount], now: Date, timeZone: TimeZone, salt: Data? = nil) -> Result? {
+        guard !accounts.isEmpty else { return nil }
+        let (entries, retryAt) = state.withLock { ($0.entries, $0.grantsRetryAt) }
+        return Self.build(accounts: accounts, entries: entries, now: now,
+                          staleAge: staleAge, maxCacheAge: maxCacheAge, salt: salt,
+                          tickets: grantsClient != nil || desktopResets != nil ? retryAt : nil)
+    }
 
     /// Never waits. Returns nil while there is no usage, ticket result, or account failure to show.
     func section(accounts: [ClaudeCLIAccount], now: Date, timeZone: TimeZone, salt: Data? = nil) -> Result? {
         guard !accounts.isEmpty else { return nil }
+        // Compute per-account adaptive cadence outside the lock (bounded local filesystem mtime check).
+        let intervals = Dictionary(
+            accounts.map { (Self.key($0), interval(for: $0, now: now)) },
+            uniquingKeysWith: { first, _ in first }
+        )
         // One lock: settings check, due list, claim and task hand-off are atomic, so an old queue
         // can never start under a new generation and the stored task is always cancellable.
         let signature = Self.signature(accounts), keys = Set(accounts.map(Self.key))
-        let interval = refreshInterval
         let (entries, retryAt, old) = state.withLock { s -> ([String: Entry], [String: Date], Task<Void, Never>?) in
             let old = Self.rotate(&s, signature: signature, keys: keys)
-            let due = accounts.filter { now.timeIntervalSince(s.entries[Self.key($0)]?.attemptedAt ?? .distantPast) >= interval }
+            let due = accounts.filter { account in
+                let k = Self.key(account)
+                let entry = s.entries[k]
+                if let until = entry?.rateLimitedUntil, now < until { return false }
+                let spacing = intervals[k] ?? refreshInterval
+                return now.timeIntervalSince(entry?.attemptedAt ?? .distantPast) >= spacing
+            }
             if !due.isEmpty, !s.refreshing {
                 s.refreshing = true
                 let generation = s.generation
@@ -342,7 +451,7 @@ final class ClaudeCLIUsage: Sendable {
             var parsed: ProviderSection?
             var masked: String?
             var reported: AccountID?
-            var failure: (reason: UsageFailureReason, exitCode: Int32?, message: String)?
+            var failure: (reason: UsageFailureReason, exitCode: Int32?, message: String, rateLimited: Bool)?
             // Default login: blank value strips any inherited CLAUDE_CONFIG_DIR (see SubprocessRunner).
             var env = ["CLAUDE_CONFIG_DIR": account.configDir ?? ""]
             let check = await loginProbe?(account.configDir) ?? LoginCheck(status: .loggedIn)
@@ -351,28 +460,36 @@ final class ClaudeCLIUsage: Sendable {
             guard !Task.isCancelled, isCurrent(generation) else { return }
             do {
                 if login == .loggedOut {
-                    failure = (.logout, nil, Self.loginRequired)
+                    failure = (.logout, nil, Self.loginRequired, false)
                 } else if login == .unverified {
-                    failure = (.other, nil, "Claude Code のログイン状態を確認できません")
+                    failure = (.other, nil, "Claude Code のログイン状態を確認できません", false)
                 } else {
                     let result = try await runner(Self.arguments, env)
                     if result.timedOut {
-                        failure = (.timeout, nil, "CodexBar CLI の使用量取得がタイムアウトしました")
+                        failure = (.timeout, nil, "CodexBar CLI の使用量取得がタイムアウトしました", false)
                     } else if result.terminationStatus != 0 {
                         let loggedOut = MultiUsageService.isLogout(stdout: result.stdout, stderr: result.stderr)
+                        let rateLimited = !loggedOut && Self.isRateLimited(stdout: result.stdout, stderr: result.stderr)
                         failure = (loggedOut ? .logout : .providerError, result.terminationStatus,
-                                   loggedOut ? Self.loginRequired : "CodexBar CLI から使用量を取得できません")
+                                   loggedOut ? Self.loginRequired
+                                   : rateLimited ? "Claude の使用量取得が一時制限中（自動で間隔を空けます）"
+                                   : "CodexBar CLI から使用量を取得できません",
+                                   rateLimited)
                     } else if let section = try? MultiProviderParser.parse(result.stdout, provider: .claude, now: started, timeZone: timeZone),
                               section.failureText == nil, !section.windows.isEmpty {
                         parsed = section
                         masked = Self.maskedEmail(result.stdout)
                         reported = Self.reportedID(result.stdout)
                     } else {
-                        failure = (.providerError, nil, "CodexBar CLI の使用量データを読み取れません")
+                        let rateLimited = Self.isRateLimited(stdout: result.stdout, stderr: result.stderr)
+                        failure = (.providerError, nil,
+                                   rateLimited ? "Claude の使用量取得が一時制限中（自動で間隔を空けます）"
+                                   : "CodexBar CLI の使用量データを読み取れません",
+                                   rateLimited)
                     }
                 }
             } catch {
-                failure = (MultiUsageService.failureReason(for: error), nil, "CodexBar CLI を実行できません")
+                failure = (MultiUsageService.failureReason(for: error), nil, "CodexBar CLI を実行できません", false)
             }
             if let failure {
                 failureLog?.record(provider: "claude-cli(\(account.label))", reason: failure.reason,
@@ -396,9 +513,20 @@ final class ClaudeCLIUsage: Sendable {
                     entry.maskedEmail = maskedValue
                     entry.failureReason = nil
                     entry.failureMessage = nil
+                    entry.rateLimitStreak = 0
+                    entry.rateLimitedUntil = nil
                 } else if let failureValue {
                     entry.failureReason = failureValue.reason
-                    entry.failureMessage = failureValue.message
+                    if failureValue.rateLimited {
+                        entry.rateLimitStreak += 1
+                        let backoff = min(Self.rateLimitMaxBackoff, Self.rateLimitBaseBackoff * Double(entry.rateLimitStreak))
+                        let until = started.addingTimeInterval(backoff)
+                        entry.rateLimitedUntil = until
+                        let timeText = UsageDurationFormat.timestamp(until, now: started, calendar: RingResetFormat.tokyoCalendar)
+                        entry.failureMessage = "Claude の使用量取得が一時制限中（\(timeText) JST 以降に再取得）"
+                    } else {
+                        entry.failureMessage = failureValue.message
+                    }
                     if profileUnavailable {
                         entry.section = nil
                         entry.fetchedAt = nil
@@ -406,6 +534,8 @@ final class ClaudeCLIUsage: Sendable {
                         entry.maskedEmail = nil
                         entry.grants = nil
                         entry.desktopResets = nil
+                        entry.rateLimitStreak = 0
+                        entry.rateLimitedUntil = nil
                         if failureValue.reason == .logout {
                             entry.oauthLoadedAt = nil
                             entry.desktopHighWater = nil
@@ -416,6 +546,7 @@ final class ClaudeCLIUsage: Sendable {
                 return true
             }
             guard current else { return }
+            notifyChange()
             guard !profileUnavailable else { continue }
             if let desktopResets {
                 // Local and bounded (at most two cache files), so read every cycle. The result
@@ -463,6 +594,7 @@ final class ClaudeCLIUsage: Sendable {
                 return true
             }
             guard grantsStored else { return }
+            notifyChange()
         }
         state.withLock { s in
             guard s.generation == generation else { return }

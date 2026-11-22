@@ -70,7 +70,7 @@ SIGN_IDENTITY="${USAGERINGS_SIGN_IDENTITY:--}"
 /usr/bin/codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE" >/dev/null
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  /usr/bin/env -u SSH_CONNECTION -u SSH_CLIENT -u SSH_TTY /usr/bin/open -n "$APP_BUNDLE"
 }
 
 install_app() {
@@ -86,7 +86,7 @@ case "$MODE" in
   run)
     if [[ "$VARIANT" == "multi" ]]; then
       install_app
-      /usr/bin/open -n "$INSTALL_DIR/$APP_NAME.app"
+      /usr/bin/env -u SSH_CONNECTION -u SSH_CLIENT -u SSH_TTY /usr/bin/open -n "$INSTALL_DIR/$APP_NAME.app"
     else
       open_app
     fi

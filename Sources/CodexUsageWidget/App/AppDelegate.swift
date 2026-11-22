@@ -380,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(NSMenuItem(title: toggleTitle, action: #selector(togglePanel), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Refresh", action: #selector(refreshUsage), keyEquivalent: ""))
         if GeminiDedicatedWindow.lastFound == false {
-            let g = NSMenuItem(title: "Gemini読み取りウィンドウを作り直す", action: #selector(recreateGeminiWindow), keyEquivalent: "")
+            let g = NSMenuItem(title: "Gemini の読み取りを再試行", action: #selector(recreateGeminiWindow), keyEquivalent: "")
             g.target = self
             menu.addItem(g)
         }

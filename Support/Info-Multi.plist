@@ -25,7 +25,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>UsageRings は、あなたが開いている gemini.google.com/usage タブの表示内容だけを読みます。タブの移動・再読み込み・操作はしません。</string>
+	<string>UsageRings は、ログイン済み Chrome のバックグラウンドタブで gemini.google.com/usage の使用量表示だけを読み取ります。他のタブの操作・移動・内容の読み取りはしません。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>
