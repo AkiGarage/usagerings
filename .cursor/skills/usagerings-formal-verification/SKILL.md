@@ -28,8 +28,8 @@ Plus `script/lint.sh`, which bans proxy, cookie, web and Keychain reads in the s
 | CliTimesOutRetry / GiveUp, BoundedRetries | MultiUsageService retry once on timeout or launch failure (RetrySafetyTests) |
 | CliFailsRetry, NoRetryOnLogout (ログアウト時は再試行しない) | attempt retries a nonzero exit once unless isLogout or a partial result; Fault-RetryLogout breaks the guard |
 | CliOk / CliFails, Shown/FailedOnly… | ProviderSection windows vs failureText |
-| GeminiHalt: NoReadWhileFreshHalt (停止から60分未満は読まない), TransientNeverHalts (一時エラーでは停止しない), NoFabrication (値の保存は usage を読めた時だけ), HaltEventuallyRetried (読めるままなら停止はいずれ解ける) | GeminiReadPolicy.haltBlocking/shouldRead, GeminiAppUsageMonitor.tick/setHalted/haltText; sync f87c804, chart docs/formal/gemini-halt-chart.mmd |
-Sync commit: 280d6ee (adds the nonzero-exit retry and the logout no-retry rule; the extra no-token-accounts attempt is bounded and left to tests). Move it forward only after confirming that the table still describes the code at the new commit.
+| GeminiHalt: NoReadWhileFreshHalt (停止から60分未満は読まない), TransientNeverHalts (一時エラーでは停止しない), NoFabrication (値の保存は usage を読めた時だけ), HaltEventuallyRetried (読めるままなら停止はいずれ解ける) | GeminiReadPolicy.haltBlocking/requiredSpacing/shouldRead, GeminiAppUsageMonitor.tick/setHalted/haltText; sync 62f49f9 (quietHours removed and active/reset/manual cadences added while haltBlocking/no-fabrication/transient-non-halt/60m-retry guards remain unchanged), chart docs/formal/gemini-halt-chart.mmd |
+Sync commit: 62f49f9ae87630cfe1246d47e1c917d461922e62 for UsageRead and GeminiHalt (diff read: MultiUsageService adds antigravityOfflineLogout throwing ProviderFailure.logout outside attempt()'s retry loop, adds "signed out" to isLogoutMessage, sets antigravity timeout 15s and SSH env clearing, and exposes claudeUsage; GeminiAppUsage adds active/reset/manual spacing and background window auto-recovery without bypassing haltBlocking or altering halt/save rules). Move it forward only after confirming that the table still describes the code at the new commit.
 
 ## Bounds and what is left out
 One provider instance, one retry, the cli states ok/missing/signedOut/timeout. Not covered: what the CLI output means (that is parser tests), multi-account Antigravity, the UI drawing, real network timing.
@@ -63,7 +63,7 @@ Run: `docs/formal/check-refresh.sh`. It must print PASS for UsageRefresh and PAS
 | Request, queued, runQueued | refresh() during a fetch queues one full refresh; apply() starts it (Fault-DropQueuedRefresh) |
 | Stop, Restart, gen, GenGuard | stop() bumps the generation; an older fetch is not applied (Fault-ApplyAfterStop) |
 Bounds: 2 accounts, 4 requests, 2 periods, 2 stops (63808 distinct states). Not covered: 5h observedAt age, Gemini monitor merge, retry offsets.
-Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit 280d6ee (providerError counts as transient, i.e. the model's "transient" outcome).
+Real views: verify-usagerings. Drift guard: `.formal/guard.json` with formal_guard.py; UsageRefresh sync commit remains f949d06 (held on purpose at 62f49f9 because PR #24 added `MultiUsageStore.startClaudeLiveUpdates()` / `applyClaudeUpdate()` without a `stopGeneration` guard, creating an unguarded `Task { @MainActor in self?.applyClaudeUpdate() }` path that can apply after `stop()`, violating `NoApplyAfterStop`; advance `sync_commit` after adding a generation guard in product code).
 
 ## OpenDesign and fitted vertical tab
 
@@ -102,7 +102,7 @@ screens too short even for 0.6, fractional sizing, JSON arithmetic and pixels ar
 left to Swift tests / real view exports. The app retains the minimum 0.6 in that
 unsupported geometry. Existing source-policy and refresh models were compared
 against 280d6ee: this change adds a provider without altering those algorithms.
-Sync commit: 4c8b674d4e0fdd8aac402b1481ad8405b019b16c (moved from f949d06 on 2026-11-14 after reading the diff: MultiUsageService only passes a Codex CODEX_HOME override to the same CodexBarCLI call, MultiCollapsedUsageView only names the 0.5 exhaustion threshold, RingDetailCard adds Claude ticket lines and per-window lock greying; none changes source choice, provider filter, retries, OpenDesign fetch or zoom fitting, so the models are unchanged and TLC passes all specs and fault configs; records in `.formal/guard.json`).
+Sync commit: 62f49f9ae87630cfe1246d47e1c917d461922e62 for OpenDesignRead and VerticalTabFit (moved from 55200a1 / 4c8b674 on 2026-11-22 after reading the diffs: OpenDesign path is untouched; AppDelegate, MultiCollapsedUsageView, MultiEdgeTabView and RingDetailCard only add ring visibility toggles, `hiddenAntigravityGroups` filtering, empty-bar eye.slash placeholder and Claude `needsLogin` icon while preserving `fittedBarZoom` / `renderedBarZoom` and saved zoom unchanged; TLC passes all specs and fault configs; records in `.formal/guard.json`).
 
 After TLC passes, follow `verify-usagerings` for isolated real views. For real
 OpenDesign data on a logged-in Mac, use its explicit opt-in XCTest command.
