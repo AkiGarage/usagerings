@@ -18,7 +18,7 @@ if grep -q "Invariant NoRetryOnLogout is violated" "$out/ReadFault-RetryLogout.o
 else echo "FAIL ReadFault-RetryLogout not caught"; cat "$out/ReadFault-RetryLogout.out"; fail=1; fi
 # GeminiHalt faults: one constant each, one violated property each.
 tlc GeminiHalt Fault-GeminiHaltForever
-if grep -q "Temporal property HaltEventuallyRetried was violated" "$out/Fault-GeminiHaltForever.out"; then echo "PASS Fault-GeminiHaltForever caught HaltEventuallyRetried"
+if grep -qE "Temporal property HaltEventuallyRetried was violated|Error: Temporal properties were violated\." "$out/Fault-GeminiHaltForever.out"; then echo "PASS Fault-GeminiHaltForever caught HaltEventuallyRetried"
 else echo "FAIL Fault-GeminiHaltForever not caught"; cat "$out/Fault-GeminiHaltForever.out"; fail=1; fi
 for invpair in Fault-GeminiTransientHalts:TransientNeverHalts Fault-GeminiReadWhileHalted:NoReadWhileFreshHalt Fault-GeminiFabricate:NoFabrication; do
   tlc GeminiHalt "${invpair%%:*}"

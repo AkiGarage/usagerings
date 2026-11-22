@@ -20,7 +20,7 @@
       "sources": [
         "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
       ],
-      "sync_commit": "55200a134f715dd704c7477ad4b4e701de1600ad"
+      "sync_commit": "62f49f9ae87630cfe1246d47e1c917d461922e62"
     },
     {
       "tla": "docs/formal/opendesign/OpenDesignRead.tla",
@@ -31,7 +31,7 @@
         "Sources/CodexUsageWidget/Services/OpenDesignUsage.swift",
         "Sources/CodexUsageWidget/Services/MultiUsageService.swift"
       ],
-      "sync_commit": "55200a134f715dd704c7477ad4b4e701de1600ad"
+      "sync_commit": "62f49f9ae87630cfe1246d47e1c917d461922e62"
     },
     {
       "tla": "docs/formal/opendesign/VerticalTabFit.tla",
@@ -45,7 +45,7 @@
         "Sources/CodexUsageWidget/Views/EdgeTabView.swift",
         "Sources/CodexUsageWidget/Views/RingDetailCard.swift"
       ],
-      "sync_commit": "4c8b674d4e0fdd8aac402b1481ad8405b019b16c"
+      "sync_commit": "62f49f9ae87630cfe1246d47e1c917d461922e62"
     },
     {
       "tla": "docs/formal/GeminiHalt.tla",
@@ -55,7 +55,7 @@
       "sources": [
         "Sources/CodexUsageWidget/Services/GeminiAppUsage.swift"
       ],
-      "sync_commit": "f87c8046c2969035ddfca6da9dd545e1678da5db"
+      "sync_commit": "62f49f9ae87630cfe1246d47e1c917d461922e62"
     }
   ]
 }
