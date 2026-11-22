@@ -349,7 +349,10 @@ final class ClaudeCLIUsage: Sendable {
     func section(accounts: [ClaudeCLIAccount], now: Date, timeZone: TimeZone, salt: Data? = nil) -> Result? {
         guard !accounts.isEmpty else { return nil }
         // Compute per-account adaptive cadence outside the lock (bounded local filesystem mtime check).
-        let intervals = Dictionary(uniqueKeysWithValues: accounts.map { (Self.key($0), interval(for: $0, now: now)) })
+        let intervals = Dictionary(
+            accounts.map { (Self.key($0), interval(for: $0, now: now)) },
+            uniquingKeysWith: { first, _ in first }
+        )
         // One lock: settings check, due list, claim and task hand-off are atomic, so an old queue
         // can never start under a new generation and the stored task is always cancellable.
         let signature = Self.signature(accounts), keys = Set(accounts.map(Self.key))

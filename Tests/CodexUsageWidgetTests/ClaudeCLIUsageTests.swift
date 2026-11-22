@@ -256,6 +256,23 @@ final class ClaudeCLIUsageTests: XCTestCase {
         XCTAssertEqual(calls.count, 3)
         XCTAssertEqual(calls.envs.last ?? nil, "/h/.claude-b", "rate-limited A must not be probed during 5-minute backoff")
     }
+
+    func testDuplicateProfileDirectoriesDoNotTrap() async {
+        let calls = CallLog()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let usage = ClaudeCLIUsage(
+            runner: { args, env in
+                calls.append(args, env)
+                return CodexUsageService.CommandResult(terminationStatus: 0, stdout: Self.json(20, 30), stderr: Data())
+            },
+            activityProbe: { _, _ in t0.addingTimeInterval(-10) }
+        )
+        let dupA = ClaudeCLIAccount(label: "A", configDir: nil)
+        let dupB = ClaudeCLIAccount(label: "B", configDir: nil)
+        _ = usage.section(accounts: [dupA, dupB], now: t0, timeZone: .current, salt: salt)
+        for _ in 0..<200 where calls.count < 1 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertGreaterThanOrEqual(calls.count, 1)
+    }
 }
 
 actor StubClaudeLogin {
